@@ -31,22 +31,23 @@
 ## 3. PRバックログ（進捗チェック付き）
 
 ### PR-00: Test Strategy & CI Foundation
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: Section 6（NFR 全体の測定可能性）
 - Dependencies: None
 - 実装タスク
-  - [ ] Rust workspace共通の `fmt` / `clippy` / `test` 実行ターゲットを定義する。
-  - [ ] GitHub Actions `ci.yml` を作成し、`lint`・`unit`・`integration` を必須チェック化する。
-  - [ ] E2E向けに headless Chromium を使う `e2e.yml`（PR時はsmoke、nightlyはfull）を追加する。
-  - [ ] 失敗時にログ・スクリーンショット・トレースをartifactとして保存する。
+  - [x] Rust workspace共通の `fmt` / `clippy` / `test` 実行ターゲットを定義する。
+  - [x] GitHub Actions `ci.yml` を作成し、`lint`・`unit`・`integration` を必須チェック化する。
+  - [x] E2E向けに headless Chromium を使う `e2e.yml`（PR時はsmoke、nightlyはfull）を追加する。
+  - [x] 失敗時にログ・スクリーンショット・トレースをartifactとして保存する。
 - テストタスク
-  - [ ] テスト分類（unit/integration/e2e/perf/security）と配置ルールを `docs/testing.md` に定義する。
-  - [ ] サンプルテストを各レイヤーに1件ずつ追加し、CIで実行確認する。
+  - [x] テスト分類（unit/integration/e2e/perf/security）と配置ルールを `docs/testing.md` に定義する。
+  - [x] サンプルテストを各レイヤーに1件ずつ追加し、CIで実行確認する。
 - CIタスク
-  - [ ] ブランチ保護ルールに Required Checks を設定する（`lint`, `unit`, `integration`, `smoke-e2e`）。
-  - [ ] カバレッジ収集を有効化し、しきい値（例: 70%）未満で失敗させる。
+  - [x] ブランチ保護ルールに Required Checks を設定する（`lint`, `unit`, `integration`, `smoke-e2e`）。
+  - [x] カバレッジ収集を有効化し、しきい値（例: 70%）未満で失敗させる。
 - Exit Criteria
-  - [ ] 新規PRで最低1つのテストがなければCIが失敗する状態になっている。
+  - [x] 新規PRで最低1つのテストがなければCIが失敗する状態になっている。
+
 
 ### PR-01: Project Initialization & CDP Client Wrapper
 - Status: `NOT_STARTED`

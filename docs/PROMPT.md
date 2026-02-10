@@ -8,6 +8,7 @@
 
 - **対象PR**: `docs/PLAN.md` から実装する PR ID (例: `PR-01`) を特定する。
 - **仕様確認**: `docs/SPEC.md` の関連セクションと `docs/PLAN.md` の「実装タスク」「テストタスク」「Exit Criteria」を熟読する。
+- **テスト戦略確認**: `docs/testing.md` を読み、実装するテストの種類と配置ルール（Unit/Integration/E2Eの使い分け）を確認する。
 - **ブランチ作成**:
   ```bash
   git checkout main

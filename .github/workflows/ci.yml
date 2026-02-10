@@ -25,9 +25,15 @@ jobs:
     - uses: actions/checkout@v4
     - name: Run tests
       run: cargo test --workspace --verbose
-    - name: Upload coverage
-      if: success()
-      run: echo "Coverage upload placeholder"
+    - name: Upload failure artifacts
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-failures
+        path: |
+          target/debug/deps/
+          *.log
+
 
   smoke-e2e:
     runs-on: ubuntu-latest
