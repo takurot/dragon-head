@@ -23,7 +23,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Install chromium
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
     - name: Run tests
+      env:
+        CHROME_INSTALLED: "true"
       run: cargo test --workspace --verbose
     - name: Upload failure artifacts
       if: failure()
@@ -44,7 +50,17 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y chromium-browser
-    - name: Run smoke test
+  cdp-smoke:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install chromium
       run: |
-        echo "Running smoke test..."
-        # cargo test --test e2e_smoke  (Placeholder until PR-01)
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
+    - name: Run CDP smoke test
+      # Retry to detect flakiness
+      run: |
+        cargo test --package core-runtime --lib -- --nocapture
+        cargo test --package core-runtime --lib -- --nocapture
+

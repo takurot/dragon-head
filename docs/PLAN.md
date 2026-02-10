@@ -50,21 +50,21 @@
 
 
 ### PR-01: Project Initialization & CDP Client Wrapper
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: Section 2.1（Layer 1）
 - Dependencies: PR-00
 - 実装タスク
-  - [ ] Rust workspace（`core-runtime`, `plugin-host`, `skills-engine`）を初期化する。
-  - [ ] CDP接続ラッパー（接続/再接続/切断）を実装する。
-  - [ ] `PageSession`（CDPセッションとページコンテキスト保持）を実装する。
+  - [x] Rust workspace（`core-runtime`, `plugin-host`, `skills-engine`）を初期化する。
+  - [x] CDP接続ラッパー（接続/再接続/切断）を実装する。
+  - [x] `PageSession`（CDPセッションとページコンテキスト保持）を実装する。
 - テストタスク
-  - [ ] `example.com` への遷移とHTML取得のintegration testを追加する。
-  - [ ] CDP切断時の再接続挙動を検証するテストを追加する。
+  - [x] `example.com` への遷移とHTML取得のintegration testを追加する。
+  - [x] CDP切断時の再接続挙動を検証するテストを追加する。
 - CIタスク
-  - [ ] CIに `cdp-smoke` ジョブを追加し、Linux runner上で常時実行する。
-  - [ ] flaky検知のため `cdp-smoke` を2回連続実行する設定を追加する。
+  - [x] CIに `cdp-smoke` ジョブを追加し、Linux runner上で常時実行する。
+  - [x] flaky検知のため `cdp-smoke` を2回連続実行する設定を追加する。
 - Exit Criteria
-  - [ ] ヘッドレスブラウザ起動からHTML取得までを安定して実行できる。
+  - [x] ヘッドレスブラウザ起動からHTML取得までを安定して実行できる。
 
 ### PR-02: SRE-01 Deterministic State Generation
 - Status: `NOT_STARTED`
