@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "feature/**" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run fmt check
+      run: cargo fmt --all -- --check
+    - name: Run clippy
+      run: cargo clippy --workspace -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run tests
+      run: cargo test --workspace --verbose
+    - name: Upload coverage
+      if: success()
+      run: echo "Coverage upload placeholder"
+
+  smoke-e2e:
+    runs-on: ubuntu-latest
+    # Simple smoke test (e.g., install dependencies and run basic health check)
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
+    - name: Run smoke test
+      run: |
+        echo "Running smoke test..."
+        # cargo test --test e2e_smoke  (Placeholder until PR-01)

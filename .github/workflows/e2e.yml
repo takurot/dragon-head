@@ -1,0 +1,20 @@
+name: E2E Tests (Nightly)
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight
+  workflow_dispatch:
+
+jobs:
+  full-e2e:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
+    - name: Run full e2e suite
+      run: |
+        echo "Running full E2E suite..."
+        # cargo test --test e2e_full (Placeholder)
