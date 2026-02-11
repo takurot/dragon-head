@@ -9,6 +9,42 @@ pub fn normalize_dom(profile: LoadProfile, node: &Node) -> Result<SemanticNode> 
     Ok(internal_node.unwrap_or_default())
 }
 
+/// Returns true if a CSS class token looks like a dynamic/generated hash.
+/// Heuristic: a class is "dynamic" if it contains a hex-like or base64-like
+/// substring of 6+ characters with mixed digits and letters, or is purely
+/// alphanumeric with length >= 8 and contains at least 3 digits.
+fn is_dynamic_class(class: &str) -> bool {
+    if class.len() < 6 {
+        return false;
+    }
+    let digit_count = class.chars().filter(|c| c.is_ascii_digit()).count();
+    let alpha_count = class.chars().filter(|c| c.is_ascii_alphabetic()).count();
+
+    // Pure hex-like hash (e.g. "a1b2c3d4", "css-1a2b3c")
+    if class.len() >= 8 && digit_count >= 3 && alpha_count >= 2 {
+        return true;
+    }
+    // Short hash with high digit ratio (e.g. "sc-12345", "emotion-abc123")
+    if digit_count as f64 / class.len() as f64 > 0.4 {
+        return true;
+    }
+    false
+}
+
+/// Filter dynamic classes from a space-separated class string.
+/// Returns None if all classes were dynamic (nothing left).
+fn filter_dynamic_classes(class_value: &str) -> Option<String> {
+    let kept: Vec<&str> = class_value
+        .split_whitespace()
+        .filter(|cls| !is_dynamic_class(cls))
+        .collect();
+    if kept.is_empty() {
+        None
+    } else {
+        Some(kept.join(" "))
+    }
+}
+
 fn traverse_node(profile: LoadProfile, node: &Node) -> Result<Option<SemanticNode>> {
     // Basic filtering based on node type
     // NodeType: 1=Element, 3=Text, 9=Document
@@ -64,20 +100,18 @@ fn traverse_node(profile: LoadProfile, node: &Node) -> Result<Option<SemanticNod
                 let key = &chunk[0];
                 let val = &chunk[1];
 
-                // Dynamic class filtering (heuristic: heuristic for now - maybe just skip class completely for minimal?)
-                // Spec SRE-01: "normalize: dynamic class removal"
-                if key == "class" {
-                    // Simple heuristic: if class contains numbers > 4 digits or is super long hash?
-                    // For now, let's keep clean classes.
-                    // Or just keep it as is, and rely on hashing?
-                    // Spec says "dynamic class removal".
-                    // Let's implement a dummy filter (passing everything for now unless it looks like a hash)
-                    // Actually, if we want deterministic hash across reloads where class changes, we MUST strip it.
-                    // If we don't know which class is dynamic, stripping ALL classes is safer for SRE.
-                    // But classes carry semantic meaning (e.g. "btn-primary").
-                    // Let's filter classes that look like hashes (alphanumeric, no separators, long).
-                } else if key == "role" && val == "presentation" {
+                if key == "role" && val == "presentation" {
                     return Ok(None);
+                }
+
+                // SPEC SRE-01: "動的クラス名（ハッシュ値）の削除"
+                // Strip dynamic/generated class tokens to ensure deterministic hashing.
+                if key == "class" {
+                    if let Some(filtered) = filter_dynamic_classes(val) {
+                        attributes.insert(key.clone(), filtered);
+                    }
+                    // If all classes were dynamic, skip the attribute entirely
+                    continue;
                 }
 
                 attributes.insert(key.clone(), val.clone());
@@ -95,7 +129,7 @@ fn traverse_node(profile: LoadProfile, node: &Node) -> Result<Option<SemanticNod
     }
 
     Ok(Some(SemanticNode {
-        role: node_name, // Use tag name as role for now
+        role: node_name,
         children,
         attributes: if attributes.is_empty() {
             None
@@ -104,4 +138,41 @@ fn traverse_node(profile: LoadProfile, node: &Node) -> Result<Option<SemanticNod
         },
         ..Default::default()
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_dynamic_class() {
+        // Dynamic (hash-like)
+        assert!(is_dynamic_class("sc-12345abc"));
+        assert!(is_dynamic_class("css-1a2b3c4d"));
+        assert!(is_dynamic_class("emotion-abc123"));
+        assert!(is_dynamic_class("a1b2c3d4e5"));
+
+        // Static (semantic)
+        assert!(!is_dynamic_class("btn"));
+        assert!(!is_dynamic_class("primary"));
+        assert!(!is_dynamic_class("container"));
+        assert!(!is_dynamic_class("nav-item"));
+        assert!(!is_dynamic_class("col-md"));
+    }
+
+    #[test]
+    fn test_filter_dynamic_classes() {
+        // Mix of static and dynamic
+        assert_eq!(
+            filter_dynamic_classes("btn sc-12345abc primary"),
+            Some("btn primary".to_string())
+        );
+        // All dynamic
+        assert_eq!(filter_dynamic_classes("sc-12345abc css-a1b2c3d4"), None);
+        // All static
+        assert_eq!(
+            filter_dynamic_classes("btn primary"),
+            Some("btn primary".to_string())
+        );
+    }
 }

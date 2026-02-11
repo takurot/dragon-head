@@ -32,17 +32,17 @@ fn setup_page(html: &str) -> anyhow::Result<(BrowserClient, core_runtime::PageSe
     Ok((client, page))
 }
 
-fn get_all_roles(node: &core_runtime::sre::SemanticState) -> Vec<String> {
-    let mut roles = Vec::new();
-    collect_roles(&node.root, &mut roles);
-    roles
-}
-
 fn collect_roles(node: &core_runtime::sre::state::SemanticNode, roles: &mut Vec<String>) {
     roles.push(node.role.clone());
     for child in &node.children {
         collect_roles(child, roles);
     }
+}
+
+fn get_all_roles(state: &core_runtime::sre::SemanticState) -> Vec<String> {
+    let mut roles = Vec::new();
+    collect_roles(state.root(), &mut roles);
+    roles
 }
 
 // ─── Minimal Profile ────────────────────────────────────────────────
@@ -57,7 +57,7 @@ fn test_minimal_blocks_all_media_and_js() -> anyhow::Result<()> {
     let (_client, page) = setup_page(&html)?;
     let root_node = page.get_document_node()?;
     let sem = normalize_dom(LoadProfile::Minimal, &root_node)?;
-    let state = SemanticState::new(sem);
+    let state = SemanticState::new(sem, LoadProfile::Minimal);
     let roles = get_all_roles(&state);
 
     // Minimal MUST block: script, style, img, video, svg, iframe, canvas
@@ -95,7 +95,7 @@ fn test_minimal_blocks_all_media_and_js() -> anyhow::Result<()> {
     assert!(roles.contains(&"p".to_string()), "Minimal must keep <p>");
 
     // role="presentation" must be excluded
-    let json = serde_json::to_string(&state.root)?;
+    let json = serde_json::to_string(state.root())?;
     assert!(
         !json.contains("Ad Banner"),
         "Minimal must exclude role=presentation content"
@@ -116,7 +116,7 @@ fn test_visual_allows_images_blocks_js() -> anyhow::Result<()> {
     let (_client, page) = setup_page(&html)?;
     let root_node = page.get_document_node()?;
     let sem = normalize_dom(LoadProfile::Visual, &root_node)?;
-    let state = SemanticState::new(sem);
+    let state = SemanticState::new(sem, LoadProfile::Visual);
     let roles = get_all_roles(&state);
 
     // Visual MUST allow: img, svg (for SoM generation)
@@ -169,7 +169,7 @@ fn test_interactive_allows_js_and_images() -> anyhow::Result<()> {
     let (_client, page) = setup_page(&html)?;
     let root_node = page.get_document_node()?;
     let sem = normalize_dom(LoadProfile::Interactive, &root_node)?;
-    let state = SemanticState::new(sem);
+    let state = SemanticState::new(sem, LoadProfile::Interactive);
     let roles = get_all_roles(&state);
 
     // Interactive MUST allow: script, img, svg, style, video, iframe, canvas
@@ -197,7 +197,7 @@ fn test_interactive_allows_js_and_images() -> anyhow::Result<()> {
     );
 
     // role="presentation" is still excluded (ads)
-    let json = serde_json::to_string(&state.root)?;
+    let json = serde_json::to_string(state.root())?;
     assert!(
         !json.contains("Ad Banner"),
         "Interactive must exclude role=presentation content"
