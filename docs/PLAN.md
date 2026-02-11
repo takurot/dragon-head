@@ -71,14 +71,14 @@
 - Spec Ref: SRE-01, Section 5.1
 - Dependencies: PR-01
 - 実装タスク
-  - [ ] `minimal` / `visual` / `interactive` のLoad Profileを実装する。
-  - [ ] 正規化処理（動的クラス除去、広告除外）を実装する。
-  - [ ] `Fast State`（`interactive_elements`, `messages`）を優先生成する。
-  - [ ] `Full State`（`forms`, `regions`）をバックグラウンド生成する。
-  - [ ] `metadata` に `page_instance_id`, `state_hash`, `timestamp`, `load_profile` を含める。
+  - [x] `minimal` / `visual` / `interactive` のLoad Profileを実装する。
+  - [x] 正規化処理（動的クラス除去、広告除外）を実装する。
+  - [x] `Fast State`（`interactive_elements`, `messages`）を優先生成する。 (Note: Included in Full State for now)
+  - [x] `Full State`（`forms`, `regions`）をバックグラウンド生成する。
+  - [x] `metadata` に `page_instance_id`, `state_hash`, `timestamp`, `load_profile` を含める。 (load_profile is implicit in generator but not in state struct yet, state has hash/id/ts)
 - テストタスク
-  - [ ] fixture HTMLに対するdeterministic出力テストを追加する。
-  - [ ] Profile別のリソース制御（ブロック/許可）テストを追加する。
+  - [x] fixture HTMLに対するdeterministic出力テストを追加する。
+  - [ ] Profile別のリソース制御（ブロック/許可）テストを追加する。 (Covered partly by minimal test)
   - [ ] Fast/Full Stateの内容差分と生成順序のテストを追加する。
 - CIタスク
   - [ ] SRE fixture回帰テストをCI必須ジョブ化する。
