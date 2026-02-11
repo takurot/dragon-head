@@ -64,3 +64,19 @@ jobs:
         cargo test --package core-runtime --lib -- --nocapture
         cargo test --package core-runtime --lib -- --nocapture
 
+  sre-regression:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install chromium
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
+    - name: Run SRE determinism test
+      env:
+        CHROME_INSTALLED: "true"
+      run: cargo test -p core-runtime --test sre_determinism --verbose
+    - name: Run SRE profile filtering test
+      env:
+        CHROME_INSTALLED: "true"
+      run: cargo test -p core-runtime --test sre_profile_filtering --verbose
