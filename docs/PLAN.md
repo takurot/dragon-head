@@ -78,13 +78,13 @@
   - [x] `metadata` に `page_instance_id`, `state_hash`, `timestamp`, `load_profile` を含める。 (load_profile is implicit in generator but not in state struct yet, state has hash/id/ts)
 - テストタスク
   - [x] fixture HTMLに対するdeterministic出力テストを追加する。
-  - [ ] Profile別のリソース制御（ブロック/許可）テストを追加する。 (Covered partly by minimal test)
-  - [ ] Fast/Full Stateの内容差分と生成順序のテストを追加する。
+  - [x] Profile別のリソース制御（ブロック/許可）テストを追加する。
+  - [ ] Fast/Full Stateの内容差分と生成順序のテストを追加する。 (Fast State分離ロジック未実装のため保留)
 - CIタスク
-  - [ ] SRE fixture回帰テストをCI必須ジョブ化する。
-  - [ ] 仕様変更時のスナップショット更新をPR内で強制するチェックを追加する。
+  - [x] SRE fixture回帰テストをCI必須ジョブ化する。
+  - [ ] 仕様変更時のスナップショット更新をPR内で強制するチェックを追加する。 (スナップショット基盤導入が必要のため保留)
 - Exit Criteria
-  - [ ] 同一入力に対し `state_hash` が再現性を持つ。
+  - [x] 同一入力に対し `state_hash` が再現性を持つ。
 
 ### PR-03: ACT-01 Stable Key Generation
 - Status: `NOT_STARTED`

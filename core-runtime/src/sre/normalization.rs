@@ -32,13 +32,27 @@ fn traverse_node(profile: LoadProfile, node: &Node) -> Result<Option<SemanticNod
         return Ok(None); // Skip comments, etc.
     }
 
-    // Filter by tag name for Minimal profile
-    if profile == LoadProfile::Minimal {
-        match node_name.as_str() {
+    // Filter by tag name based on Load Profile (SPEC SRE-01)
+    // Minimal: text/structure only — block images, video, ads, analytics JS
+    // Visual:  allow images for SoM generation — block JS, video, ads
+    // Interactive: allow essential JS for SPA/login — block ads/analytics only
+    match profile {
+        LoadProfile::Minimal => match node_name.as_str() {
             "script" | "style" | "img" | "video" | "svg" | "iframe" | "noscript" | "meta"
-            | "link" => return Ok(None),
+            | "link" | "canvas" | "audio" | "source" | "picture" => return Ok(None),
             _ => {}
-        }
+        },
+        LoadProfile::Visual => match node_name.as_str() {
+            "script" | "style" | "video" | "iframe" | "noscript" | "meta" | "link" | "canvas"
+            | "audio" => return Ok(None),
+            // img, svg, picture, source are ALLOWED for visual rendering
+            _ => {}
+        },
+        LoadProfile::Interactive => match node_name.as_str() {
+            // Only block non-essential elements — allow script for SPA
+            "noscript" | "meta" | "link" => return Ok(None),
+            _ => {}
+        },
     }
 
     // Filter by role="presentation" (Ads/Layout)
