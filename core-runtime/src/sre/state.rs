@@ -21,8 +21,6 @@ pub struct SemanticNode {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<SemanticNode>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attributes: Option<BTreeMap<String, String>>,
     // New fields for ACT-01
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stable_key: Option<String>,
@@ -30,6 +28,11 @@ pub struct SemanticNode {
     pub alias: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ambiguous: Option<bool>,
+    // New field for ACT-04
+    #[serde(default, rename = "id")]
+    pub backend_node_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<BTreeMap<String, String>>,
 }
 
 impl SemanticState {
@@ -73,10 +76,22 @@ impl SemanticState {
     /// Excludes page_instance_id, timestamp, and load_profile — only the
     /// semantic tree contributes to the hash.
     fn compute_hash(root: &SemanticNode) -> String {
+        // Clone and strip volatile fields (backend_node_id) to ensure deterministic hash.
+        // backend_node_id changes across sessions, but state_hash must be stable for same content.
+        let mut clean_root = root.clone();
+        Self::strip_volatile_fields(&mut clean_root);
+
         // BTreeMap ensures deterministic map iteration order for serialization
-        let json_content = serde_json::to_string(root).unwrap_or_default();
+        let json_content = serde_json::to_string(&clean_root).unwrap_or_default();
         let mut hasher = Sha256::new();
         hasher.update(json_content);
         hex::encode(hasher.finalize())
+    }
+
+    fn strip_volatile_fields(node: &mut SemanticNode) {
+        node.backend_node_id = 0;
+        for child in &mut node.children {
+            Self::strip_volatile_fields(child);
+        }
     }
 }

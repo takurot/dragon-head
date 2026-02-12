@@ -73,6 +73,7 @@ fn traverse_node(
             role: "text".to_string(),
             label: Some(text),
             stable_key: Some(stable_key),
+            backend_node_id: node.backend_node_id.into(),
             ..Default::default()
         }));
     }
@@ -172,6 +173,7 @@ fn traverse_node(
             Some(attributes)
         },
         stable_key: Some(stable_key),
+        backend_node_id: node.backend_node_id.into(),
         ..Default::default()
     }))
 }
