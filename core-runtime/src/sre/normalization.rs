@@ -1,11 +1,14 @@
 use super::profile::LoadProfile;
+use super::stable_key::StableKeyGenerator;
 use super::state::SemanticNode;
 use anyhow::Result;
 use headless_chrome::protocol::cdp::DOM::Node;
 use std::collections::BTreeMap;
 
 pub fn normalize_dom(profile: LoadProfile, node: &Node) -> Result<SemanticNode> {
-    let internal_node = traverse_node(profile, node)?;
+    let mut key_generator = StableKeyGenerator::new();
+    // Start traversal with root path
+    let internal_node = traverse_node(profile, node, &mut key_generator, "root", 0)?;
     Ok(internal_node.unwrap_or_default())
 }
 
@@ -45,7 +48,13 @@ fn filter_dynamic_classes(class_value: &str) -> Option<String> {
     }
 }
 
-fn traverse_node(profile: LoadProfile, node: &Node) -> Result<Option<SemanticNode>> {
+fn traverse_node(
+    profile: LoadProfile,
+    node: &Node,
+    key_gen: &mut StableKeyGenerator,
+    parent_path: &str,
+    sibling_index: usize,
+) -> Result<Option<SemanticNode>> {
     // Basic filtering based on node type
     // NodeType: 1=Element, 3=Text, 9=Document
     let node_type = node.node_type;
@@ -57,9 +66,13 @@ fn traverse_node(profile: LoadProfile, node: &Node) -> Result<Option<SemanticNod
         if text.trim().is_empty() {
             return Ok(None);
         }
+
+        let stable_key = key_gen.generate_key("text", Some(&text), parent_path);
+
         return Ok(Some(SemanticNode {
             role: "text".to_string(),
             label: Some(text),
+            stable_key: Some(stable_key),
             ..Default::default()
         }));
     }
@@ -119,14 +132,36 @@ fn traverse_node(profile: LoadProfile, node: &Node) -> Result<Option<SemanticNod
         }
     }
 
+    // Generate path for this node to pass to children
+    // path format: parent_path/role[index]
+    let current_path = format!("{}/{}[{}]", parent_path, node_name, sibling_index);
+
     let mut children = Vec::new();
     if let Some(child_nodes) = &node.children {
-        for child in child_nodes {
-            if let Some(normalized_child) = traverse_node(profile, child)? {
+        // We need to track sibling index per role? Or just absolute index?
+        // Using absolute index for simplicity in traversal, but for stable keys relying on structure,
+        // we might want "nth-of-type".
+        // For now, let's use the loop index.
+        for (idx, child) in child_nodes.iter().enumerate() {
+            if let Some(normalized_child) =
+                traverse_node(profile, child, key_gen, &current_path, idx)?
+            {
                 children.push(normalized_child);
             }
         }
     }
+
+    // Generate stable key for this element
+    // Label for element? Maybe id, or aria-label, or text content?
+    // For now, we use a simple approach: if it has an id, use it as label hint?
+    // Or just empty label for container elements.
+    // Ideally we should extract text content if it's a leaf interactive element.
+    let label_hint = attributes
+        .get("id")
+        .map(|s| s.as_str())
+        .or_else(|| attributes.get("aria-label").map(|s| s.as_str()));
+
+    let stable_key = key_gen.generate_key(&node_name, label_hint, parent_path);
 
     Ok(Some(SemanticNode {
         role: node_name,
@@ -136,6 +171,7 @@ fn traverse_node(profile: LoadProfile, node: &Node) -> Result<Option<SemanticNod
         } else {
             Some(attributes)
         },
+        stable_key: Some(stable_key),
         ..Default::default()
     }))
 }

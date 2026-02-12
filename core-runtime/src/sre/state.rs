@@ -23,6 +23,13 @@ pub struct SemanticNode {
     pub children: Vec<SemanticNode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attributes: Option<BTreeMap<String, String>>,
+    // New fields for ACT-01
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambiguous: Option<bool>,
 }
 
 impl SemanticState {
