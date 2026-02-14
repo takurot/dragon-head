@@ -86,9 +86,17 @@ impl PageSession {
             match self.perform_action_by_id(bid, action, value) {
                 Ok(_) => return Ok(()),
                 Err(e) => {
-                    // Log warning? "Action with target_id failed: {}, trying fallback", e
-                    // Proceed to fallback if stable_key is present.
-                    // If stable_key is None, return error immediately.
+                    // Only fallback if the error indicates a node issue (e.g. "Could not find node", "No node with given id")
+                    // If it's a timeout or other error, we probably shouldn't blindly retry?
+                    // The CDP error for invalid backend_node_id usually says "Could not find node with given id".
+                    let err_str = e.to_string();
+                    let is_node_error = err_str.contains("Could not find node")
+                        || err_str.contains("No node with given id");
+
+                    if !is_node_error {
+                        return Err(e);
+                    }
+
                     if stable_key.is_none() {
                         return Err(e);
                     }
@@ -100,18 +108,18 @@ impl PageSession {
         // Fallback: use stable_key
         if let Some(key) = stable_key {
             // Re-fetch DOM and normalize to find new ID
-            // Note: We need LoadProfile to normalize.
-            // For fallback, we probably use Minimal or whatever captures the key.
-            // Since we don't assume profile here, let's use Minimal as default safe bet,
-            // or we might need to change `act` signature to accept profile.
-            // For now, assuming Minimal is sufficient to find layout elements.
-
-            // Re-scan
+            // Using Interactive profile to ensure we catch most elements (including those needing JS/styles).
+            // Minimal might be too aggressive in filtering.
             let root = self.get_document_node()?;
-            let sem_root = crate::sre::normalize_dom(crate::sre::LoadProfile::Minimal, &root)?;
+            let sem_root = crate::sre::normalize_dom(crate::sre::LoadProfile::Interactive, &root)?;
 
             // Find node by key
             if let Some(new_id) = find_node_id_by_key(&sem_root, key) {
+                // Log success of fallback
+                eprintln!(
+                    "[WARN] Action recovered via stable key: {} -> new_id: {}",
+                    key, new_id
+                );
                 return self.perform_action_by_id(new_id, action, value);
             } else {
                 anyhow::bail!("Stable key not found during fallback: {}", key);
@@ -131,11 +139,14 @@ impl PageSession {
         use headless_chrome::protocol::cdp::Runtime::CallFunctionOn;
         use headless_chrome::protocol::cdp::DOM::ResolveNode;
 
+        let node_id_u32 =
+            u32::try_from(backend_node_id).context("Invalid backend_node_id: must fit in u32")?;
+
         let remote_object = self
             .inner
             .call_method(ResolveNode {
                 node_id: None,
-                backend_node_id: Some(backend_node_id as u32),
+                backend_node_id: Some(node_id_u32),
                 object_group: None,
                 execution_context_id: None,
             })?
@@ -164,25 +175,24 @@ impl PageSession {
                 })?;
             }
             "type" => {
-                if let Some(text) = value {
-                    // Focus then type
-                    self.inner.call_method(CallFunctionOn {
-                        object_id: Some(object_id.clone()),
-                        function_declaration: "function() { this.focus(); }".to_string(),
-                        arguments: None,
-                        silent: Some(true),
-                        return_by_value: Some(false),
-                        generate_preview: Some(false),
-                        user_gesture: Some(true),
-                        await_promise: Some(false),
-                        execution_context_id: None,
-                        object_group: None,
-                        throw_on_side_effect: None,
-                        unique_context_id: None,
-                        serialization_options: None,
-                    })?;
-                    self.inner.type_str(text)?;
-                }
+                let text = value.context("Value is required for type action")?;
+                // Focus then type
+                self.inner.call_method(CallFunctionOn {
+                    object_id: Some(object_id.clone()),
+                    function_declaration: "function() { this.focus(); }".to_string(),
+                    arguments: None,
+                    silent: Some(true),
+                    return_by_value: Some(false),
+                    generate_preview: Some(false),
+                    user_gesture: Some(true),
+                    await_promise: Some(false),
+                    execution_context_id: None,
+                    object_group: None,
+                    throw_on_side_effect: None,
+                    unique_context_id: None,
+                    serialization_options: None,
+                })?;
+                self.inner.type_str(text)?;
             }
             _ => anyhow::bail!("Unsupported action: {}", action),
         }

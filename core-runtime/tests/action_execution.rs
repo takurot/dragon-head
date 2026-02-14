@@ -38,8 +38,8 @@ fn test_action_execution_basic() -> anyhow::Result<()> {
     page.act(Some(btn_id), Some(&btn_key), "click", None)?;
 
     // Verify effect (background color changed)
-    let summary = page.get_document_node()?; // Re-fetch to check style?
-                                             // Or evaluate JS
+    let _summary = page.get_document_node()?; // Re-fetch to check style?
+                                              // Or evaluate JS
     let bg_color = page
         .evaluate_script("document.body.style.backgroundColor")?
         .value
