@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState},
-    BrowserClient, SemanticTarget, SemanticWaitState, WaitError,
+    BrowserClient, SemanticTarget, SemanticWaitOptions, SemanticWaitState, WaitError,
 };
 
 fn should_skip() -> bool {
@@ -38,10 +38,14 @@ fn test_wait_for_semantic_enabled_on_delayed_button() -> anyhow::Result<()> {
     let state = SemanticState::new(sem, LoadProfile::Interactive);
     let stable_key = find_button_key(state.root()).expect("button stable_key should exist");
 
-    page.wait_for_semantic(
+    page.wait_for_semantic_with_options(
         SemanticTarget::StableKey(stable_key),
         SemanticWaitState::Enabled,
         Duration::from_secs(2),
+        SemanticWaitOptions {
+            load_profile: LoadProfile::Interactive,
+            ..Default::default()
+        },
     )?;
 
     let is_disabled = page
@@ -78,7 +82,14 @@ fn test_wait_for_intent_success() -> anyhow::Result<()> {
     let url = format!("data:text/html,{}", urlencoding::encode(html));
     page.navigate(&url)?;
 
-    page.wait_for_intent("checkout_complete", Duration::from_secs(2))?;
+    page.wait_for_intent_with_options(
+        "checkout_complete",
+        Duration::from_secs(2),
+        SemanticWaitOptions {
+            load_profile: LoadProfile::Interactive,
+            ..Default::default()
+        },
+    )?;
     Ok(())
 }
 
@@ -120,6 +131,107 @@ fn test_wait_for_intent_timeout() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_wait_for_semantic_timeout_when_target_never_enabled() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <button id="btn_login" disabled>Login</button>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let root = page.get_document_node()?;
+    let sem = normalize_dom(LoadProfile::Minimal, &root)?;
+    let state = SemanticState::new(sem, LoadProfile::Minimal);
+    let stable_key = find_button_key(state.root()).expect("button stable_key should exist");
+
+    let start = Instant::now();
+    let result = page.wait_for_semantic(
+        SemanticTarget::StableKey(stable_key),
+        SemanticWaitState::Enabled,
+        Duration::from_millis(350),
+    );
+    let elapsed = start.elapsed();
+
+    assert!(result.is_err(), "wait_for_semantic should time out");
+    let wait_err = result
+        .unwrap_err()
+        .downcast::<WaitError>()
+        .expect("error should be WaitError");
+    assert!(matches!(wait_err, WaitError::Timeout { .. }));
+    assert!(
+        elapsed >= Duration::from_millis(350) && elapsed < Duration::from_secs(2),
+        "timeout must respect configured threshold"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_wait_for_semantic_id_fallback_with_stable_key() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <div id="container">
+                    <button id="btn_login" disabled>Login</button>
+                </div>
+                <script>
+                    function rerenderAndEnable() {
+                        const container = document.getElementById("container");
+                        container.innerHTML = '<button id="btn_login" disabled>Login</button>';
+                        setTimeout(() => {
+                            document.getElementById("btn_login").removeAttribute("disabled");
+                        }, 200);
+                    }
+                    setTimeout(rerenderAndEnable, 120);
+                </script>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let root = page.get_document_node()?;
+    let sem = normalize_dom(LoadProfile::Minimal, &root)?;
+    let state = SemanticState::new(sem, LoadProfile::Minimal);
+    let (old_id, stable_key) = find_button_info(state.root()).expect("button should exist");
+
+    page.wait_for_semantic(
+        SemanticTarget::IdWithStableKey {
+            id: old_id,
+            stable_key,
+        },
+        SemanticWaitState::Enabled,
+        Duration::from_secs(2),
+    )?;
+
+    let is_disabled = page
+        .evaluate_script(r#"document.getElementById("btn_login").hasAttribute("disabled")"#)?
+        .value
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    assert!(!is_disabled, "button must become enabled after rerender");
+
+    Ok(())
+}
+
 fn find_button_key(node: &core_runtime::sre::SemanticNode) -> Option<String> {
     if node.role == "button" {
         return node.stable_key.clone();
@@ -127,6 +239,21 @@ fn find_button_key(node: &core_runtime::sre::SemanticNode) -> Option<String> {
     for child in &node.children {
         if let Some(key) = find_button_key(child) {
             return Some(key);
+        }
+    }
+    None
+}
+
+fn find_button_info(node: &core_runtime::sre::SemanticNode) -> Option<(i64, String)> {
+    if node.role == "button" {
+        return Some((
+            node.backend_node_id,
+            node.stable_key.clone().unwrap_or_default(),
+        ));
+    }
+    for child in &node.children {
+        if let Some(info) = find_button_info(child) {
+            return Some(info);
         }
     }
     None

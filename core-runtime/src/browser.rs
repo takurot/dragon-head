@@ -18,11 +18,27 @@ const DEFAULT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 pub enum SemanticTarget {
     Id(i64),
     StableKey(String),
+    IdWithStableKey { id: i64, stable_key: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SemanticWaitState {
     Enabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SemanticWaitOptions {
+    pub load_profile: LoadProfile,
+    pub poll_interval: Duration,
+}
+
+impl Default for SemanticWaitOptions {
+    fn default() -> Self {
+        Self {
+            load_profile: LoadProfile::Minimal,
+            poll_interval: DEFAULT_WAIT_POLL_INTERVAL,
+        }
+    }
 }
 
 pub struct BrowserClient {
@@ -165,14 +181,38 @@ impl PageSession {
         desired_state: SemanticWaitState,
         timeout: Duration,
     ) -> Result<()> {
+        self.wait_for_semantic_with_options(
+            target,
+            desired_state,
+            timeout,
+            SemanticWaitOptions::default(),
+        )
+    }
+
+    /// Wait until a semantic target reaches the requested state with explicit options.
+    pub fn wait_for_semantic_with_options(
+        &self,
+        target: SemanticTarget,
+        desired_state: SemanticWaitState,
+        timeout: Duration,
+        options: SemanticWaitOptions,
+    ) -> Result<()> {
         let mut subscriber =
-            SreEventSubscriber::new(self, LoadProfile::Interactive, DEFAULT_WAIT_POLL_INTERVAL);
+            SreEventSubscriber::new(self, options.load_profile, options.poll_interval);
         let started = Instant::now();
 
         loop {
-            if let Some(state) = subscriber.poll_next_state_event()? {
-                if target_matches_state(&state, &target, desired_state) {
-                    return Ok(());
+            match subscriber.poll_next_state_event() {
+                Ok(Some(state)) => {
+                    if target_matches_state(&state, &target, desired_state) {
+                        return Ok(());
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    if !is_transient_capture_error(&err) {
+                        return Err(err.context("Failed while waiting for semantic target state"));
+                    }
                 }
             }
 
@@ -193,14 +233,32 @@ impl PageSession {
 
     /// Wait until the specified intent marker appears in semantic state updates.
     pub fn wait_for_intent(&self, intent: &str, timeout: Duration) -> Result<()> {
+        self.wait_for_intent_with_options(intent, timeout, SemanticWaitOptions::default())
+    }
+
+    /// Wait until the specified intent marker appears with explicit options.
+    pub fn wait_for_intent_with_options(
+        &self,
+        intent: &str,
+        timeout: Duration,
+        options: SemanticWaitOptions,
+    ) -> Result<()> {
         let mut subscriber =
-            SreEventSubscriber::new(self, LoadProfile::Interactive, DEFAULT_WAIT_POLL_INTERVAL);
+            SreEventSubscriber::new(self, options.load_profile, options.poll_interval);
         let started = Instant::now();
 
         loop {
-            if let Some(state) = subscriber.poll_next_state_event()? {
-                if state_contains_intent(state.root(), intent) {
-                    return Ok(());
+            match subscriber.poll_next_state_event() {
+                Ok(Some(state)) => {
+                    if state_contains_intent(state.root(), intent) {
+                        return Ok(());
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    if !is_transient_capture_error(&err) {
+                        return Err(err.context("Failed while waiting for intent"));
+                    }
                 }
             }
 
@@ -305,7 +363,11 @@ impl<'a> SreEventSubscriber<'a> {
         Self {
             session,
             profile,
-            poll_interval,
+            poll_interval: if poll_interval.is_zero() {
+                DEFAULT_WAIT_POLL_INTERVAL
+            } else {
+                poll_interval
+            },
             last_state_hash: None,
         }
     }
@@ -332,18 +394,14 @@ fn target_matches_state(
     target: &SemanticTarget,
     desired_state: SemanticWaitState,
 ) -> bool {
-    find_target_node(state.root(), target)
-        .is_some_and(|node| node_matches_state(node, desired_state))
-}
+    let resolved = match target {
+        SemanticTarget::Id(id) => find_node_by_id(state.root(), *id),
+        SemanticTarget::StableKey(key) => find_node_by_key(state.root(), key),
+        SemanticTarget::IdWithStableKey { id, stable_key } => find_node_by_id(state.root(), *id)
+            .or_else(|| find_node_by_key(state.root(), stable_key)),
+    };
 
-fn find_target_node<'a>(
-    node: &'a SemanticNode,
-    target: &SemanticTarget,
-) -> Option<&'a SemanticNode> {
-    match target {
-        SemanticTarget::Id(id) => find_node_by_id(node, *id),
-        SemanticTarget::StableKey(key) => find_node_by_key(node, key),
-    }
+    resolved.is_some_and(|node| node_matches_state(node, desired_state))
 }
 
 fn find_node_by_id(node: &SemanticNode, target_id: i64) -> Option<&SemanticNode> {
@@ -428,6 +486,22 @@ fn node_contains_intent(node: &SemanticNode, intent: &str) -> bool {
     false
 }
 
+fn is_transient_capture_error(err: &anyhow::Error) -> bool {
+    let msg = err.to_string().to_lowercase();
+    let transient_markers = [
+        "could not find node",
+        "no node with given id",
+        "execution context was destroyed",
+        "cannot find context with specified id",
+        "inspected target navigated or closed",
+        "target closed",
+        "session closed",
+        "navigation",
+    ];
+
+    transient_markers.iter().any(|marker| msg.contains(marker))
+}
+
 fn sleep_until_next_poll(started: Instant, timeout: Duration, poll_interval: Duration) {
     let elapsed = started.elapsed();
     if elapsed >= timeout {
@@ -482,6 +556,15 @@ mod tests {
 
         assert!(!node_is_enabled(&disabled));
         assert!(node_is_enabled(&enabled));
+    }
+
+    #[test]
+    fn test_transient_capture_error_detection() {
+        let transient = anyhow::anyhow!("Execution context was destroyed while loading");
+        let non_transient = anyhow::anyhow!("Unsupported action: drag");
+
+        assert!(is_transient_capture_error(&transient));
+        assert!(!is_transient_capture_error(&non_transient));
     }
 }
 
