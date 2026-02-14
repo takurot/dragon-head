@@ -53,7 +53,7 @@ fn traverse_node(
     node: &Node,
     key_gen: &mut StableKeyGenerator,
     parent_path: &str,
-    sibling_index: usize,
+    _sibling_index: usize,
 ) -> Result<Option<SemanticNode>> {
     // Basic filtering based on node type
     // NodeType: 1=Element, 3=Text, 9=Document
@@ -67,12 +67,13 @@ fn traverse_node(
             return Ok(None);
         }
 
-        let stable_key = key_gen.generate_key("text", Some(&text), parent_path);
+        let (stable_key, ambiguous) = key_gen.generate_key("text", Some(&text), parent_path);
 
         return Ok(Some(SemanticNode {
             role: "text".to_string(),
             label: Some(text),
             stable_key: Some(stable_key),
+            ambiguous,
             ..Default::default()
         }));
     }
@@ -133,8 +134,8 @@ fn traverse_node(
     }
 
     // Generate path for this node to pass to children
-    // path format: parent_path/role[index]
-    let current_path = format!("{}/{}[{}]", parent_path, node_name, sibling_index);
+    // path format: parent_path/role (without index to ensure stability on sibling insertion, unless collision happens in key gen)
+    let current_path = format!("{}/{}", parent_path, node_name);
 
     let mut children = Vec::new();
     if let Some(child_nodes) = &node.children {
@@ -157,14 +158,16 @@ fn traverse_node(
     // Or just empty label for container elements.
     // Ideally we should extract text content if it's a leaf interactive element.
     let label_hint = attributes
-        .get("id")
+        .get("aria-label")
         .map(|s| s.as_str())
-        .or_else(|| attributes.get("aria-label").map(|s| s.as_str()));
+        .or_else(|| attributes.get("title").map(|s| s.as_str()))
+        .or_else(|| attributes.get("id").map(|s| s.as_str()));
 
-    let stable_key = key_gen.generate_key(&node_name, label_hint, parent_path);
+    let (stable_key, ambiguous) = key_gen.generate_key(&node_name, label_hint, parent_path);
 
     Ok(Some(SemanticNode {
         role: node_name,
+        label: label_hint.map(|s| s.to_string()),
         children,
         attributes: if attributes.is_empty() {
             None
@@ -172,6 +175,7 @@ fn traverse_node(
             Some(attributes)
         },
         stable_key: Some(stable_key),
+        ambiguous,
         ..Default::default()
     }))
 }

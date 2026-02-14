@@ -108,6 +108,7 @@ dependencies = [
  "anyhow",
  "headless_chrome",
  "hex",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
