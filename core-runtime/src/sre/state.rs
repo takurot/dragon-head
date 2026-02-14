@@ -23,6 +23,17 @@ pub struct SemanticNode {
     pub children: Vec<SemanticNode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attributes: Option<BTreeMap<String, String>>,
+    /// Stable key for element identity (SHA-256 hex)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_key: Option<String>,
+
+    /// True if the stable key collided and was resolved by index
+    #[serde(default)]
+    pub ambiguous: bool,
+
+    /// Human-readable alias (if available)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 impl SemanticState {
