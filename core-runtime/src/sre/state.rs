@@ -104,22 +104,29 @@ impl SemanticState {
         &self.page_instance_id
     }
 
+    /// Build Fast State (`interactive_elements`, `messages`) only.
+    pub fn generate_fast_state(&self) -> FastSemanticState {
+        FastSemanticState {
+            interactive_elements: collect_nodes_matching(&self.root, is_interactive_node),
+            messages: collect_nodes_matching(&self.root, is_message_node),
+        }
+    }
+
+    /// Build Full State (`forms`, `regions`) only.
+    pub fn generate_full_state(&self) -> FullSemanticState {
+        FullSemanticState {
+            forms: collect_nodes_matching(&self.root, is_form_node),
+            regions: collect_nodes_matching(&self.root, is_region_node),
+        }
+    }
+
     /// Build SRE-01 layered output.
     /// Fast State (`interactive_elements`, `messages`) is always generated first,
     /// then Full State (`forms`, `regions`) is generated.
     pub fn generate_layered_state(&self) -> LayeredSemanticState {
         let mut generation_trace = Vec::with_capacity(2);
-        generation_trace.push(StateGenerationPhase::Fast);
-        let fast = FastSemanticState {
-            interactive_elements: collect_nodes_matching(&self.root, is_interactive_node),
-            messages: collect_nodes_matching(&self.root, is_message_node),
-        };
-
-        generation_trace.push(StateGenerationPhase::Full);
-        let full = FullSemanticState {
-            forms: collect_nodes_matching(&self.root, is_form_node),
-            regions: collect_nodes_matching(&self.root, is_region_node),
-        };
+        let fast = self.generate_fast_state_with_trace(&mut generation_trace);
+        let full = self.generate_full_state_with_trace(&fast, &mut generation_trace);
 
         LayeredSemanticState {
             fast,
@@ -150,6 +157,23 @@ impl SemanticState {
             Self::strip_volatile_fields(child);
         }
     }
+
+    fn generate_fast_state_with_trace(
+        &self,
+        generation_trace: &mut Vec<StateGenerationPhase>,
+    ) -> FastSemanticState {
+        generation_trace.push(StateGenerationPhase::Fast);
+        self.generate_fast_state()
+    }
+
+    fn generate_full_state_with_trace(
+        &self,
+        _fast: &FastSemanticState,
+        generation_trace: &mut Vec<StateGenerationPhase>,
+    ) -> FullSemanticState {
+        generation_trace.push(StateGenerationPhase::Full);
+        self.generate_full_state()
+    }
 }
 
 fn collect_nodes_matching<F>(root: &SemanticNode, predicate: F) -> Vec<SemanticNode>
@@ -166,11 +190,24 @@ where
     F: Fn(&SemanticNode) -> bool,
 {
     if predicate(node) {
-        out.push(node.clone());
+        out.push(project_node_without_children(node));
     }
 
     for child in &node.children {
         collect_nodes_recursive(child, predicate, out);
+    }
+}
+
+fn project_node_without_children(node: &SemanticNode) -> SemanticNode {
+    SemanticNode {
+        role: node.role.clone(),
+        label: node.label.clone(),
+        children: Vec::new(),
+        attributes: node.attributes.clone(),
+        stable_key: node.stable_key.clone(),
+        ambiguous: node.ambiguous,
+        alias: node.alias.clone(),
+        backend_node_id: node.backend_node_id,
     }
 }
 

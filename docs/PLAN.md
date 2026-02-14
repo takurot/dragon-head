@@ -75,7 +75,7 @@
   - [x] 正規化処理（動的クラス除去、広告除外）を実装する。
   - [x] `Fast State`（`interactive_elements`, `messages`）を優先生成する。 (Note: Included in Full State for now)
   - [x] `Full State`（`forms`, `regions`）をバックグラウンド生成する。
-  - [x] `metadata` に `page_instance_id`, `state_hash`, `timestamp`, `load_profile` を含める。 (load_profile is implicit in generator but not in state struct yet, state has hash/id/ts)
+  - [x] `metadata` に `page_instance_id`, `state_hash`, `timestamp`, `load_profile` を含める。
 - テストタスク
   - [x] fixture HTMLに対するdeterministic出力テストを追加する。
   - [x] Profile別のリソース制御（ブロック/許可）テストを追加する。

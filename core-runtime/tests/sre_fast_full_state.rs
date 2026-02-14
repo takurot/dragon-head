@@ -40,6 +40,29 @@ fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
 
     let state = build_state(html)?;
     let layered = state.generate_layered_state();
+    let expected_fast = state.generate_fast_state();
+    let expected_full = state.generate_full_state();
+
+    assert!(
+        !layered.fast.interactive_elements.is_empty(),
+        "Fast state interactive_elements must not be empty"
+    );
+    assert!(
+        layered
+            .fast
+            .interactive_elements
+            .iter()
+            .any(|node| node.role == "input"),
+        "Fast state must include input elements"
+    );
+    assert!(
+        layered
+            .fast
+            .interactive_elements
+            .iter()
+            .any(|node| node.role == "button"),
+        "Fast state must include button elements"
+    );
 
     assert!(
         layered
@@ -52,6 +75,22 @@ fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
     assert!(
         layered.fast.messages.iter().all(|node| node.role == "text"),
         "Fast state messages must contain only text nodes"
+    );
+    assert!(
+        layered
+            .fast
+            .interactive_elements
+            .iter()
+            .all(|node| node.children.is_empty()),
+        "Fast state nodes must not embed subtree children"
+    );
+    assert!(
+        layered
+            .fast
+            .messages
+            .iter()
+            .all(|node| node.children.is_empty()),
+        "Fast state message nodes must not embed subtree children"
     );
 
     let has_order_message = layered.fast.messages.iter().any(|node| {
@@ -76,6 +115,30 @@ fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
             .unwrap_or(false)
     });
     assert!(has_region, "Full state must include region nodes");
+    assert!(
+        layered
+            .full
+            .forms
+            .iter()
+            .all(|node| node.children.is_empty()),
+        "Full state form nodes must not embed subtree children"
+    );
+    assert!(
+        layered
+            .full
+            .regions
+            .iter()
+            .all(|node| node.children.is_empty()),
+        "Full state region nodes must not embed subtree children"
+    );
+    assert_eq!(
+        layered.fast, expected_fast,
+        "Layered fast state must match standalone fast state generation"
+    );
+    assert_eq!(
+        layered.full, expected_full,
+        "Layered full state must match standalone full state generation"
+    );
 
     Ok(())
 }
@@ -100,11 +163,21 @@ fn test_fast_state_generated_before_full_state() -> anyhow::Result<()> {
 
     let state = build_state(html)?;
     let layered = state.generate_layered_state();
+    let fast_only = state.generate_fast_state();
+    let full_only = state.generate_full_state();
 
     assert_eq!(
         layered.generation_trace,
         vec![StateGenerationPhase::Fast, StateGenerationPhase::Full],
         "State generation must run fast phase before full phase"
+    );
+    assert_eq!(
+        layered.fast, fast_only,
+        "Layered output must use fast-phase generation result"
+    );
+    assert_eq!(
+        layered.full, full_only,
+        "Layered output must use full-phase generation result"
     );
 
     Ok(())
