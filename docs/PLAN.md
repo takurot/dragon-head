@@ -123,21 +123,21 @@
   - [x] ACT-04 Recovery Flow（1→2→3）をテストで再現できる。
 
 ### PR-05: ACT-03 Semantic Wait
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: ACT-03
 - Dependencies: PR-04
 - 実装タスク
-  - [ ] `wait_for_semantic(target, state)` を実装する。
-  - [ ] `wait_for_intent(intent)` を実装する。
-  - [ ] SRE Queueイベントを購読して待機解除を行う。
+  - [x] `wait_for_semantic(target, state)` を実装する。
+  - [x] `wait_for_intent(intent)` を実装する。
+  - [x] SRE Queueイベントを購読して待機解除を行う。
 - テストタスク
-  - [ ] 遅延ロードページで `enabled` 待機が機能するE2Eを追加する。
-  - [ ] intent成立/不成立のタイムアウト挙動テストを追加する。
+  - [x] 遅延ロードページで `enabled` 待機が機能するE2Eを追加する。
+  - [x] intent成立/不成立のタイムアウト挙動テストを追加する。
 - CIタスク
-  - [ ] semantic wait E2Eをsmoke対象に含める。
-  - [ ] タイムアウトが閾値を超える場合に失敗する性能アサーションを追加する。
+  - [x] semantic wait E2Eをsmoke対象に含める。
+  - [x] タイムアウトが閾値を超える場合に失敗する性能アサーションを追加する。
 - Exit Criteria
-  - [ ] 固定sleepに依存しない待機APIが利用可能。
+  - [x] 固定sleepに依存しない待機APIが利用可能。
 
 ### PR-06: ACT-02 Event-Driven SoM
 - Status: `NOT_STARTED`

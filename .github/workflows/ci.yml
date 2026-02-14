@@ -43,13 +43,16 @@ jobs:
 
   smoke-e2e:
     runs-on: ubuntu-latest
-    # Simple smoke test (e.g., install dependencies and run basic health check)
     steps:
     - uses: actions/checkout@v4
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y chromium-browser
+    - name: Run semantic wait smoke test
+      env:
+        CHROME_INSTALLED: "true"
+      run: cargo test -p core-runtime --test semantic_wait -- --nocapture
   cdp-smoke:
     runs-on: ubuntu-latest
     steps:
