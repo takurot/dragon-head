@@ -460,7 +460,7 @@ fn node_contains_intent(node: &SemanticNode, intent: &str) -> bool {
     if node
         .label
         .as_deref()
-        .is_some_and(|label| label.to_lowercase().contains(intent))
+        .is_some_and(|label| label.trim().to_lowercase() == intent)
     {
         return true;
     }
@@ -493,9 +493,6 @@ fn is_transient_capture_error(err: &anyhow::Error) -> bool {
         "no node with given id",
         "execution context was destroyed",
         "cannot find context with specified id",
-        "inspected target navigated or closed",
-        "target closed",
-        "session closed",
         "navigation",
     ];
 
@@ -562,9 +559,22 @@ mod tests {
     fn test_transient_capture_error_detection() {
         let transient = anyhow::anyhow!("Execution context was destroyed while loading");
         let non_transient = anyhow::anyhow!("Unsupported action: drag");
+        let closed = anyhow::anyhow!("Target closed");
 
         assert!(is_transient_capture_error(&transient));
         assert!(!is_transient_capture_error(&non_transient));
+        assert!(!is_transient_capture_error(&closed));
+    }
+
+    #[test]
+    fn test_state_contains_intent_is_exact_match() {
+        let node = SemanticNode {
+            role: "text".to_string(),
+            label: Some("checkout_complete_failed".to_string()),
+            ..Default::default()
+        };
+
+        assert!(!state_contains_intent(&node, "checkout_complete"));
     }
 }
 

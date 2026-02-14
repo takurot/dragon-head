@@ -132,6 +132,43 @@ fn test_wait_for_intent_timeout() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_wait_for_intent_does_not_match_substring() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <div>checkout_complete_failed</div>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let start = Instant::now();
+    let result = page.wait_for_intent("checkout_complete", Duration::from_millis(300));
+    let elapsed = start.elapsed();
+
+    assert!(result.is_err(), "substring match must not satisfy intent");
+    let wait_err = result
+        .unwrap_err()
+        .downcast::<WaitError>()
+        .expect("error should be WaitError");
+    assert!(matches!(wait_err, WaitError::Timeout { .. }));
+    assert!(
+        elapsed >= Duration::from_millis(300) && elapsed < Duration::from_secs(2),
+        "timeout must respect configured threshold"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_wait_for_semantic_timeout_when_target_never_enabled() -> anyhow::Result<()> {
     if should_skip() {
         return Ok(());
