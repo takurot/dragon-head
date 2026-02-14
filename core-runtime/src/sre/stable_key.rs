@@ -8,6 +8,12 @@ pub struct StableKeyGenerator {
     counts: HashMap<String, usize>,
 }
 
+impl Default for StableKeyGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StableKeyGenerator {
     pub fn new() -> Self {
         Self {
