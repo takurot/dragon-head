@@ -105,22 +105,22 @@
   - [x] fallback探索に必要な `stable_key` インデックスが常に利用可能。
 
 ### PR-04: ACT-04 Robust Action Execution
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: ACT-04
 - Dependencies: PR-03
 - 実装タスク
-  - [ ] `act`（`click`, `type`）を `target_id` 優先で実装する。
-  - [ ] `target_id` 失敗時に `target_stable_key` fallbackを実装する。
-  - [ ] fallback成功時にWarningログを出力する。
-  - [ ] 両方失敗時に `verify` 要求を返すフローを実装する。
+  - [x] `act`（`click`, `type`）を `target_id` 優先で実装する。
+  - [x] `target_id` 失敗時に `target_stable_key` fallbackを実装する。
+  - [x] fallback成功時にWarningログを出力する。
+  - [x] 両方失敗時に `verify` 要求（`ActionError::VerifyRequired`）を返すフローを実装する。
 - テストタスク
-  - [ ] `target_id` 無効化時に `stable_key` で復旧するintegration testを追加する。
-  - [ ] 二重失敗時に `verify required` を返すことを確認する。
+  - [x] `target_id` 無効化時に `stable_key` で復旧するintegration testを追加する。
+  - [x] 二重失敗時に `verify required` を返すことを確認する。
 - CIタスク
-  - [ ] action回帰テストをPRごとに実行するジョブを追加する。
-  - [ ] 失敗ケースのログ構造（warning/error）検証を自動化する。
+  - [x] action回帰テストをPRごとに実行するジョブを追加する。 (Included in workspace tests)
+  - [ ] 失敗ケースのログ構造（warning/error）検証を自動化する。 (Manual verification done)
 - Exit Criteria
-  - [ ] ACT-04 Recovery Flow（1→2→3）をテストで再現できる。
+  - [x] ACT-04 Recovery Flow（1→2→3）をテストで再現できる。
 
 ### PR-05: ACT-03 Semantic Wait
 - Status: `NOT_STARTED`

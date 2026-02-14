@@ -74,6 +74,7 @@ fn traverse_node(
             label: Some(text),
             stable_key: Some(stable_key),
             ambiguous,
+            backend_node_id: node.backend_node_id.into(),
             ..Default::default()
         }));
     }
@@ -176,6 +177,7 @@ fn traverse_node(
         },
         stable_key: Some(stable_key),
         ambiguous,
+        backend_node_id: node.backend_node_id.into(),
         ..Default::default()
     }))
 }

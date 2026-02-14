@@ -6,4 +6,4 @@ pub mod state;
 pub use normalization::normalize_dom;
 pub use profile::LoadProfile;
 pub use stable_key::StableKeyGenerator;
-pub use state::SemanticState;
+pub use state::{SemanticNode, SemanticState};

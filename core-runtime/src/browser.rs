@@ -61,6 +61,163 @@ impl PageSession {
             })?;
         Ok(root.root)
     }
+
+    pub fn evaluate_script(
+        &self,
+        script: &str,
+    ) -> Result<headless_chrome::protocol::cdp::Runtime::RemoteObject> {
+        self.inner
+            .evaluate(script, false)
+            .context("Failed to evaluate script")
+    }
+
+    /// Perform an action on a target element.
+    /// Uses `target_id` (backend_node_id) preferentially.
+    /// If `target_id` is invalid (stale), attempts fallback using `stable_key` by re-scanning the DOM.
+    pub fn act(
+        &self,
+        target_id: Option<i64>,
+        stable_key: Option<&str>,
+        action: &str,
+        value: Option<&str>,
+    ) -> Result<()> {
+        // First attempt: use target_id if available
+        if let Some(bid) = target_id {
+            match self.perform_action_by_id(bid, action, value) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    // Only fallback if the error indicates a node issue (e.g. "Could not find node", "No node with given id")
+                    // If it's a timeout or other error, we probably shouldn't blindly retry?
+                    // The CDP error for invalid backend_node_id usually says "Could not find node with given id".
+                    let err_str = e.to_string();
+                    let is_node_error = err_str.contains("Could not find node")
+                        || err_str.contains("No node with given id");
+
+                    if !is_node_error {
+                        return Err(e);
+                    }
+
+                    if stable_key.is_none() {
+                        return Err(e);
+                    }
+                    // Fallback proceed...
+                }
+            }
+        }
+
+        // Fallback: use stable_key
+        if let Some(key) = stable_key {
+            // Re-fetch DOM and normalize to find new ID
+            // Using Interactive profile to ensure we catch most elements (including those needing JS/styles).
+            // Minimal might be too aggressive in filtering.
+            let root = self.get_document_node()?;
+            let sem_root = crate::sre::normalize_dom(crate::sre::LoadProfile::Interactive, &root)?;
+
+            // Find node by key
+
+            if let Some(new_id) = find_node_id_by_key(&sem_root, key) {
+                // Log success of fallback
+                eprintln!(
+                    "[WARN] Action recovered via stable key: {} -> new_id: {}",
+                    key, new_id
+                );
+                return self.perform_action_by_id(new_id, action, value);
+            } else {
+                // Both failures -> VerifyRequired
+                return Err(crate::error::ActionError::VerifyRequired.into());
+            }
+        }
+
+        // If we reach here, we had no stable key or it failed lookup, and target_id failed or wasn't provided.
+        // Actually, if stable_key was None, we would have returned early in the target_id block if target_id was Some.
+        // If target_id was None AND stable_key was None, we should also error.
+
+        Err(crate::error::ActionError::VerifyRequired.into())
+    }
+
+    fn perform_action_by_id(
+        &self,
+        backend_node_id: i64,
+        action: &str,
+        value: Option<&str>,
+    ) -> Result<()> {
+        // Resolve backend_node_id to RemoteObject
+        use headless_chrome::protocol::cdp::Runtime::CallFunctionOn;
+        use headless_chrome::protocol::cdp::DOM::ResolveNode;
+
+        let node_id_u32 =
+            u32::try_from(backend_node_id).context("Invalid backend_node_id: must fit in u32")?;
+
+        let remote_object = self
+            .inner
+            .call_method(ResolveNode {
+                node_id: None,
+                backend_node_id: Some(node_id_u32),
+                object_group: None,
+                execution_context_id: None,
+            })?
+            .object;
+
+        let object_id = remote_object
+            .object_id
+            .context("Failed to resolve node to object")?;
+
+        match action {
+            "click" => {
+                self.inner.call_method(CallFunctionOn {
+                    object_id: Some(object_id),
+                    function_declaration: "function() { this.click(); }".to_string(),
+                    arguments: None,
+                    silent: Some(true),
+                    return_by_value: Some(false),
+                    generate_preview: Some(false),
+                    user_gesture: Some(true),
+                    await_promise: Some(false),
+                    execution_context_id: None,
+                    object_group: None,
+                    throw_on_side_effect: None,
+                    unique_context_id: None,
+                    serialization_options: None,
+                })?;
+            }
+            "type" => {
+                let text = value.context("Value is required for type action")?;
+                // Focus then type
+                self.inner.call_method(CallFunctionOn {
+                    object_id: Some(object_id.clone()),
+                    function_declaration: "function() { this.focus(); }".to_string(),
+                    arguments: None,
+                    silent: Some(true),
+                    return_by_value: Some(false),
+                    generate_preview: Some(false),
+                    user_gesture: Some(true),
+                    await_promise: Some(false),
+                    execution_context_id: None,
+                    object_group: None,
+                    throw_on_side_effect: None,
+                    unique_context_id: None,
+                    serialization_options: None,
+                })?;
+                self.inner.type_str(text)?;
+            }
+            _ => anyhow::bail!("Unsupported action: {}", action),
+        }
+        Ok(())
+    }
+}
+
+fn find_node_id_by_key(node: &crate::sre::SemanticNode, target_key: &str) -> Option<i64> {
+    if let Some(key) = &node.stable_key {
+        if key == target_key {
+            return Some(node.backend_node_id);
+        }
+    }
+    for child in &node.children {
+        if let Some(id) = find_node_id_by_key(child, target_key) {
+            return Some(id);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
