@@ -67,6 +67,7 @@
 全てのチェックが完了したら、変更をプッシュしPRを作成します。
 
 1.  **Commit**:
+    - トラブルシューティング: 新規ファイル追加時は必ず `git add <file>` を忘れないこと（CIエラーの主因）。
     - コミットメッセージは [Conventional Commits](https://www.conventionalcommits.org/) に従う。
     - 例: `feat(core): implement basic SRE logic (PR-02)`
 2.  **Push**:
