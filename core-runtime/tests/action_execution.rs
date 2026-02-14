@@ -124,3 +124,38 @@ fn find_button_info(node: &core_runtime::sre::state::SemanticNode) -> Option<(i6
     }
     None
 }
+
+#[test]
+fn test_action_execution_verify_required() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html><body><button id="btn">Gone</button></body></html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    // Use a completely fake ID and a fake key that won't be found
+    let fake_id = 999999;
+    let fake_key = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    // Action should fail with VerifyRequired
+    let result = page.act(Some(fake_id), Some(fake_key), "click", None);
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+
+    // Check if error is ActionError::VerifyRequired
+    if let Some(action_err) = err.downcast_ref::<core_runtime::error::ActionError>() {
+        match action_err {
+            core_runtime::error::ActionError::VerifyRequired => return Ok(()),
+        }
+    }
+
+    panic!("Expected ActionError::VerifyRequired, got: {:?}", err);
+}

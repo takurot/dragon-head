@@ -114,6 +114,7 @@ impl PageSession {
             let sem_root = crate::sre::normalize_dom(crate::sre::LoadProfile::Interactive, &root)?;
 
             // Find node by key
+
             if let Some(new_id) = find_node_id_by_key(&sem_root, key) {
                 // Log success of fallback
                 eprintln!(
@@ -122,11 +123,16 @@ impl PageSession {
                 );
                 return self.perform_action_by_id(new_id, action, value);
             } else {
-                anyhow::bail!("Stable key not found during fallback: {}", key);
+                // Both failures -> VerifyRequired
+                return Err(crate::error::ActionError::VerifyRequired.into());
             }
         }
 
-        anyhow::bail!("No target_id or stable_key provided for action");
+        // If we reach here, we had no stable key or it failed lookup, and target_id failed or wasn't provided.
+        // Actually, if stable_key was None, we would have returned early in the target_id block if target_id was Some.
+        // If target_id was None AND stable_key was None, we should also error.
+
+        Err(crate::error::ActionError::VerifyRequired.into())
     }
 
     fn perform_action_by_id(
