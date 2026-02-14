@@ -41,6 +41,32 @@ pub struct SemanticNode {
     pub backend_node_id: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateGenerationPhase {
+    Fast,
+    Full,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct FastSemanticState {
+    pub interactive_elements: Vec<SemanticNode>,
+    pub messages: Vec<SemanticNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct FullSemanticState {
+    pub forms: Vec<SemanticNode>,
+    pub regions: Vec<SemanticNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct LayeredSemanticState {
+    pub fast: FastSemanticState,
+    pub full: FullSemanticState,
+    pub generation_trace: Vec<StateGenerationPhase>,
+}
+
 impl SemanticState {
     /// Create a new SemanticState. The state_hash is computed from the root content only,
     /// ensuring that identical semantic content always produces the same hash.
@@ -78,6 +104,30 @@ impl SemanticState {
         &self.page_instance_id
     }
 
+    /// Build SRE-01 layered output.
+    /// Fast State (`interactive_elements`, `messages`) is always generated first,
+    /// then Full State (`forms`, `regions`) is generated.
+    pub fn generate_layered_state(&self) -> LayeredSemanticState {
+        let mut generation_trace = Vec::with_capacity(2);
+        generation_trace.push(StateGenerationPhase::Fast);
+        let fast = FastSemanticState {
+            interactive_elements: collect_nodes_matching(&self.root, is_interactive_node),
+            messages: collect_nodes_matching(&self.root, is_message_node),
+        };
+
+        generation_trace.push(StateGenerationPhase::Full);
+        let full = FullSemanticState {
+            forms: collect_nodes_matching(&self.root, is_form_node),
+            regions: collect_nodes_matching(&self.root, is_region_node),
+        };
+
+        LayeredSemanticState {
+            fast,
+            full,
+            generation_trace,
+        }
+    }
+
     /// Compute deterministic SHA-256 hash of the semantic root content.
     /// Excludes page_instance_id, timestamp, and load_profile — only the
     /// semantic tree contributes to the hash.
@@ -100,4 +150,73 @@ impl SemanticState {
             Self::strip_volatile_fields(child);
         }
     }
+}
+
+fn collect_nodes_matching<F>(root: &SemanticNode, predicate: F) -> Vec<SemanticNode>
+where
+    F: Fn(&SemanticNode) -> bool,
+{
+    let mut collected = Vec::new();
+    collect_nodes_recursive(root, &predicate, &mut collected);
+    collected
+}
+
+fn collect_nodes_recursive<F>(node: &SemanticNode, predicate: &F, out: &mut Vec<SemanticNode>)
+where
+    F: Fn(&SemanticNode) -> bool,
+{
+    if predicate(node) {
+        out.push(node.clone());
+    }
+
+    for child in &node.children {
+        collect_nodes_recursive(child, predicate, out);
+    }
+}
+
+fn is_interactive_node(node: &SemanticNode) -> bool {
+    matches!(
+        node.role.as_str(),
+        "a" | "button" | "input" | "select" | "textarea" | "option" | "summary"
+    ) || node
+        .attributes
+        .as_ref()
+        .and_then(|attrs| attrs.get("role"))
+        .is_some_and(|role| {
+            matches!(
+                role.as_str(),
+                "button" | "link" | "checkbox" | "radio" | "switch" | "tab" | "menuitem" | "option"
+            )
+        })
+}
+
+fn is_message_node(node: &SemanticNode) -> bool {
+    node.role == "text"
+        && node
+            .label
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn is_form_node(node: &SemanticNode) -> bool {
+    matches!(
+        node.role.as_str(),
+        "form" | "input" | "select" | "textarea" | "button" | "label" | "option"
+    )
+}
+
+fn is_region_node(node: &SemanticNode) -> bool {
+    matches!(
+        node.role.as_str(),
+        "main" | "nav" | "section" | "article" | "aside" | "header" | "footer"
+    ) || node
+        .attributes
+        .as_ref()
+        .and_then(|attrs| attrs.get("role"))
+        .is_some_and(|role| {
+            matches!(
+                role.as_str(),
+                "region" | "main" | "navigation" | "complementary" | "banner" | "contentinfo"
+            )
+        })
 }

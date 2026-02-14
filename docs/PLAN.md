@@ -67,7 +67,7 @@
   - [x] ヘッドレスブラウザ起動からHTML取得までを安定して実行できる。
 
 ### PR-02: SRE-01 Deterministic State Generation
-- Status: `NOT_STARTED`
+- Status: `IN_PROGRESS`
 - Spec Ref: SRE-01, Section 5.1
 - Dependencies: PR-01
 - 実装タスク
@@ -79,7 +79,7 @@
 - テストタスク
   - [x] fixture HTMLに対するdeterministic出力テストを追加する。
   - [x] Profile別のリソース制御（ブロック/許可）テストを追加する。
-  - [ ] Fast/Full Stateの内容差分と生成順序のテストを追加する。 (Fast State分離ロジック未実装のため保留)
+  - [x] Fast/Full Stateの内容差分と生成順序のテストを追加する。
 - CIタスク
   - [x] SRE fixture回帰テストをCI必須ジョブ化する。
   - [ ] 仕様変更時のスナップショット更新をPR内で強制するチェックを追加する。 (スナップショット基盤導入が必要のため保留)
