@@ -41,6 +41,32 @@ pub struct SemanticNode {
     pub backend_node_id: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateGenerationPhase {
+    Fast,
+    Full,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct FastSemanticState {
+    pub interactive_elements: Vec<SemanticNode>,
+    pub messages: Vec<SemanticNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct FullSemanticState {
+    pub forms: Vec<SemanticNode>,
+    pub regions: Vec<SemanticNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct LayeredSemanticState {
+    pub fast: FastSemanticState,
+    pub full: FullSemanticState,
+    pub generation_trace: Vec<StateGenerationPhase>,
+}
+
 impl SemanticState {
     /// Create a new SemanticState. The state_hash is computed from the root content only,
     /// ensuring that identical semantic content always produces the same hash.
@@ -78,6 +104,37 @@ impl SemanticState {
         &self.page_instance_id
     }
 
+    /// Build Fast State (`interactive_elements`, `messages`) only.
+    pub fn generate_fast_state(&self) -> FastSemanticState {
+        FastSemanticState {
+            interactive_elements: collect_nodes_matching(&self.root, is_interactive_node),
+            messages: collect_nodes_matching(&self.root, is_message_node),
+        }
+    }
+
+    /// Build Full State (`forms`, `regions`) only.
+    pub fn generate_full_state(&self) -> FullSemanticState {
+        FullSemanticState {
+            forms: collect_nodes_matching(&self.root, is_form_node),
+            regions: collect_nodes_matching(&self.root, is_region_node),
+        }
+    }
+
+    /// Build SRE-01 layered output.
+    /// Fast State (`interactive_elements`, `messages`) is always generated first,
+    /// then Full State (`forms`, `regions`) is generated.
+    pub fn generate_layered_state(&self) -> LayeredSemanticState {
+        let mut generation_trace = Vec::with_capacity(2);
+        let fast = self.generate_fast_state_with_trace(&mut generation_trace);
+        let full = self.generate_full_state_with_trace(&fast, &mut generation_trace);
+
+        LayeredSemanticState {
+            fast,
+            full,
+            generation_trace,
+        }
+    }
+
     /// Compute deterministic SHA-256 hash of the semantic root content.
     /// Excludes page_instance_id, timestamp, and load_profile — only the
     /// semantic tree contributes to the hash.
@@ -100,4 +157,103 @@ impl SemanticState {
             Self::strip_volatile_fields(child);
         }
     }
+
+    fn generate_fast_state_with_trace(
+        &self,
+        generation_trace: &mut Vec<StateGenerationPhase>,
+    ) -> FastSemanticState {
+        generation_trace.push(StateGenerationPhase::Fast);
+        self.generate_fast_state()
+    }
+
+    fn generate_full_state_with_trace(
+        &self,
+        _fast: &FastSemanticState,
+        generation_trace: &mut Vec<StateGenerationPhase>,
+    ) -> FullSemanticState {
+        generation_trace.push(StateGenerationPhase::Full);
+        self.generate_full_state()
+    }
+}
+
+fn collect_nodes_matching<F>(root: &SemanticNode, predicate: F) -> Vec<SemanticNode>
+where
+    F: Fn(&SemanticNode) -> bool,
+{
+    let mut collected = Vec::new();
+    collect_nodes_recursive(root, &predicate, &mut collected);
+    collected
+}
+
+fn collect_nodes_recursive<F>(node: &SemanticNode, predicate: &F, out: &mut Vec<SemanticNode>)
+where
+    F: Fn(&SemanticNode) -> bool,
+{
+    if predicate(node) {
+        out.push(project_node_without_children(node));
+    }
+
+    for child in &node.children {
+        collect_nodes_recursive(child, predicate, out);
+    }
+}
+
+fn project_node_without_children(node: &SemanticNode) -> SemanticNode {
+    SemanticNode {
+        role: node.role.clone(),
+        label: node.label.clone(),
+        children: Vec::new(),
+        attributes: node.attributes.clone(),
+        stable_key: node.stable_key.clone(),
+        ambiguous: node.ambiguous,
+        alias: node.alias.clone(),
+        backend_node_id: node.backend_node_id,
+    }
+}
+
+fn is_interactive_node(node: &SemanticNode) -> bool {
+    matches!(
+        node.role.as_str(),
+        "a" | "button" | "input" | "select" | "textarea" | "option" | "summary"
+    ) || node
+        .attributes
+        .as_ref()
+        .and_then(|attrs| attrs.get("role"))
+        .is_some_and(|role| {
+            matches!(
+                role.as_str(),
+                "button" | "link" | "checkbox" | "radio" | "switch" | "tab" | "menuitem" | "option"
+            )
+        })
+}
+
+fn is_message_node(node: &SemanticNode) -> bool {
+    node.role == "text"
+        && node
+            .label
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn is_form_node(node: &SemanticNode) -> bool {
+    matches!(
+        node.role.as_str(),
+        "form" | "input" | "select" | "textarea" | "button" | "label" | "option"
+    )
+}
+
+fn is_region_node(node: &SemanticNode) -> bool {
+    matches!(
+        node.role.as_str(),
+        "main" | "nav" | "section" | "article" | "aside" | "header" | "footer"
+    ) || node
+        .attributes
+        .as_ref()
+        .and_then(|attrs| attrs.get("role"))
+        .is_some_and(|role| {
+            matches!(
+                role.as_str(),
+                "region" | "main" | "navigation" | "complementary" | "banner" | "contentinfo"
+            )
+        })
 }
