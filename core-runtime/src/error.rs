@@ -5,3 +5,9 @@ pub enum ActionError {
     #[error("Action failed: target_id and stable_key both failed. Verification required.")]
     VerifyRequired,
 }
+
+#[derive(Error, Debug)]
+pub enum WaitError {
+    #[error("Timed out waiting for {operation} after {timeout_ms}ms")]
+    Timeout { operation: String, timeout_ms: u64 },
+}

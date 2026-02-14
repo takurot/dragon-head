@@ -1,6 +1,29 @@
 use anyhow::{Context, Result};
 use headless_chrome::{Browser, LaunchOptions};
-use std::sync::Arc;
+use std::{
+    cmp::min,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
+
+use crate::{
+    error::WaitError,
+    sre::{normalize_dom, LoadProfile, SemanticNode, SemanticState},
+};
+
+const DEFAULT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SemanticTarget {
+    Id(i64),
+    StableKey(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticWaitState {
+    Enabled,
+}
 
 pub struct BrowserClient {
     inner: Browser,
@@ -135,6 +158,70 @@ impl PageSession {
         Err(crate::error::ActionError::VerifyRequired.into())
     }
 
+    /// Wait until a semantic target reaches the requested state.
+    pub fn wait_for_semantic(
+        &self,
+        target: SemanticTarget,
+        desired_state: SemanticWaitState,
+        timeout: Duration,
+    ) -> Result<()> {
+        let mut subscriber =
+            SreEventSubscriber::new(self, LoadProfile::Interactive, DEFAULT_WAIT_POLL_INTERVAL);
+        let started = Instant::now();
+
+        loop {
+            if let Some(state) = subscriber.poll_next_state_event()? {
+                if target_matches_state(&state, &target, desired_state) {
+                    return Ok(());
+                }
+            }
+
+            if started.elapsed() >= timeout {
+                return Err(WaitError::Timeout {
+                    operation: format!(
+                        "semantic target {:?} to become {:?}",
+                        target, desired_state
+                    ),
+                    timeout_ms: duration_to_millis(timeout),
+                }
+                .into());
+            }
+
+            sleep_until_next_poll(started, timeout, subscriber.poll_interval());
+        }
+    }
+
+    /// Wait until the specified intent marker appears in semantic state updates.
+    pub fn wait_for_intent(&self, intent: &str, timeout: Duration) -> Result<()> {
+        let mut subscriber =
+            SreEventSubscriber::new(self, LoadProfile::Interactive, DEFAULT_WAIT_POLL_INTERVAL);
+        let started = Instant::now();
+
+        loop {
+            if let Some(state) = subscriber.poll_next_state_event()? {
+                if state_contains_intent(state.root(), intent) {
+                    return Ok(());
+                }
+            }
+
+            if started.elapsed() >= timeout {
+                return Err(WaitError::Timeout {
+                    operation: format!("intent '{}'", intent),
+                    timeout_ms: duration_to_millis(timeout),
+                }
+                .into());
+            }
+
+            sleep_until_next_poll(started, timeout, subscriber.poll_interval());
+        }
+    }
+
+    fn capture_state(&self, profile: LoadProfile) -> Result<SemanticState> {
+        let root = self.get_document_node()?;
+        let sem_root = normalize_dom(profile, &root)?;
+        Ok(SemanticState::new(sem_root, profile))
+    }
+
     fn perform_action_by_id(
         &self,
         backend_node_id: i64,
@@ -206,22 +293,200 @@ impl PageSession {
     }
 }
 
-fn find_node_id_by_key(node: &crate::sre::SemanticNode, target_key: &str) -> Option<i64> {
+struct SreEventSubscriber<'a> {
+    session: &'a PageSession,
+    profile: LoadProfile,
+    poll_interval: Duration,
+    last_state_hash: Option<String>,
+}
+
+impl<'a> SreEventSubscriber<'a> {
+    fn new(session: &'a PageSession, profile: LoadProfile, poll_interval: Duration) -> Self {
+        Self {
+            session,
+            profile,
+            poll_interval,
+            last_state_hash: None,
+        }
+    }
+
+    fn poll_next_state_event(&mut self) -> Result<Option<SemanticState>> {
+        let state = self.session.capture_state(self.profile)?;
+        let current_hash = state.state_hash().to_owned();
+
+        if self.last_state_hash.as_deref() == Some(current_hash.as_str()) {
+            return Ok(None);
+        }
+
+        self.last_state_hash = Some(current_hash);
+        Ok(Some(state))
+    }
+
+    fn poll_interval(&self) -> Duration {
+        self.poll_interval
+    }
+}
+
+fn target_matches_state(
+    state: &SemanticState,
+    target: &SemanticTarget,
+    desired_state: SemanticWaitState,
+) -> bool {
+    find_target_node(state.root(), target)
+        .is_some_and(|node| node_matches_state(node, desired_state))
+}
+
+fn find_target_node<'a>(
+    node: &'a SemanticNode,
+    target: &SemanticTarget,
+) -> Option<&'a SemanticNode> {
+    match target {
+        SemanticTarget::Id(id) => find_node_by_id(node, *id),
+        SemanticTarget::StableKey(key) => find_node_by_key(node, key),
+    }
+}
+
+fn find_node_by_id(node: &SemanticNode, target_id: i64) -> Option<&SemanticNode> {
+    if node.backend_node_id == target_id {
+        return Some(node);
+    }
+
+    for child in &node.children {
+        if let Some(found) = find_node_by_id(child, target_id) {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
+fn find_node_by_key<'a>(node: &'a SemanticNode, target_key: &str) -> Option<&'a SemanticNode> {
     if let Some(key) = &node.stable_key {
         if key == target_key {
-            return Some(node.backend_node_id);
+            return Some(node);
         }
     }
+
     for child in &node.children {
-        if let Some(id) = find_node_id_by_key(child, target_key) {
-            return Some(id);
+        if let Some(found) = find_node_by_key(child, target_key) {
+            return Some(found);
         }
     }
+
     None
+}
+
+fn find_node_id_by_key(node: &SemanticNode, target_key: &str) -> Option<i64> {
+    find_node_by_key(node, target_key).map(|target| target.backend_node_id)
+}
+
+fn node_matches_state(node: &SemanticNode, desired_state: SemanticWaitState) -> bool {
+    match desired_state {
+        SemanticWaitState::Enabled => node_is_enabled(node),
+    }
+}
+
+fn node_is_enabled(node: &SemanticNode) -> bool {
+    !node
+        .attributes
+        .as_ref()
+        .is_some_and(|attrs| attrs.contains_key("disabled"))
+}
+
+fn state_contains_intent(root: &SemanticNode, intent: &str) -> bool {
+    let normalized_intent = intent.trim().to_lowercase();
+    node_contains_intent(root, &normalized_intent)
+}
+
+fn node_contains_intent(node: &SemanticNode, intent: &str) -> bool {
+    if node
+        .label
+        .as_deref()
+        .is_some_and(|label| label.to_lowercase().contains(intent))
+    {
+        return true;
+    }
+
+    if let Some(attrs) = &node.attributes {
+        for (key, value) in attrs {
+            let key_normalized = key.to_lowercase();
+            let value_normalized = value.to_lowercase();
+            if (key_normalized == "data-intent" || key_normalized == "intent")
+                && value_normalized == intent
+            {
+                return true;
+            }
+        }
+    }
+
+    for child in &node.children {
+        if node_contains_intent(child, intent) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn sleep_until_next_poll(started: Instant, timeout: Duration, poll_interval: Duration) {
+    let elapsed = started.elapsed();
+    if elapsed >= timeout {
+        return;
+    }
+
+    let remaining = timeout.saturating_sub(elapsed);
+    thread::sleep(min(poll_interval, remaining));
+}
+
+fn duration_to_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn test_state_contains_intent_exact_match() {
+        let node = SemanticNode {
+            role: "body".to_string(),
+            attributes: Some(std::collections::BTreeMap::from([(
+                "data-intent".to_string(),
+                "checkout_complete".to_string(),
+            )])),
+            ..Default::default()
+        };
+
+        assert!(state_contains_intent(&node, "checkout_complete"));
+        assert!(!state_contains_intent(&node, "signup_complete"));
+    }
+
+    #[test]
+    fn test_node_is_enabled_with_disabled_attribute() {
+        let disabled = SemanticNode {
+            role: "button".to_string(),
+            attributes: Some(std::collections::BTreeMap::from([(
+                "disabled".to_string(),
+                "".to_string(),
+            )])),
+            ..Default::default()
+        };
+        let enabled = SemanticNode {
+            role: "button".to_string(),
+            attributes: Some(std::collections::BTreeMap::from([(
+                "id".to_string(),
+                "btn_login".to_string(),
+            )])),
+            ..Default::default()
+        };
+
+        assert!(!node_is_enabled(&disabled));
+        assert!(node_is_enabled(&enabled));
+    }
+}
+
+#[cfg(test)]
+mod browser_tests {
     use super::*;
 
     #[test]

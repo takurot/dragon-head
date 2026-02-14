@@ -1,0 +1,133 @@
+use std::time::{Duration, Instant};
+
+use core_runtime::{
+    sre::{normalize_dom, LoadProfile, SemanticState},
+    BrowserClient, SemanticTarget, SemanticWaitState, WaitError,
+};
+
+fn should_skip() -> bool {
+    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
+}
+
+#[test]
+fn test_wait_for_semantic_enabled_on_delayed_button() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <button id="btn_login" disabled>Login</button>
+                <script>
+                    setTimeout(() => {
+                        document.getElementById("btn_login").removeAttribute("disabled");
+                    }, 250);
+                </script>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let root = page.get_document_node()?;
+    let sem = normalize_dom(LoadProfile::Interactive, &root)?;
+    let state = SemanticState::new(sem, LoadProfile::Interactive);
+    let stable_key = find_button_key(state.root()).expect("button stable_key should exist");
+
+    page.wait_for_semantic(
+        SemanticTarget::StableKey(stable_key),
+        SemanticWaitState::Enabled,
+        Duration::from_secs(2),
+    )?;
+
+    let is_disabled = page
+        .evaluate_script(r#"document.getElementById("btn_login").hasAttribute("disabled")"#)?
+        .value
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    assert!(!is_disabled, "button must become enabled");
+
+    Ok(())
+}
+
+#[test]
+fn test_wait_for_intent_success() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <div id="status">Pending</div>
+                <script>
+                    setTimeout(() => {
+                        document.body.setAttribute("data-intent", "checkout_complete");
+                    }, 200);
+                </script>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    page.wait_for_intent("checkout_complete", Duration::from_secs(2))?;
+    Ok(())
+}
+
+#[test]
+fn test_wait_for_intent_timeout() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <div>No completion marker</div>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let start = Instant::now();
+    let result = page.wait_for_intent("checkout_complete", Duration::from_millis(400));
+    let elapsed = start.elapsed();
+
+    assert!(result.is_err(), "wait_for_intent should time out");
+    let err = result.unwrap_err();
+    let wait_err = err
+        .downcast_ref::<WaitError>()
+        .expect("error should be WaitError");
+    assert!(matches!(wait_err, WaitError::Timeout { .. }));
+
+    assert!(
+        elapsed >= Duration::from_millis(400) && elapsed < Duration::from_secs(2),
+        "timeout must respect configured threshold"
+    );
+
+    Ok(())
+}
+
+fn find_button_key(node: &core_runtime::sre::SemanticNode) -> Option<String> {
+    if node.role == "button" {
+        return node.stable_key.clone();
+    }
+    for child in &node.children {
+        if let Some(key) = find_button_key(child) {
+            return Some(key);
+        }
+    }
+    None
+}
