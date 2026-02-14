@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use headless_chrome::{Browser, LaunchOptions};
 use std::{
     cmp::min,
-    sync::Arc,
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
 
 use crate::{
-    error::WaitError,
+    error::{ActionError, VerifyError, WaitError},
     sre::{normalize_dom, LoadProfile, SemanticNode, SemanticState},
 };
 
@@ -41,6 +41,34 @@ impl Default for SemanticWaitOptions {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SomTrigger {
+    GetVisual,
+    ActAmbiguous,
+    VerifyFailed,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SomMark {
+    pub id: i64,
+    pub stable_key: Option<String>,
+    /// `[x, y, width, height]` in CSS pixels.
+    pub bbox: [f64; 4],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisualCapture {
+    pub trigger: SomTrigger,
+    pub marks: Vec<SomMark>,
+    pub image_png: Vec<u8>,
+}
+
+#[derive(Default)]
+struct SomPipelineState {
+    generation_count: usize,
+    last_capture: Option<VisualCapture>,
+}
+
 pub struct BrowserClient {
     inner: Browser,
 }
@@ -58,12 +86,16 @@ impl BrowserClient {
 
     pub fn new_page(&self) -> Result<PageSession> {
         let tab = self.inner.new_tab().context("Failed to create new tab")?;
-        Ok(PageSession { inner: tab })
+        Ok(PageSession {
+            inner: tab,
+            som_pipeline: Arc::new(Mutex::new(SomPipelineState::default())),
+        })
     }
 }
 
 pub struct PageSession {
     inner: Arc<headless_chrome::Tab>,
+    som_pipeline: Arc<Mutex<SomPipelineState>>,
 }
 
 impl PageSession {
@@ -110,6 +142,44 @@ impl PageSession {
             .context("Failed to evaluate script")
     }
 
+    /// Explicitly request a visual capture with SoM marks.
+    pub fn get_visual(&self) -> Result<VisualCapture> {
+        self.capture_som(SomTrigger::GetVisual)
+    }
+
+    /// Returns the number of SoM captures generated for this page session.
+    pub fn som_generation_count(&self) -> usize {
+        self.som_pipeline
+            .lock()
+            .map(|state| state.generation_count)
+            .unwrap_or_default()
+    }
+
+    /// Returns the latest SoM capture, if any.
+    pub fn last_visual_capture(&self) -> Option<VisualCapture> {
+        self.som_pipeline
+            .lock()
+            .ok()
+            .and_then(|state| state.last_capture.clone())
+    }
+
+    /// Verify element text against an expected value.
+    /// On mismatch, triggers a SoM capture to help disambiguate recovery.
+    pub fn verify_text(&self, target_id: i64, expected_text: &str) -> Result<()> {
+        let actual_text = self.get_element_text(target_id)?;
+        if normalize_text(&actual_text) == normalize_text(expected_text) {
+            return Ok(());
+        }
+
+        self.trigger_som_capture_best_effort(SomTrigger::VerifyFailed);
+        Err(VerifyError::ExpectationMismatch {
+            target_id,
+            expected: expected_text.to_string(),
+            actual: actual_text,
+        }
+        .into())
+    }
+
     /// Perform an action on a target element.
     /// Uses `target_id` (backend_node_id) preferentially.
     /// If `target_id` is invalid (stale), attempts fallback using `stable_key` by re-scanning the DOM.
@@ -128,9 +198,14 @@ impl PageSession {
                     // Only fallback if the error indicates a node issue (e.g. "Could not find node", "No node with given id")
                     // If it's a timeout or other error, we probably shouldn't blindly retry?
                     // The CDP error for invalid backend_node_id usually says "Could not find node with given id".
-                    let err_str = e.to_string();
-                    let is_node_error = err_str.contains("Could not find node")
-                        || err_str.contains("No node with given id");
+                    let node_error_markers = [
+                        "could not find node",
+                        "no node with given id",
+                        "could not find object with given id",
+                        "no object with given id",
+                        "node does not exist",
+                    ];
+                    let is_node_error = error_chain_contains_any(&e, &node_error_markers);
 
                     if !is_node_error {
                         return Err(e);
@@ -163,7 +238,8 @@ impl PageSession {
                 return self.perform_action_by_id(new_id, action, value);
             } else {
                 // Both failures -> VerifyRequired
-                return Err(crate::error::ActionError::VerifyRequired.into());
+                self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
+                return Err(ActionError::VerifyRequired.into());
             }
         }
 
@@ -171,7 +247,8 @@ impl PageSession {
         // Actually, if stable_key was None, we would have returned early in the target_id block if target_id was Some.
         // If target_id was None AND stable_key was None, we should also error.
 
-        Err(crate::error::ActionError::VerifyRequired.into())
+        self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
+        Err(ActionError::VerifyRequired.into())
     }
 
     /// Wait until a semantic target reaches the requested state.
@@ -280,14 +357,116 @@ impl PageSession {
         Ok(SemanticState::new(sem_root, profile))
     }
 
-    fn perform_action_by_id(
-        &self,
-        backend_node_id: i64,
-        action: &str,
-        value: Option<&str>,
-    ) -> Result<()> {
-        // Resolve backend_node_id to RemoteObject
+    fn capture_som(&self, trigger: SomTrigger) -> Result<VisualCapture> {
+        let root = self.get_document_node()?;
+        let semantic_root = normalize_dom(LoadProfile::Visual, &root)?;
+
+        let mut marks = Vec::new();
+        self.collect_som_marks(&semantic_root, &mut marks);
+
+        let image_png = self
+            .inner
+            .capture_screenshot(
+                headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption::Png,
+                None,
+                None,
+                true,
+            )
+            .context("Failed to capture SoM screenshot")?;
+
+        let capture = VisualCapture {
+            trigger,
+            marks,
+            image_png,
+        };
+        self.store_som_capture(capture.clone());
+        Ok(capture)
+    }
+
+    fn trigger_som_capture_best_effort(&self, trigger: SomTrigger) {
+        if let Err(err) = self.capture_som(trigger) {
+            eprintln!("[WARN] SoM capture trigger failed ({trigger:?}): {err:#}");
+        }
+    }
+
+    fn store_som_capture(&self, capture: VisualCapture) {
+        if let Ok(mut state) = self.som_pipeline.lock() {
+            state.generation_count += 1;
+            state.last_capture = Some(capture);
+        }
+    }
+
+    fn collect_som_marks(&self, node: &SemanticNode, out: &mut Vec<SomMark>) {
+        if node.backend_node_id > 0 && node.stable_key.is_some() {
+            if let Ok(Some(bbox)) = self.resolve_node_bbox(node.backend_node_id) {
+                out.push(SomMark {
+                    id: node.backend_node_id,
+                    stable_key: node.stable_key.clone(),
+                    bbox,
+                });
+            }
+        }
+
+        for child in &node.children {
+            self.collect_som_marks(child, out);
+        }
+    }
+
+    fn resolve_node_bbox(&self, backend_node_id: i64) -> Result<Option<[f64; 4]>> {
+        let node_id_u32 =
+            u32::try_from(backend_node_id).context("Invalid backend_node_id: must fit in u32")?;
+
+        let model = self
+            .inner
+            .call_method(headless_chrome::protocol::cdp::DOM::GetBoxModel {
+                node_id: None,
+                backend_node_id: Some(node_id_u32),
+                object_id: None,
+            })
+            .context("Failed to get box model")?
+            .model;
+
+        Ok(quad_to_bbox(&model.content))
+    }
+
+    fn get_element_text(&self, backend_node_id: i64) -> Result<String> {
         use headless_chrome::protocol::cdp::Runtime::CallFunctionOn;
+
+        let object_id = self.resolve_node_object_id(backend_node_id)?;
+        let result = self
+            .inner
+            .call_method(CallFunctionOn {
+                object_id: Some(object_id),
+                function_declaration:
+                    "function() { return (this.innerText || this.textContent || '').trim(); }"
+                        .to_string(),
+                arguments: None,
+                silent: Some(true),
+                return_by_value: Some(true),
+                generate_preview: Some(false),
+                user_gesture: Some(false),
+                await_promise: Some(false),
+                execution_context_id: None,
+                object_group: None,
+                throw_on_side_effect: None,
+                unique_context_id: None,
+                serialization_options: None,
+            })
+            .context("Failed to extract element text")?;
+
+        let value = result
+            .result
+            .value
+            .unwrap_or_else(|| serde_json::Value::String(String::new()));
+
+        if let Some(text) = value.as_str() {
+            Ok(text.to_string())
+        } else {
+            Ok(value.to_string())
+        }
+    }
+
+    fn resolve_node_object_id(&self, backend_node_id: i64) -> Result<String> {
         use headless_chrome::protocol::cdp::DOM::ResolveNode;
 
         let node_id_u32 =
@@ -300,12 +479,24 @@ impl PageSession {
                 backend_node_id: Some(node_id_u32),
                 object_group: None,
                 execution_context_id: None,
-            })?
+            })
+            .context("Failed to resolve node")?
             .object;
 
-        let object_id = remote_object
+        remote_object
             .object_id
-            .context("Failed to resolve node to object")?;
+            .context("Failed to resolve node to object")
+    }
+
+    fn perform_action_by_id(
+        &self,
+        backend_node_id: i64,
+        action: &str,
+        value: Option<&str>,
+    ) -> Result<()> {
+        // Resolve backend_node_id to RemoteObject
+        use headless_chrome::protocol::cdp::Runtime::CallFunctionOn;
+        let object_id = self.resolve_node_object_id(backend_node_id)?;
 
         match action {
             "click" => {
@@ -438,6 +629,39 @@ fn find_node_id_by_key(node: &SemanticNode, target_key: &str) -> Option<i64> {
     find_node_by_key(node, target_key).map(|target| target.backend_node_id)
 }
 
+fn quad_to_bbox(quad: &[f64]) -> Option<[f64; 4]> {
+    if quad.len() < 8 {
+        return None;
+    }
+
+    let xs = [quad[0], quad[2], quad[4], quad[6]];
+    let ys = [quad[1], quad[3], quad[5], quad[7]];
+
+    let min_x = xs.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_x = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let min_y = ys.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_y = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+    if !min_x.is_finite() || !max_x.is_finite() || !min_y.is_finite() || !max_y.is_finite() {
+        return None;
+    }
+
+    Some([
+        min_x,
+        min_y,
+        (max_x - min_x).max(0.0),
+        (max_y - min_y).max(0.0),
+    ])
+}
+
+fn normalize_text(input: &str) -> String {
+    input
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 fn node_matches_state(node: &SemanticNode, desired_state: SemanticWaitState) -> bool {
     match desired_state {
         SemanticWaitState::Enabled => node_is_enabled(node),
@@ -486,8 +710,14 @@ fn node_contains_intent(node: &SemanticNode, intent: &str) -> bool {
     false
 }
 
+fn error_chain_contains_any(err: &anyhow::Error, markers: &[&str]) -> bool {
+    err.chain().any(|source| {
+        let message = source.to_string().to_lowercase();
+        markers.iter().any(|marker| message.contains(marker))
+    })
+}
+
 fn is_transient_capture_error(err: &anyhow::Error) -> bool {
-    let msg = err.to_string().to_lowercase();
     let transient_markers = [
         "could not find node",
         "no node with given id",
@@ -496,7 +726,7 @@ fn is_transient_capture_error(err: &anyhow::Error) -> bool {
         "navigation",
     ];
 
-    transient_markers.iter().any(|marker| msg.contains(marker))
+    error_chain_contains_any(err, &transient_markers)
 }
 
 fn sleep_until_next_poll(started: Instant, timeout: Duration, poll_interval: Duration) {

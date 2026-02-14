@@ -140,21 +140,21 @@
   - [x] 固定sleepに依存しない待機APIが利用可能。
 
 ### PR-06: ACT-02 Event-Driven SoM
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: ACT-02
 - Dependencies: PR-02, PR-04
 - 実装タスク
-  - [ ] 常時SoM生成を廃止し、イベント駆動パイプラインに切り替える。
-  - [ ] トリガー条件（`get_visual`, `act` ambiguous, `verify` failure）を実装する。
-  - [ ] `marks`（ID/BBox/stable_key対応）付き出力を実装する。
+  - [x] 常時SoM生成を廃止し、イベント駆動パイプラインに切り替える。
+  - [x] トリガー条件（`get_visual`, `act` ambiguous, `verify` failure）を実装する。
+  - [x] `marks`（ID/BBox/stable_key対応）付き出力を実装する。
 - テストタスク
-  - [ ] 非トリガー時にSoMが生成されないことを検証する。
-  - [ ] トリガー3種ごとに `marks` 整合性を検証する。
+  - [x] 非トリガー時にSoMが生成されないことを検証する。
+  - [x] トリガー3種ごとに `marks` 整合性を検証する。
 - CIタスク
-  - [ ] SoM生成テストでスクリーンショット差分をartifact保存する。
-  - [ ] 画像差分しきい値超過時に失敗するチェックを追加する。
+  - [x] SoM生成テストでスクリーンショット差分をartifact保存する。
+  - [x] 画像差分しきい値超過時に失敗するチェックを追加する。
 - Exit Criteria
-  - [ ] SoM生成回数がイベント発火時に限定される。
+  - [x] SoM生成回数がイベント発火時に限定される。
 
 ### PR-07: SRE-02 Semantic Delta (RFC 6902)
 - Status: `NOT_STARTED`

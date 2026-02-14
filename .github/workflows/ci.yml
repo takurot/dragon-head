@@ -83,3 +83,25 @@ jobs:
       env:
         CHROME_INSTALLED: "true"
       run: cargo test -p core-runtime --test sre_profile_filtering --verbose
+
+  som-regression:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install chromium
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
+    - name: Run SoM event-driven tests
+      env:
+        CHROME_INSTALLED: "true"
+        SOM_ARTIFACT_DIR: "core-runtime/target/som-artifacts"
+      run: |
+        cargo test -p core-runtime --test som_event_driven --verbose
+        cargo test -p core-runtime --test som_visual_diff --verbose
+    - name: Upload SoM artifacts
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: som-regression-artifacts
+        path: core-runtime/target/som-artifacts/*.png
