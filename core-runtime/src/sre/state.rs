@@ -115,6 +115,7 @@ impl SemanticDelta {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StateUpdate {
+    Noop { state_hash: String },
     Full { state: SemanticState },
     Delta { delta: SemanticDelta },
 }
@@ -211,7 +212,7 @@ impl SemanticState {
         }))
     }
 
-    /// Select delivery mode (full state vs semantic delta) based on policy.
+    /// Select delivery mode (no-op, full state, or semantic delta) based on policy.
     pub fn select_update(
         &self,
         previous: Option<&SemanticState>,
@@ -224,12 +225,13 @@ impl SemanticState {
         };
 
         let Some(delta) = self.build_delta(previous_state)? else {
-            return Ok(StateUpdate::Full {
-                state: self.clone(),
+            return Ok(StateUpdate::Noop {
+                state_hash: self.state_hash().to_string(),
             });
         };
 
-        if should_send_delta(self.root(), &delta, policy)? {
+        let full_payload_bytes = full_update_payload_size_bytes(self)?;
+        if should_send_delta(full_payload_bytes, &delta, policy) {
             Ok(StateUpdate::Delta { delta })
         } else {
             Ok(StateUpdate::Full {
@@ -361,22 +363,27 @@ fn is_region_node(node: &SemanticNode) -> bool {
         })
 }
 
+fn full_update_payload_size_bytes(state: &SemanticState) -> Result<usize> {
+    serde_json::to_vec(&StateUpdate::Full {
+        state: state.clone(),
+    })
+    .context("Failed to encode full update payload for policy check")
+    .map(|payload| payload.len())
+}
+
 fn should_send_delta(
-    root: &SemanticNode,
+    full_payload_bytes: usize,
     delta: &SemanticDelta,
     policy: DeltaPolicy,
-) -> Result<bool> {
+) -> bool {
     if delta.operation_count() == 0 || delta.operation_count() > policy.max_operations {
-        return Ok(false);
+        return false;
     }
 
-    let full_payload_bytes = serde_json::to_vec(root)
-        .context("Failed to encode full state payload for policy check")?
-        .len();
     if full_payload_bytes == 0 {
-        return Ok(false);
+        return false;
     }
 
     let patch_ratio = delta.patch_size_bytes() as f32 / full_payload_bytes as f32;
-    Ok(patch_ratio <= policy.max_patch_bytes_ratio)
+    patch_ratio <= policy.max_patch_bytes_ratio
 }
