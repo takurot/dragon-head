@@ -1,7 +1,7 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-02-10
+- 最終更新日: 2026-02-15
 - プラン状態: Ready for Implementation
 
 ## 1. 進捗管理ルール
@@ -87,7 +87,7 @@
   - [x] 同一入力に対し `state_hash` が再現性を持つ。
 
 ### PR-03: ACT-01 Stable Key Generation
-- Status: `DONE` (Local)
+- Status: `IN_PROGRESS` (Spec gap closure)
 - Spec Ref: ACT-01, Section 5.1
 - Dependencies: PR-02
 - 実装タスク
@@ -95,14 +95,19 @@
   - [x] `stable_key`（不変ID）と `alias`（人間可読名）を分離する。
   - [x] 衝突時のインデックス付与と `ambiguous: true` を実装する。 (Index appended, ambiguous flag in struct)
   - [x] `stable_key -> Node` インデックスをメモリ常駐化する。 (Implicit in traversal, full index requires separate struct but core logic is done)
+  - [ ] `quadrant` を stable key計算入力に正式導入し、同一 `dom_signature` 要素の識別精度を上げる。
+  - [ ] `alias` を生成して `interactive_elements` の公開出力へ反映する。
+  - [ ] `stable_key -> Node` 常駐インデックス（`HashMap`）を `PageSession` 単位で保持し、探索を O(1) 化する。
 - テストタスク
   - [x] DOM再レンダリング時のキー安定性テストを追加する。
   - [x] 衝突ケースで `ambiguous` が正しく立つことを検証する。 (Collision handling verified)
+  - [ ] quadrant差分で key が変わり、同一再レンダリングでは不変であることを検証する。
+  - [ ] `alias` 出力と `stable_key` インデックスの整合性テストを追加する。
 - CIタスク
   - [x] stable key回帰テストをCI必須化する。 (Included in workspace tests)
   - [ ] ハッシュ計算ロジックの変更時に互換性テストを必須化する。 (Future work)
 - Exit Criteria
-  - [x] fallback探索に必要な `stable_key` インデックスが常に利用可能。
+  - [ ] fallback探索に必要な `stable_key` インデックスが常に利用可能。
 
 ### PR-04: ACT-04 Robust Action Execution
 - Status: `DONE` (Local)
@@ -123,21 +128,23 @@
   - [x] ACT-04 Recovery Flow（1→2→3）をテストで再現できる。
 
 ### PR-05: ACT-03 Semantic Wait
-- Status: `DONE` (Local)
+- Status: `IN_PROGRESS` (Spec gap closure)
 - Spec Ref: ACT-03
 - Dependencies: PR-04
 - 実装タスク
   - [x] `wait_for_semantic(target, state)` を実装する。
   - [x] `wait_for_intent(intent)` を実装する。
   - [x] SRE Queueイベントを購読して待機解除を行う。
+  - [ ] `SRE Queue` からの pushイベント購読を導入し、定周期ポーリング依存を除去する。
 - テストタスク
   - [x] 遅延ロードページで `enabled` 待機が機能するE2Eを追加する。
   - [x] intent成立/不成立のタイムアウト挙動テストを追加する。
+  - [ ] イベント駆動経路で待機解除され、固定間隔ポーリングに依存しないことを検証する。
 - CIタスク
   - [x] semantic wait E2Eをsmoke対象に含める。
   - [x] タイムアウトが閾値を超える場合に失敗する性能アサーションを追加する。
 - Exit Criteria
-  - [x] 固定sleepに依存しない待機APIが利用可能。
+  - [ ] 固定sleepに依存しない待機APIが利用可能。
 
 ### PR-06: ACT-02 Event-Driven SoM
 - Status: `DONE` (Local)
@@ -286,12 +293,16 @@
   - [ ] MCPサーバを実装し内部APIを公開する。
   - [ ] `get_state`, `act`, `verify`, `get_visual`, `ask_human`, `run_skill` を公開する。
   - [ ] 各tool引数・戻り値を仕様準拠に揃える（`force_refresh` など）。
+  - [ ] `get_state(format=json)` の戻り値を Section 5.1 スキーマ（`metadata.url`, `interactive_elements[].id/stable_key/alias/role/name/attributes/bbox/policy_flags`）に厳密準拠させる。
+  - [ ] 内部表現（`SemanticState`）と外部公開DTOを分離し、スキーマ互換性を管理する。
 - テストタスク
   - [ ] MCP clientとの契約テストを追加する。
   - [ ] `ask_human` を含むHITLフローのE2Eテストを追加する。
+  - [ ] Section 5.1 JSONサンプルに対するスキーマ準拠（golden/contract）テストを追加する。
 - CIタスク
   - [ ] MCP protocol complianceテストを必須化する。
   - [ ] API schema差分の自動検知を追加する。
+  - [ ] JSON Schema互換性チェック（後方互換）を必須化する。
 - Exit Criteria
   - [ ] 仕様ツール群を外部クライアントから一貫利用できる。
 
