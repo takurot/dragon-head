@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use headless_chrome::{Browser, LaunchOptions};
 use std::{
     cmp::min,
+    collections::HashMap,
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -69,6 +70,12 @@ struct SomPipelineState {
     last_capture: Option<VisualCapture>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StableKeyIndexEntry {
+    backend_node_id: i64,
+    alias: Option<String>,
+}
+
 pub struct BrowserClient {
     inner: Browser,
 }
@@ -89,6 +96,7 @@ impl BrowserClient {
         Ok(PageSession {
             inner: tab,
             som_pipeline: Arc::new(Mutex::new(SomPipelineState::default())),
+            stable_key_index: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }
@@ -96,6 +104,7 @@ impl BrowserClient {
 pub struct PageSession {
     inner: Arc<headless_chrome::Tab>,
     som_pipeline: Arc<Mutex<SomPipelineState>>,
+    stable_key_index: Arc<Mutex<HashMap<String, StableKeyIndexEntry>>>,
 }
 
 impl PageSession {
@@ -104,6 +113,7 @@ impl PageSession {
         self.inner
             .wait_until_navigated()
             .context("Failed to wait for navigation")?;
+        self.clear_stable_key_index();
         Ok(())
     }
 
@@ -161,6 +171,33 @@ impl PageSession {
             .lock()
             .ok()
             .and_then(|state| state.last_capture.clone())
+    }
+
+    /// Refresh the per-session stable_key index from the latest semantic capture.
+    /// Returns the number of indexed nodes.
+    pub fn refresh_stable_key_index(&self, profile: LoadProfile) -> Result<usize> {
+        self.capture_state(profile)?;
+        Ok(self
+            .stable_key_index
+            .lock()
+            .map(|index| index.len())
+            .unwrap_or_default())
+    }
+
+    /// Resolve a backend node id from the per-session stable_key index.
+    pub fn lookup_backend_node_id_by_stable_key(&self, stable_key: &str) -> Option<i64> {
+        self.stable_key_index
+            .lock()
+            .ok()
+            .and_then(|index| index.get(stable_key).map(|entry| entry.backend_node_id))
+    }
+
+    /// Resolve alias metadata from the per-session stable_key index.
+    pub fn lookup_alias_by_stable_key(&self, stable_key: &str) -> Option<String> {
+        self.stable_key_index
+            .lock()
+            .ok()
+            .and_then(|index| index.get(stable_key).and_then(|entry| entry.alias.clone()))
     }
 
     /// Verify element text against an expected value.
@@ -222,15 +259,10 @@ impl PageSession {
 
         // Fallback: use stable_key
         if let Some(key) = stable_key {
-            // Re-fetch DOM and normalize to find new ID
-            // Using Interactive profile to ensure we catch most elements (including those needing JS/styles).
-            // Minimal might be too aggressive in filtering.
-            let root = self.get_document_node()?;
-            let sem_root = crate::sre::normalize_dom(crate::sre::LoadProfile::Interactive, &root)?;
+            // Refresh semantic snapshot and stable-key index before lookup.
+            self.capture_state(crate::sre::LoadProfile::Interactive)?;
 
-            // Find node by key
-
-            if let Some(new_id) = find_node_id_by_key(&sem_root, key) {
+            if let Some(new_id) = self.lookup_backend_node_id_by_stable_key(key) {
                 // Log success of fallback
                 eprintln!(
                     "[WARN] Action recovered via stable key: {} -> new_id: {}",
@@ -355,7 +387,21 @@ impl PageSession {
     fn capture_state(&self, profile: LoadProfile) -> Result<SemanticState> {
         let root = self.get_document_node()?;
         let sem_root = normalize_dom(profile, &root)?;
+        self.replace_stable_key_index(&sem_root);
         Ok(SemanticState::new(sem_root, profile))
+    }
+
+    fn replace_stable_key_index(&self, root: &SemanticNode) {
+        if let Ok(mut index) = self.stable_key_index.lock() {
+            index.clear();
+            collect_stable_key_entries(root, &mut index);
+        }
+    }
+
+    fn clear_stable_key_index(&self) {
+        if let Ok(mut index) = self.stable_key_index.lock() {
+            index.clear();
+        }
     }
 
     fn capture_som(&self, trigger: SomTrigger) -> Result<VisualCapture> {
@@ -626,8 +672,22 @@ fn find_node_by_key<'a>(node: &'a SemanticNode, target_key: &str) -> Option<&'a 
     None
 }
 
-fn find_node_id_by_key(node: &SemanticNode, target_key: &str) -> Option<i64> {
-    find_node_by_key(node, target_key).map(|target| target.backend_node_id)
+fn collect_stable_key_entries(node: &SemanticNode, out: &mut HashMap<String, StableKeyIndexEntry>) {
+    if let Some(key) = &node.stable_key {
+        if node.backend_node_id > 0 {
+            out.insert(
+                key.clone(),
+                StableKeyIndexEntry {
+                    backend_node_id: node.backend_node_id,
+                    alias: node.alias.clone(),
+                },
+            );
+        }
+    }
+
+    for child in &node.children {
+        collect_stable_key_entries(child, out);
+    }
 }
 
 fn quad_to_bbox(quad: &[f64]) -> Option<[f64; 4]> {

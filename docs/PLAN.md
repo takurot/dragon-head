@@ -95,19 +95,19 @@
   - [x] `stable_key`（不変ID）と `alias`（人間可読名）を分離する。
   - [x] 衝突時のインデックス付与と `ambiguous: true` を実装する。 (Index appended, ambiguous flag in struct)
   - [x] `stable_key -> Node` インデックスをメモリ常駐化する。 (Implicit in traversal, full index requires separate struct but core logic is done)
-  - [ ] `quadrant` を stable key計算入力に正式導入し、同一 `dom_signature` 要素の識別精度を上げる。
-  - [ ] `alias` を生成して `interactive_elements` の公開出力へ反映する。
-  - [ ] `stable_key -> Node` 常駐インデックス（`HashMap`）を `PageSession` 単位で保持し、探索を O(1) 化する。
+  - [x] `quadrant` を stable key計算入力に正式導入し、同一 `dom_signature` 要素の識別精度を上げる。
+  - [x] `alias` を生成して `interactive_elements` の公開出力へ反映する。
+  - [x] `stable_key -> Node` 常駐インデックス（`HashMap`）を `PageSession` 単位で保持し、探索を O(1) 化する。
 - テストタスク
   - [x] DOM再レンダリング時のキー安定性テストを追加する。
   - [x] 衝突ケースで `ambiguous` が正しく立つことを検証する。 (Collision handling verified)
-  - [ ] quadrant差分で key が変わり、同一再レンダリングでは不変であることを検証する。
-  - [ ] `alias` 出力と `stable_key` インデックスの整合性テストを追加する。
+  - [x] quadrant差分で key が変わり、同一再レンダリングでは不変であることを検証する。
+  - [x] `alias` 出力と `stable_key` インデックスの整合性テストを追加する。
 - CIタスク
   - [x] stable key回帰テストをCI必須化する。 (Included in workspace tests)
   - [ ] ハッシュ計算ロジックの変更時に互換性テストを必須化する。 (Future work)
 - Exit Criteria
-  - [ ] fallback探索に必要な `stable_key` インデックスが常に利用可能。
+  - [x] fallback探索に必要な `stable_key` インデックスが常に利用可能。
 
 ### PR-04: ACT-04 Robust Action Execution
 - Status: `DONE` (Local)

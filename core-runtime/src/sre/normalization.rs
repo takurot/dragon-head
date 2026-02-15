@@ -3,12 +3,16 @@ use super::stable_key::StableKeyGenerator;
 use super::state::SemanticNode;
 use anyhow::Result;
 use headless_chrome::protocol::cdp::DOM::Node;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+
+const DEFAULT_VIEWPORT_WIDTH_PX: f64 = 800.0;
+const DEFAULT_VIEWPORT_HEIGHT_PX: f64 = 600.0;
 
 pub fn normalize_dom(profile: LoadProfile, node: &Node) -> Result<SemanticNode> {
     let mut key_generator = StableKeyGenerator::new();
     // Start traversal with root path
-    let internal_node = traverse_node(profile, node, &mut key_generator, "root", 0)?;
+    let internal_node = traverse_node(profile, node, &mut key_generator, "root")?;
     Ok(internal_node.unwrap_or_default())
 }
 
@@ -53,7 +57,6 @@ fn traverse_node(
     node: &Node,
     key_gen: &mut StableKeyGenerator,
     parent_path: &str,
-    _sibling_index: usize,
 ) -> Result<Option<SemanticNode>> {
     // Basic filtering based on node type
     // NodeType: 1=Element, 3=Text, 9=Document
@@ -67,7 +70,8 @@ fn traverse_node(
             return Ok(None);
         }
 
-        let (stable_key, ambiguous) = key_gen.generate_key("text", Some(&text), parent_path);
+        let (stable_key, ambiguous) =
+            key_gen.generate_key("text", Some(&text), parent_path, "unknown");
 
         return Ok(Some(SemanticNode {
             role: "text".to_string(),
@@ -144,10 +148,8 @@ fn traverse_node(
         // Using absolute index for simplicity in traversal, but for stable keys relying on structure,
         // we might want "nth-of-type".
         // For now, let's use the loop index.
-        for (idx, child) in child_nodes.iter().enumerate() {
-            if let Some(normalized_child) =
-                traverse_node(profile, child, key_gen, &current_path, idx)?
-            {
+        for child in child_nodes {
+            if let Some(normalized_child) = traverse_node(profile, child, key_gen, &current_path)? {
                 children.push(normalized_child);
             }
         }
@@ -158,13 +160,19 @@ fn traverse_node(
     // For now, we use a simple approach: if it has an id, use it as label hint?
     // Or just empty label for container elements.
     // Ideally we should extract text content if it's a leaf interactive element.
+    let text_hint = extract_direct_text_label(node);
     let label_hint = attributes
         .get("aria-label")
         .map(|s| s.as_str())
         .or_else(|| attributes.get("title").map(|s| s.as_str()))
-        .or_else(|| attributes.get("id").map(|s| s.as_str()));
+        .or_else(|| attributes.get("id").map(|s| s.as_str()))
+        .or(text_hint.as_deref());
 
-    let (stable_key, ambiguous) = key_gen.generate_key(&node_name, label_hint, parent_path);
+    let quadrant = resolve_quadrant(&attributes, &node_name, label_hint, parent_path);
+    let alias = build_alias(&node_name, label_hint, &attributes);
+
+    let (stable_key, ambiguous) =
+        key_gen.generate_key(&node_name, label_hint, parent_path, &quadrant);
 
     Ok(Some(SemanticNode {
         role: node_name,
@@ -177,9 +185,240 @@ fn traverse_node(
         },
         stable_key: Some(stable_key),
         ambiguous,
+        alias,
         backend_node_id: node.backend_node_id.into(),
-        ..Default::default()
     }))
+}
+
+fn extract_direct_text_label(node: &Node) -> Option<String> {
+    let children = node.children.as_ref()?;
+    let mut parts = Vec::new();
+
+    for child in children {
+        if child.node_type != 3 {
+            continue;
+        }
+        let text = child.node_value.trim();
+        if !text.is_empty() {
+            parts.push(text.to_string());
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
+fn resolve_quadrant(
+    attributes: &BTreeMap<String, String>,
+    role: &str,
+    label_hint: Option<&str>,
+    dom_signature: &str,
+) -> String {
+    if let Some(raw) = attributes.get("data-quadrant") {
+        if let Some(normalized) = normalize_quadrant_token(raw) {
+            return normalized;
+        }
+    }
+
+    if let Some(quadrant) = resolve_quadrant_from_coordinates(attributes) {
+        return quadrant;
+    }
+
+    resolve_quadrant_from_signature(role, label_hint, dom_signature)
+}
+
+fn normalize_quadrant_token(raw: &str) -> Option<String> {
+    let normalized = slugify(raw).replace('-', "_");
+    match normalized.as_str() {
+        "top_left" | "tl" => Some("top_left".to_string()),
+        "top_right" | "tr" => Some("top_right".to_string()),
+        "bottom_left" | "bl" => Some("bottom_left".to_string()),
+        "bottom_right" | "br" => Some("bottom_right".to_string()),
+        _ => None,
+    }
+}
+
+fn resolve_quadrant_from_coordinates(attributes: &BTreeMap<String, String>) -> Option<String> {
+    let x_ratio = extract_x_ratio(attributes)?;
+    let y_ratio = extract_y_ratio(attributes)?;
+    Some(quadrant_from_ratios(x_ratio, y_ratio))
+}
+
+fn extract_x_ratio(attributes: &BTreeMap<String, String>) -> Option<f64> {
+    if let Some(style) = attributes.get("style") {
+        if let Some(left) =
+            extract_css_numeric(style, "left").and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_WIDTH_PX))
+        {
+            return Some(left);
+        }
+        if let Some(right) =
+            extract_css_numeric(style, "right").and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_WIDTH_PX))
+        {
+            return Some((1.0 - right).clamp(0.0, 1.0));
+        }
+    }
+
+    extract_coordinate_attribute(attributes, &["data-x", "x"], DEFAULT_VIEWPORT_WIDTH_PX)
+}
+
+fn extract_y_ratio(attributes: &BTreeMap<String, String>) -> Option<f64> {
+    if let Some(style) = attributes.get("style") {
+        if let Some(top) =
+            extract_css_numeric(style, "top").and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_HEIGHT_PX))
+        {
+            return Some(top);
+        }
+        if let Some(bottom) = extract_css_numeric(style, "bottom")
+            .and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_HEIGHT_PX))
+        {
+            return Some((1.0 - bottom).clamp(0.0, 1.0));
+        }
+    }
+
+    extract_coordinate_attribute(attributes, &["data-y", "y"], DEFAULT_VIEWPORT_HEIGHT_PX)
+}
+
+fn extract_coordinate_attribute(
+    attributes: &BTreeMap<String, String>,
+    names: &[&str],
+    axis_px: f64,
+) -> Option<f64> {
+    names.iter().find_map(|name| {
+        let value = attributes.get(*name)?;
+        parse_css_numeric(value).and_then(|coord| coord.to_ratio(axis_px))
+    })
+}
+
+fn extract_css_numeric(style: &str, property: &str) -> Option<CssNumeric> {
+    style
+        .split(';')
+        .filter_map(|entry| entry.split_once(':'))
+        .find_map(|(key, value)| {
+            if key.trim().eq_ignore_ascii_case(property) {
+                parse_css_numeric(value.trim())
+            } else {
+                None
+            }
+        })
+}
+
+fn parse_css_numeric(raw: &str) -> Option<CssNumeric> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Some(percent) = value.strip_suffix('%') {
+        return percent.trim().parse::<f64>().ok().map(CssNumeric::Percent);
+    }
+
+    if let Some(px) = value.strip_suffix("px") {
+        return px.trim().parse::<f64>().ok().map(CssNumeric::Px);
+    }
+
+    value.parse::<f64>().ok().map(CssNumeric::Px)
+}
+
+fn resolve_quadrant_from_signature(
+    role: &str,
+    label_hint: Option<&str>,
+    dom_signature: &str,
+) -> String {
+    let normalized_label = label_hint.unwrap_or("").trim().to_lowercase();
+    let signature = format!("{role}|{normalized_label}|{dom_signature}");
+    let digest = Sha256::digest(signature.as_bytes());
+    match digest[0] % 4 {
+        0 => "top_left".to_string(),
+        1 => "top_right".to_string(),
+        2 => "bottom_left".to_string(),
+        _ => "bottom_right".to_string(),
+    }
+}
+
+fn quadrant_from_ratios(x_ratio: f64, y_ratio: f64) -> String {
+    if y_ratio < 0.5 {
+        if x_ratio < 0.5 {
+            "top_left".to_string()
+        } else {
+            "top_right".to_string()
+        }
+    } else if x_ratio < 0.5 {
+        "bottom_left".to_string()
+    } else {
+        "bottom_right".to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CssNumeric {
+    Px(f64),
+    Percent(f64),
+}
+
+impl CssNumeric {
+    fn to_ratio(self, axis_px: f64) -> Option<f64> {
+        if axis_px <= 0.0 {
+            return None;
+        }
+
+        let ratio = match self {
+            CssNumeric::Px(value) => value / axis_px,
+            CssNumeric::Percent(value) => value / 100.0,
+        };
+        Some(ratio.clamp(0.0, 1.0))
+    }
+}
+
+fn build_alias(
+    role: &str,
+    label_hint: Option<&str>,
+    attributes: &BTreeMap<String, String>,
+) -> Option<String> {
+    if let Some(raw) = attributes.get("data-alias") {
+        let normalized = slugify(raw);
+        if !normalized.is_empty() {
+            return Some(normalized);
+        }
+    }
+
+    let label = label_hint
+        .or_else(|| attributes.get("name").map(|s| s.as_str()))
+        .or_else(|| attributes.get("type").map(|s| s.as_str()));
+
+    let role_part = slugify(role);
+    if role_part.is_empty() {
+        return None;
+    }
+
+    let label_part = label.map(slugify).unwrap_or_default();
+    if label_part.is_empty() {
+        Some(role_part)
+    } else {
+        Some(format!("{}_{}", role_part, label_part))
+    }
+}
+
+fn slugify(input: &str) -> String {
+    let mut normalized = String::with_capacity(input.len());
+    let mut last_was_separator = false;
+
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+            last_was_separator = false;
+            continue;
+        }
+
+        if !last_was_separator {
+            normalized.push('_');
+            last_was_separator = true;
+        }
+    }
+
+    normalized.trim_matches('_').to_string()
 }
 
 #[cfg(test)]
