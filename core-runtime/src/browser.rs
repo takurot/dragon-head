@@ -423,7 +423,7 @@ impl PageSession {
         timeout: Duration,
         options: SemanticWaitOptions,
     ) -> Result<()> {
-        let mut subscriber = SreEventSubscriber::new(self, options.load_profile)?;
+        let mut subscriber = SreEventSubscriber::new(self, options.load_profile);
         let started = Instant::now();
 
         loop {
@@ -467,7 +467,7 @@ impl PageSession {
         timeout: Duration,
         options: SemanticWaitOptions,
     ) -> Result<()> {
-        let mut subscriber = SreEventSubscriber::new(self, options.load_profile)?;
+        let mut subscriber = SreEventSubscriber::new(self, options.load_profile);
         let started = Instant::now();
 
         loop {
@@ -710,15 +710,14 @@ struct SreEventSubscriber<'a> {
 }
 
 impl<'a> SreEventSubscriber<'a> {
-    fn new(session: &'a PageSession, profile: LoadProfile) -> Result<Self> {
-        let last_event_version = session.ensure_sre_event_bridge()?;
-        Ok(Self {
+    fn new(session: &'a PageSession, profile: LoadProfile) -> Self {
+        Self {
             session,
             profile,
             last_state_hash: None,
-            last_event_version,
+            last_event_version: 0,
             initial_snapshot_emitted: false,
-        })
+        }
     }
 
     fn wait_next_state_event(&mut self, max_wait: Duration) -> Result<Option<SemanticState>> {
