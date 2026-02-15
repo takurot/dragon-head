@@ -1,10 +1,8 @@
 use anyhow::{Context, Result};
 use headless_chrome::{Browser, LaunchOptions};
 use std::{
-    cmp::min,
     collections::HashMap,
     sync::{Arc, Mutex},
-    thread,
     time::{Duration, Instant},
 };
 
@@ -150,6 +148,124 @@ impl PageSession {
         self.inner
             .evaluate(script, false)
             .context("Failed to evaluate script")
+    }
+
+    fn evaluate_script_value(
+        &self,
+        script: &str,
+        await_promise: bool,
+    ) -> Result<serde_json::Value> {
+        use headless_chrome::protocol::cdp::Runtime::Evaluate;
+
+        let result = self
+            .inner
+            .call_method(Evaluate {
+                expression: script.to_string(),
+                return_by_value: Some(true),
+                generate_preview: Some(false),
+                silent: Some(true),
+                await_promise: Some(await_promise),
+                include_command_line_api: Some(false),
+                user_gesture: Some(false),
+                object_group: None,
+                context_id: None,
+                throw_on_side_effect: None,
+                timeout: None,
+                disable_breaks: None,
+                repl_mode: None,
+                allow_unsafe_eval_blocked_by_csp: None,
+                unique_context_id: None,
+                serialization_options: None,
+            })
+            .context("Failed to evaluate script value")?;
+
+        result
+            .result
+            .value
+            .context("Script evaluation did not return a value")
+    }
+
+    fn ensure_sre_event_bridge(&self) -> Result<u64> {
+        let script = r#"
+(() => {
+    const existing = window.__nrSreEventBridge;
+    if (existing) {
+        return existing.version;
+    }
+
+    const state = { version: 0, waiters: [] };
+    const notify = () => {
+        state.version += 1;
+        const waiters = state.waiters.splice(0, state.waiters.length);
+        for (const waiter of waiters) {
+            try {
+                waiter(state.version);
+            } catch (_ignored) {}
+        }
+    };
+
+    const target = document.documentElement || document;
+    const observer = new MutationObserver(() => notify());
+    observer.observe(target, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        characterData: true,
+    });
+
+    state.observer = observer;
+    window.__nrSreEventBridge = state;
+    return state.version;
+})()
+"#;
+
+        let value = self
+            .evaluate_script_value(script, false)
+            .context("Failed to initialize SRE event bridge")?;
+        value_to_u64(&value).context("Invalid SRE event bridge version")
+    }
+
+    fn wait_for_sre_event(&self, last_seen_version: u64, timeout: Duration) -> Result<u64> {
+        let timeout_ms = duration_to_millis(timeout);
+        let script = format!(
+            r#"
+(() => {{
+    const state = window.__nrSreEventBridge;
+    if (!state) {{
+        return Promise.resolve({last_seen_version});
+    }}
+
+    if (state.version > {last_seen_version}) {{
+        return Promise.resolve(state.version);
+    }}
+
+    return new Promise((resolve) => {{
+        let settled = false;
+        const complete = (version) => {{
+            if (settled) {{
+                return;
+            }}
+            settled = true;
+            clearTimeout(timer_id);
+            const index = state.waiters.indexOf(waiter);
+            if (index >= 0) {{
+                state.waiters.splice(index, 1);
+            }}
+            resolve(version);
+        }};
+
+        const waiter = (version) => complete(version);
+        const timer_id = setTimeout(() => complete(state.version), {timeout_ms});
+        state.waiters.push(waiter);
+    }});
+}})()
+"#
+        );
+
+        let value = self
+            .evaluate_script_value(&script, true)
+            .context("Failed while waiting for SRE event")?;
+        value_to_u64(&value).context("Invalid SRE event version")
     }
 
     /// Explicitly request a visual capture with SoM marks.
@@ -307,12 +423,23 @@ impl PageSession {
         timeout: Duration,
         options: SemanticWaitOptions,
     ) -> Result<()> {
-        let mut subscriber =
-            SreEventSubscriber::new(self, options.load_profile, options.poll_interval);
+        let mut subscriber = SreEventSubscriber::new(self, options.load_profile)?;
         let started = Instant::now();
 
         loop {
-            match subscriber.poll_next_state_event() {
+            let remaining = remaining_timeout(started, timeout);
+            if remaining.is_zero() {
+                return Err(WaitError::Timeout {
+                    operation: format!(
+                        "semantic target {:?} to become {:?}",
+                        target, desired_state
+                    ),
+                    timeout_ms: duration_to_millis(timeout),
+                }
+                .into());
+            }
+
+            match subscriber.wait_next_state_event(remaining) {
                 Ok(Some(state)) => {
                     if target_matches_state(&state, &target, desired_state) {
                         return Ok(());
@@ -325,19 +452,6 @@ impl PageSession {
                     }
                 }
             }
-
-            if started.elapsed() >= timeout {
-                return Err(WaitError::Timeout {
-                    operation: format!(
-                        "semantic target {:?} to become {:?}",
-                        target, desired_state
-                    ),
-                    timeout_ms: duration_to_millis(timeout),
-                }
-                .into());
-            }
-
-            sleep_until_next_poll(started, timeout, subscriber.poll_interval());
         }
     }
 
@@ -353,12 +467,20 @@ impl PageSession {
         timeout: Duration,
         options: SemanticWaitOptions,
     ) -> Result<()> {
-        let mut subscriber =
-            SreEventSubscriber::new(self, options.load_profile, options.poll_interval);
+        let mut subscriber = SreEventSubscriber::new(self, options.load_profile)?;
         let started = Instant::now();
 
         loop {
-            match subscriber.poll_next_state_event() {
+            let remaining = remaining_timeout(started, timeout);
+            if remaining.is_zero() {
+                return Err(WaitError::Timeout {
+                    operation: format!("intent '{}'", intent),
+                    timeout_ms: duration_to_millis(timeout),
+                }
+                .into());
+            }
+
+            match subscriber.wait_next_state_event(remaining) {
                 Ok(Some(state)) => {
                     if state_contains_intent(state.root(), intent) {
                         return Ok(());
@@ -371,16 +493,6 @@ impl PageSession {
                     }
                 }
             }
-
-            if started.elapsed() >= timeout {
-                return Err(WaitError::Timeout {
-                    operation: format!("intent '{}'", intent),
-                    timeout_ms: duration_to_millis(timeout),
-                }
-                .into());
-            }
-
-            sleep_until_next_poll(started, timeout, subscriber.poll_interval());
         }
     }
 
@@ -592,25 +704,47 @@ impl PageSession {
 struct SreEventSubscriber<'a> {
     session: &'a PageSession,
     profile: LoadProfile,
-    poll_interval: Duration,
     last_state_hash: Option<String>,
+    last_event_version: u64,
+    initial_snapshot_emitted: bool,
 }
 
 impl<'a> SreEventSubscriber<'a> {
-    fn new(session: &'a PageSession, profile: LoadProfile, poll_interval: Duration) -> Self {
-        Self {
+    fn new(session: &'a PageSession, profile: LoadProfile) -> Result<Self> {
+        let last_event_version = session.ensure_sre_event_bridge()?;
+        Ok(Self {
             session,
             profile,
-            poll_interval: if poll_interval.is_zero() {
-                DEFAULT_WAIT_POLL_INTERVAL
-            } else {
-                poll_interval
-            },
             last_state_hash: None,
-        }
+            last_event_version,
+            initial_snapshot_emitted: false,
+        })
     }
 
-    fn poll_next_state_event(&mut self) -> Result<Option<SemanticState>> {
+    fn wait_next_state_event(&mut self, max_wait: Duration) -> Result<Option<SemanticState>> {
+        if !self.initial_snapshot_emitted {
+            self.initial_snapshot_emitted = true;
+            return self.capture_next_state_if_changed();
+        }
+
+        let bridge_version = self.session.ensure_sre_event_bridge()?;
+        if bridge_version != self.last_event_version {
+            self.last_event_version = bridge_version;
+            return self.capture_next_state_if_changed();
+        }
+
+        let next_version = self
+            .session
+            .wait_for_sre_event(self.last_event_version, max_wait)?;
+        if next_version == self.last_event_version {
+            return Ok(None);
+        }
+
+        self.last_event_version = next_version;
+        self.capture_next_state_if_changed()
+    }
+
+    fn capture_next_state_if_changed(&mut self) -> Result<Option<SemanticState>> {
         let state = self.session.capture_state(self.profile)?;
         let current_hash = state.state_hash().to_owned();
 
@@ -620,10 +754,6 @@ impl<'a> SreEventSubscriber<'a> {
 
         self.last_state_hash = Some(current_hash);
         Ok(Some(state))
-    }
-
-    fn poll_interval(&self) -> Duration {
-        self.poll_interval
     }
 }
 
@@ -790,14 +920,20 @@ fn is_transient_capture_error(err: &anyhow::Error) -> bool {
     error_chain_contains_any(err, &transient_markers)
 }
 
-fn sleep_until_next_poll(started: Instant, timeout: Duration, poll_interval: Duration) {
-    let elapsed = started.elapsed();
-    if elapsed >= timeout {
-        return;
+fn remaining_timeout(started: Instant, timeout: Duration) -> Duration {
+    timeout.saturating_sub(started.elapsed())
+}
+
+fn value_to_u64(value: &serde_json::Value) -> Result<u64> {
+    if let Some(v) = value.as_u64() {
+        return Ok(v);
     }
 
-    let remaining = timeout.saturating_sub(elapsed);
-    thread::sleep(min(poll_interval, remaining));
+    if let Some(v) = value.as_i64() {
+        return u64::try_from(v).context("Expected non-negative integer value");
+    }
+
+    anyhow::bail!("Expected integer value, received: {value}");
 }
 
 fn duration_to_millis(duration: Duration) -> u64 {

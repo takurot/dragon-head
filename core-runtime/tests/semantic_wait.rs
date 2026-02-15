@@ -269,6 +269,55 @@ fn test_wait_for_semantic_id_fallback_with_stable_key() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_wait_for_semantic_is_not_blocked_by_large_poll_interval() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <button id="btn_login" disabled>Login</button>
+                <script>
+                    setTimeout(() => {
+                        document.getElementById("btn_login").removeAttribute("disabled");
+                    }, 1500);
+                </script>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let root = page.get_document_node()?;
+    let sem = normalize_dom(LoadProfile::Interactive, &root)?;
+    let state = SemanticState::new(sem, LoadProfile::Interactive);
+    let stable_key = find_button_key(state.root()).expect("button stable_key should exist");
+
+    let started = Instant::now();
+    page.wait_for_semantic_with_options(
+        SemanticTarget::StableKey(stable_key),
+        SemanticWaitState::Enabled,
+        Duration::from_secs(4),
+        SemanticWaitOptions {
+            load_profile: LoadProfile::Interactive,
+            poll_interval: Duration::from_secs(5),
+        },
+    )?;
+
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "wait_for_semantic should not be blocked by poll_interval: elapsed={elapsed:?}"
+    );
+
+    Ok(())
+}
+
 fn find_button_key(node: &core_runtime::sre::SemanticNode) -> Option<String> {
     if node.role == "button" {
         return node.stable_key.clone();
