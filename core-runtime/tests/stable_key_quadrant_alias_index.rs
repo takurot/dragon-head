@@ -65,6 +65,65 @@ fn test_stable_key_tracks_quadrant_not_dom_order() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_stable_key_tracks_quadrant_from_style_pixels() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html_v1 = r#"
+        <html>
+            <body>
+                <button style="position:absolute; left:40px; top:40px;">Checkout</button>
+                <button style="position:absolute; left:740px; top:40px;">Checkout</button>
+            </body>
+        </html>
+    "#;
+    let url_v1 = format!("data:text/html,{}", urlencoding::encode(html_v1));
+    page.navigate(&url_v1)?;
+
+    let state_v1 = capture_state(&page)?;
+    let left_key_v1 = find_button_key_by_style_fragment(&state_v1, "left:40px")
+        .expect("left button should have a stable key");
+    let right_key_v1 = find_button_key_by_style_fragment(&state_v1, "left:740px")
+        .expect("right button should have a stable key");
+
+    let html_v2 = r#"
+        <html>
+            <body>
+                <button style="position:absolute; left:740px; top:40px;">Checkout</button>
+                <button style="position:absolute; left:40px; top:40px;">Checkout</button>
+            </body>
+        </html>
+    "#;
+    let url_v2 = format!("data:text/html,{}", urlencoding::encode(html_v2));
+    page.navigate(&url_v2)?;
+
+    let state_v2 = capture_state(&page)?;
+    let left_key_v2 = find_button_key_by_style_fragment(&state_v2, "left:40px")
+        .expect("left button should have a stable key after re-render");
+    let right_key_v2 = find_button_key_by_style_fragment(&state_v2, "left:740px")
+        .expect("right button should have a stable key after re-render");
+
+    assert_ne!(
+        left_key_v1, right_key_v1,
+        "Keys for left/right pixel quadrants must differ"
+    );
+    assert_eq!(
+        left_key_v1, left_key_v2,
+        "left button key must remain stable even when DOM order changes"
+    );
+    assert_eq!(
+        right_key_v1, right_key_v2,
+        "right button key must remain stable even when DOM order changes"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_alias_output_and_stable_key_index_consistency() -> anyhow::Result<()> {
     if should_skip() {
         return Ok(());
@@ -124,6 +183,60 @@ fn test_alias_output_and_stable_key_index_consistency() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_stable_key_index_is_cleared_on_navigation() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html_a = r#"
+        <html>
+            <body>
+                <button aria-label="Purchase now">Buy</button>
+            </body>
+        </html>
+    "#;
+    let url_a = format!("data:text/html,{}", urlencoding::encode(html_a));
+    page.navigate(&url_a)?;
+
+    let state_a = capture_state(&page)?;
+    let stable_key = state_a
+        .generate_fast_state()
+        .interactive_elements
+        .into_iter()
+        .find(|node| node.role == "button")
+        .and_then(|node| node.stable_key)
+        .expect("button stable_key must exist");
+
+    page.refresh_stable_key_index(LoadProfile::Interactive)?;
+    assert!(
+        page.lookup_backend_node_id_by_stable_key(&stable_key)
+            .is_some(),
+        "stable_key should be resolvable before navigation"
+    );
+
+    let html_b = r#"
+        <html>
+            <body>
+                <p>different page</p>
+            </body>
+        </html>
+    "#;
+    let url_b = format!("data:text/html,{}", urlencoding::encode(html_b));
+    page.navigate(&url_b)?;
+
+    assert!(
+        page.lookup_backend_node_id_by_stable_key(&stable_key)
+            .is_none(),
+        "stable_key index must not keep stale entries after navigation"
+    );
+
+    Ok(())
+}
+
 fn capture_state(page: &core_runtime::PageSession) -> anyhow::Result<SemanticState> {
     let node = page.get_document_node()?;
     let root = normalize_dom(LoadProfile::Minimal, &node)?;
@@ -147,6 +260,32 @@ fn find_button_key_by_quadrant_recursive(node: &SemanticNode, quadrant: &str) ->
 
     for child in &node.children {
         if let Some(found) = find_button_key_by_quadrant_recursive(child, quadrant) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_button_key_by_style_fragment(state: &SemanticState, needle: &str) -> Option<String> {
+    find_button_key_by_style_fragment_recursive(state.root(), needle)
+}
+
+fn find_button_key_by_style_fragment_recursive(
+    node: &SemanticNode,
+    needle: &str,
+) -> Option<String> {
+    if node.role == "button"
+        && node
+            .attributes
+            .as_ref()
+            .and_then(|attrs| attrs.get("style"))
+            .is_some_and(|value| value.contains(needle))
+    {
+        return node.stable_key.clone();
+    }
+
+    for child in &node.children {
+        if let Some(found) = find_button_key_by_style_fragment_recursive(child, needle) {
             return Some(found);
         }
     }

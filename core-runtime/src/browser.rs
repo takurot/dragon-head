@@ -113,6 +113,7 @@ impl PageSession {
         self.inner
             .wait_until_navigated()
             .context("Failed to wait for navigation")?;
+        self.clear_stable_key_index();
         Ok(())
     }
 
@@ -394,6 +395,12 @@ impl PageSession {
         if let Ok(mut index) = self.stable_key_index.lock() {
             index.clear();
             collect_stable_key_entries(root, &mut index);
+        }
+    }
+
+    fn clear_stable_key_index(&self) {
+        if let Ok(mut index) = self.stable_key_index.lock() {
+            index.clear();
         }
     }
 

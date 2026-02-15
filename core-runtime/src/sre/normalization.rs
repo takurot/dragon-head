@@ -3,7 +3,11 @@ use super::stable_key::StableKeyGenerator;
 use super::state::SemanticNode;
 use anyhow::Result;
 use headless_chrome::protocol::cdp::DOM::Node;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+
+const DEFAULT_VIEWPORT_WIDTH_PX: f64 = 800.0;
+const DEFAULT_VIEWPORT_HEIGHT_PX: f64 = 600.0;
 
 pub fn normalize_dom(profile: LoadProfile, node: &Node) -> Result<SemanticNode> {
     let mut key_generator = StableKeyGenerator::new();
@@ -164,7 +168,7 @@ fn traverse_node(
         .or_else(|| attributes.get("id").map(|s| s.as_str()))
         .or(text_hint.as_deref());
 
-    let quadrant = resolve_quadrant(&attributes);
+    let quadrant = resolve_quadrant(&attributes, &node_name, label_hint, parent_path);
     let alias = build_alias(&node_name, label_hint, &attributes);
 
     let (stable_key, ambiguous) =
@@ -207,48 +211,165 @@ fn extract_direct_text_label(node: &Node) -> Option<String> {
     }
 }
 
-fn resolve_quadrant(attributes: &BTreeMap<String, String>) -> String {
+fn resolve_quadrant(
+    attributes: &BTreeMap<String, String>,
+    role: &str,
+    label_hint: Option<&str>,
+    dom_signature: &str,
+) -> String {
     if let Some(raw) = attributes.get("data-quadrant") {
-        let normalized = slugify(raw);
-        if !normalized.is_empty() {
+        if let Some(normalized) = normalize_quadrant_token(raw) {
             return normalized;
         }
     }
 
+    if let Some(quadrant) = resolve_quadrant_from_coordinates(attributes) {
+        return quadrant;
+    }
+
+    resolve_quadrant_from_signature(role, label_hint, dom_signature)
+}
+
+fn normalize_quadrant_token(raw: &str) -> Option<String> {
+    let normalized = slugify(raw).replace('-', "_");
+    match normalized.as_str() {
+        "top_left" | "tl" => Some("top_left".to_string()),
+        "top_right" | "tr" => Some("top_right".to_string()),
+        "bottom_left" | "bl" => Some("bottom_left".to_string()),
+        "bottom_right" | "br" => Some("bottom_right".to_string()),
+        _ => None,
+    }
+}
+
+fn resolve_quadrant_from_coordinates(attributes: &BTreeMap<String, String>) -> Option<String> {
+    let x_ratio = extract_x_ratio(attributes)?;
+    let y_ratio = extract_y_ratio(attributes)?;
+    Some(quadrant_from_ratios(x_ratio, y_ratio))
+}
+
+fn extract_x_ratio(attributes: &BTreeMap<String, String>) -> Option<f64> {
     if let Some(style) = attributes.get("style") {
-        if let (Some(left), Some(top)) = (
-            extract_percentage_from_style(style, "left"),
-            extract_percentage_from_style(style, "top"),
-        ) {
-            if top < 50.0 {
-                return if left < 50.0 {
-                    "top_left".to_string()
-                } else {
-                    "top_right".to_string()
-                };
-            }
-            return if left < 50.0 {
-                "bottom_left".to_string()
-            } else {
-                "bottom_right".to_string()
-            };
+        if let Some(left) =
+            extract_css_numeric(style, "left").and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_WIDTH_PX))
+        {
+            return Some(left);
+        }
+        if let Some(right) =
+            extract_css_numeric(style, "right").and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_WIDTH_PX))
+        {
+            return Some((1.0 - right).clamp(0.0, 1.0));
         }
     }
 
-    "unknown".to_string()
+    extract_coordinate_attribute(attributes, &["data-x", "x"], DEFAULT_VIEWPORT_WIDTH_PX)
 }
 
-fn extract_percentage_from_style(style: &str, property: &str) -> Option<f64> {
+fn extract_y_ratio(attributes: &BTreeMap<String, String>) -> Option<f64> {
+    if let Some(style) = attributes.get("style") {
+        if let Some(top) =
+            extract_css_numeric(style, "top").and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_HEIGHT_PX))
+        {
+            return Some(top);
+        }
+        if let Some(bottom) = extract_css_numeric(style, "bottom")
+            .and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_HEIGHT_PX))
+        {
+            return Some((1.0 - bottom).clamp(0.0, 1.0));
+        }
+    }
+
+    extract_coordinate_attribute(attributes, &["data-y", "y"], DEFAULT_VIEWPORT_HEIGHT_PX)
+}
+
+fn extract_coordinate_attribute(
+    attributes: &BTreeMap<String, String>,
+    names: &[&str],
+    axis_px: f64,
+) -> Option<f64> {
+    names.iter().find_map(|name| {
+        let value = attributes.get(*name)?;
+        parse_css_numeric(value).and_then(|coord| coord.to_ratio(axis_px))
+    })
+}
+
+fn extract_css_numeric(style: &str, property: &str) -> Option<CssNumeric> {
     style
         .split(';')
         .filter_map(|entry| entry.split_once(':'))
         .find_map(|(key, value)| {
             if key.trim().eq_ignore_ascii_case(property) {
-                value.trim().strip_suffix('%')?.trim().parse::<f64>().ok()
+                parse_css_numeric(value.trim())
             } else {
                 None
             }
         })
+}
+
+fn parse_css_numeric(raw: &str) -> Option<CssNumeric> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Some(percent) = value.strip_suffix('%') {
+        return percent.trim().parse::<f64>().ok().map(CssNumeric::Percent);
+    }
+
+    if let Some(px) = value.strip_suffix("px") {
+        return px.trim().parse::<f64>().ok().map(CssNumeric::Px);
+    }
+
+    value.parse::<f64>().ok().map(CssNumeric::Px)
+}
+
+fn resolve_quadrant_from_signature(
+    role: &str,
+    label_hint: Option<&str>,
+    dom_signature: &str,
+) -> String {
+    let normalized_label = label_hint.unwrap_or("").trim().to_lowercase();
+    let signature = format!("{role}|{normalized_label}|{dom_signature}");
+    let digest = Sha256::digest(signature.as_bytes());
+    match digest[0] % 4 {
+        0 => "top_left".to_string(),
+        1 => "top_right".to_string(),
+        2 => "bottom_left".to_string(),
+        _ => "bottom_right".to_string(),
+    }
+}
+
+fn quadrant_from_ratios(x_ratio: f64, y_ratio: f64) -> String {
+    if y_ratio < 0.5 {
+        if x_ratio < 0.5 {
+            "top_left".to_string()
+        } else {
+            "top_right".to_string()
+        }
+    } else if x_ratio < 0.5 {
+        "bottom_left".to_string()
+    } else {
+        "bottom_right".to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CssNumeric {
+    Px(f64),
+    Percent(f64),
+}
+
+impl CssNumeric {
+    fn to_ratio(self, axis_px: f64) -> Option<f64> {
+        if axis_px <= 0.0 {
+            return None;
+        }
+
+        let ratio = match self {
+            CssNumeric::Px(value) => value / axis_px,
+            CssNumeric::Percent(value) => value / 100.0,
+        };
+        Some(ratio.clamp(0.0, 1.0))
+    }
 }
 
 fn build_alias(
