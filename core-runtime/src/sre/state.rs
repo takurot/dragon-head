@@ -1,4 +1,5 @@
 use super::profile::LoadProfile;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -19,7 +20,7 @@ pub struct SemanticNode {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<SemanticNode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attributes: Option<BTreeMap<String, String>>,
@@ -65,6 +66,58 @@ pub struct LayeredSemanticState {
     pub fast: FastSemanticState,
     pub full: FullSemanticState,
     pub generation_trace: Vec<StateGenerationPhase>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DeltaPolicy {
+    /// Maximum delta size relative to full-state payload.
+    /// If patch_bytes / full_bytes exceeds this ratio, send full state.
+    pub max_patch_bytes_ratio: f32,
+    /// Maximum number of RFC 6902 operations allowed in one delta.
+    pub max_operations: usize,
+}
+
+impl Default for DeltaPolicy {
+    fn default() -> Self {
+        Self {
+            max_patch_bytes_ratio: 0.60,
+            max_operations: 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticDelta {
+    pub previous_state_hash: String,
+    pub next_state_hash: String,
+    pub patch: json_patch::Patch,
+}
+
+impl SemanticDelta {
+    pub fn operation_count(&self) -> usize {
+        self.patch.0.len()
+    }
+
+    pub fn patch_size_bytes(&self) -> usize {
+        serde_json::to_vec(&self.patch)
+            .map(|bytes| bytes.len())
+            .unwrap_or_default()
+    }
+
+    pub fn apply_to_root(&self, base_root: &SemanticNode) -> Result<SemanticNode> {
+        let mut json_root =
+            serde_json::to_value(base_root).context("Failed to encode base root")?;
+        json_patch::patch(&mut json_root, &self.patch).context("Failed to apply RFC 6902 patch")?;
+        serde_json::from_value(json_root).context("Failed to decode patched semantic root")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StateUpdate {
+    Noop { state_hash: String },
+    Full { state: SemanticState },
+    Delta { delta: SemanticDelta },
 }
 
 impl SemanticState {
@@ -132,6 +185,58 @@ impl SemanticState {
             fast,
             full,
             generation_trace,
+        }
+    }
+
+    /// Build an RFC 6902 semantic delta from a previous state.
+    /// Returns `Ok(None)` when there is no content change.
+    pub fn build_delta(&self, previous: &SemanticState) -> Result<Option<SemanticDelta>> {
+        if self.state_hash() == previous.state_hash() {
+            return Ok(None);
+        }
+
+        let previous_root_json =
+            serde_json::to_value(previous.root()).context("Failed to encode previous root")?;
+        let next_root_json =
+            serde_json::to_value(self.root()).context("Failed to encode next root")?;
+        let patch = json_patch::diff(&previous_root_json, &next_root_json);
+
+        if patch.0.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(SemanticDelta {
+            previous_state_hash: previous.state_hash().to_string(),
+            next_state_hash: self.state_hash().to_string(),
+            patch,
+        }))
+    }
+
+    /// Select delivery mode (no-op, full state, or semantic delta) based on policy.
+    pub fn select_update(
+        &self,
+        previous: Option<&SemanticState>,
+        policy: DeltaPolicy,
+    ) -> Result<StateUpdate> {
+        let Some(previous_state) = previous else {
+            return Ok(StateUpdate::Full {
+                state: self.clone(),
+            });
+        };
+
+        let Some(delta) = self.build_delta(previous_state)? else {
+            return Ok(StateUpdate::Noop {
+                state_hash: self.state_hash().to_string(),
+            });
+        };
+
+        let full_payload_bytes = full_update_payload_size_bytes(self)?;
+        if should_send_delta(full_payload_bytes, &delta, policy) {
+            Ok(StateUpdate::Delta { delta })
+        } else {
+            Ok(StateUpdate::Full {
+                state: self.clone(),
+            })
         }
     }
 
@@ -256,4 +361,29 @@ fn is_region_node(node: &SemanticNode) -> bool {
                 "region" | "main" | "navigation" | "complementary" | "banner" | "contentinfo"
             )
         })
+}
+
+fn full_update_payload_size_bytes(state: &SemanticState) -> Result<usize> {
+    serde_json::to_vec(&StateUpdate::Full {
+        state: state.clone(),
+    })
+    .context("Failed to encode full update payload for policy check")
+    .map(|payload| payload.len())
+}
+
+fn should_send_delta(
+    full_payload_bytes: usize,
+    delta: &SemanticDelta,
+    policy: DeltaPolicy,
+) -> bool {
+    if delta.operation_count() == 0 || delta.operation_count() > policy.max_operations {
+        return false;
+    }
+
+    if full_payload_bytes == 0 {
+        return false;
+    }
+
+    let patch_ratio = delta.patch_size_bytes() as f32 / full_payload_bytes as f32;
+    patch_ratio <= policy.max_patch_bytes_ratio
 }
