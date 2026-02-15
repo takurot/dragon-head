@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 pub fn normalize_dom(profile: LoadProfile, node: &Node) -> Result<SemanticNode> {
     let mut key_generator = StableKeyGenerator::new();
     // Start traversal with root path
-    let internal_node = traverse_node(profile, node, &mut key_generator, "root", 0)?;
+    let internal_node = traverse_node(profile, node, &mut key_generator, "root")?;
     Ok(internal_node.unwrap_or_default())
 }
 
@@ -53,7 +53,6 @@ fn traverse_node(
     node: &Node,
     key_gen: &mut StableKeyGenerator,
     parent_path: &str,
-    _sibling_index: usize,
 ) -> Result<Option<SemanticNode>> {
     // Basic filtering based on node type
     // NodeType: 1=Element, 3=Text, 9=Document
@@ -67,7 +66,8 @@ fn traverse_node(
             return Ok(None);
         }
 
-        let (stable_key, ambiguous) = key_gen.generate_key("text", Some(&text), parent_path);
+        let (stable_key, ambiguous) =
+            key_gen.generate_key("text", Some(&text), parent_path, "unknown");
 
         return Ok(Some(SemanticNode {
             role: "text".to_string(),
@@ -144,10 +144,8 @@ fn traverse_node(
         // Using absolute index for simplicity in traversal, but for stable keys relying on structure,
         // we might want "nth-of-type".
         // For now, let's use the loop index.
-        for (idx, child) in child_nodes.iter().enumerate() {
-            if let Some(normalized_child) =
-                traverse_node(profile, child, key_gen, &current_path, idx)?
-            {
+        for child in child_nodes {
+            if let Some(normalized_child) = traverse_node(profile, child, key_gen, &current_path)? {
                 children.push(normalized_child);
             }
         }
@@ -158,13 +156,19 @@ fn traverse_node(
     // For now, we use a simple approach: if it has an id, use it as label hint?
     // Or just empty label for container elements.
     // Ideally we should extract text content if it's a leaf interactive element.
+    let text_hint = extract_direct_text_label(node);
     let label_hint = attributes
         .get("aria-label")
         .map(|s| s.as_str())
         .or_else(|| attributes.get("title").map(|s| s.as_str()))
-        .or_else(|| attributes.get("id").map(|s| s.as_str()));
+        .or_else(|| attributes.get("id").map(|s| s.as_str()))
+        .or(text_hint.as_deref());
 
-    let (stable_key, ambiguous) = key_gen.generate_key(&node_name, label_hint, parent_path);
+    let quadrant = resolve_quadrant(&attributes);
+    let alias = build_alias(&node_name, label_hint, &attributes);
+
+    let (stable_key, ambiguous) =
+        key_gen.generate_key(&node_name, label_hint, parent_path, &quadrant);
 
     Ok(Some(SemanticNode {
         role: node_name,
@@ -177,9 +181,123 @@ fn traverse_node(
         },
         stable_key: Some(stable_key),
         ambiguous,
+        alias,
         backend_node_id: node.backend_node_id.into(),
-        ..Default::default()
     }))
+}
+
+fn extract_direct_text_label(node: &Node) -> Option<String> {
+    let children = node.children.as_ref()?;
+    let mut parts = Vec::new();
+
+    for child in children {
+        if child.node_type != 3 {
+            continue;
+        }
+        let text = child.node_value.trim();
+        if !text.is_empty() {
+            parts.push(text.to_string());
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
+fn resolve_quadrant(attributes: &BTreeMap<String, String>) -> String {
+    if let Some(raw) = attributes.get("data-quadrant") {
+        let normalized = slugify(raw);
+        if !normalized.is_empty() {
+            return normalized;
+        }
+    }
+
+    if let Some(style) = attributes.get("style") {
+        if let (Some(left), Some(top)) = (
+            extract_percentage_from_style(style, "left"),
+            extract_percentage_from_style(style, "top"),
+        ) {
+            if top < 50.0 {
+                return if left < 50.0 {
+                    "top_left".to_string()
+                } else {
+                    "top_right".to_string()
+                };
+            }
+            return if left < 50.0 {
+                "bottom_left".to_string()
+            } else {
+                "bottom_right".to_string()
+            };
+        }
+    }
+
+    "unknown".to_string()
+}
+
+fn extract_percentage_from_style(style: &str, property: &str) -> Option<f64> {
+    style
+        .split(';')
+        .filter_map(|entry| entry.split_once(':'))
+        .find_map(|(key, value)| {
+            if key.trim().eq_ignore_ascii_case(property) {
+                value.trim().strip_suffix('%')?.trim().parse::<f64>().ok()
+            } else {
+                None
+            }
+        })
+}
+
+fn build_alias(
+    role: &str,
+    label_hint: Option<&str>,
+    attributes: &BTreeMap<String, String>,
+) -> Option<String> {
+    if let Some(raw) = attributes.get("data-alias") {
+        let normalized = slugify(raw);
+        if !normalized.is_empty() {
+            return Some(normalized);
+        }
+    }
+
+    let label = label_hint
+        .or_else(|| attributes.get("name").map(|s| s.as_str()))
+        .or_else(|| attributes.get("type").map(|s| s.as_str()));
+
+    let role_part = slugify(role);
+    if role_part.is_empty() {
+        return None;
+    }
+
+    let label_part = label.map(slugify).unwrap_or_default();
+    if label_part.is_empty() {
+        Some(role_part)
+    } else {
+        Some(format!("{}_{}", role_part, label_part))
+    }
+}
+
+fn slugify(input: &str) -> String {
+    let mut normalized = String::with_capacity(input.len());
+    let mut last_was_separator = false;
+
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+            last_was_separator = false;
+            continue;
+        }
+
+        if !last_was_separator {
+            normalized.push('_');
+            last_was_separator = true;
+        }
+    }
+
+    normalized.trim_matches('_').to_string()
 }
 
 #[cfg(test)]

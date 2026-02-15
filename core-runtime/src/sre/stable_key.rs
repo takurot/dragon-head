@@ -27,17 +27,15 @@ impl StableKeyGenerator {
         &mut self,
         role: &str,
         label: Option<&str>,
-        // dom_signature related args:
-        parent_path: &str,
-        // We include parent_path (e.g. parent's role or simplified path) to differentiate
-        // identical elements in different containers.
+        dom_signature: &str,
+        quadrant: &str,
     ) -> (String, bool) {
         let label_part = label.unwrap_or("").trim().to_lowercase();
-
-        // Base content for hashing: role + label + parent_path
-        // This is a simplified version of "dom_signature".
-        // Using `|` as separator.
-        let content = format!("{}|{}|{}", role, label_part, parent_path);
+        let quadrant_part = quadrant.trim().to_lowercase();
+        let content = format!(
+            "{}|{}|{}|{}",
+            role, label_part, dom_signature, quadrant_part
+        );
 
         // Compute base hash (SHA-256)
         let mut hasher = Sha256::new();
