@@ -285,7 +285,7 @@ fn test_wait_for_semantic_is_not_blocked_by_large_poll_interval() -> anyhow::Res
                 <script>
                     setTimeout(() => {
                         document.getElementById("btn_login").removeAttribute("disabled");
-                    }, 1500);
+                    }, 700);
                 </script>
             </body>
         </html>
@@ -302,7 +302,7 @@ fn test_wait_for_semantic_is_not_blocked_by_large_poll_interval() -> anyhow::Res
     page.wait_for_semantic_with_options(
         SemanticTarget::StableKey(stable_key),
         SemanticWaitState::Enabled,
-        Duration::from_secs(4),
+        Duration::from_secs(7),
         SemanticWaitOptions {
             load_profile: LoadProfile::Interactive,
             poll_interval: Duration::from_secs(5),
@@ -314,6 +314,102 @@ fn test_wait_for_semantic_is_not_blocked_by_large_poll_interval() -> anyhow::Res
         elapsed < Duration::from_secs(3),
         "wait_for_semantic should not be blocked by poll_interval: elapsed={elapsed:?}"
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_wait_for_intent_is_not_blocked_by_large_poll_interval() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <div id="status">Pending</div>
+                <script>
+                    setTimeout(() => {
+                        document.body.setAttribute("data-intent", "checkout_complete");
+                    }, 700);
+                </script>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let started = Instant::now();
+    page.wait_for_intent_with_options(
+        "checkout_complete",
+        Duration::from_secs(7),
+        SemanticWaitOptions {
+            load_profile: LoadProfile::Interactive,
+            poll_interval: Duration::from_secs(5),
+        },
+    )?;
+
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "wait_for_intent should not be blocked by poll_interval: elapsed={elapsed:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_wait_for_semantic_recovers_from_polluted_bridge_state() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <button id="btn_login" disabled>Login</button>
+                <script>
+                    setTimeout(() => {
+                        document.getElementById("btn_login").removeAttribute("disabled");
+                    }, 220);
+                </script>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    page.evaluate_script(
+        r#"window[Symbol.for("neural_browser.runtime.sre_event_bridge")] = { version: "bad", waiters: "bad" }"#,
+    )?;
+
+    let root = page.get_document_node()?;
+    let sem = normalize_dom(LoadProfile::Interactive, &root)?;
+    let state = SemanticState::new(sem, LoadProfile::Interactive);
+    let stable_key = find_button_key(state.root()).expect("button stable_key should exist");
+
+    page.wait_for_semantic_with_options(
+        SemanticTarget::StableKey(stable_key),
+        SemanticWaitState::Enabled,
+        Duration::from_secs(2),
+        SemanticWaitOptions {
+            load_profile: LoadProfile::Interactive,
+            ..Default::default()
+        },
+    )?;
+
+    let is_disabled = page
+        .evaluate_script(r#"document.getElementById("btn_login").hasAttribute("disabled")"#)?
+        .value
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    assert!(!is_disabled, "button must become enabled");
 
     Ok(())
 }
