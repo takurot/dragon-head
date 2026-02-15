@@ -1,10 +1,11 @@
 use std::{
     fs,
+    io::Cursor,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
-use image::RgbaImage;
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 
 use core_runtime::BrowserClient;
 
@@ -103,7 +104,8 @@ fn diff_ratio_and_image(baseline_png: &[u8], actual_png: &[u8]) -> Result<(f64, 
             let db = base[2].abs_diff(curr[2]);
             let da = base[3].abs_diff(curr[3]);
 
-            total += f64::from(dr + dg + db + da) / (255.0 * 4.0);
+            let channel_sum = u16::from(dr) + u16::from(dg) + u16::from(db) + u16::from(da);
+            total += f64::from(channel_sum) / (255.0 * 4.0);
 
             diff.put_pixel(x, y, image::Rgba([dr, dg, db, 255]));
         }
@@ -135,4 +137,26 @@ fn baseline_path() -> PathBuf {
         .join("fixtures")
         .join("som")
         .join("som_visual_baseline.png")
+}
+
+#[test]
+fn test_diff_ratio_handles_max_channel_diff_without_overflow() -> Result<()> {
+    let baseline = encode_solid_rgba_png([0, 0, 0, 255])?;
+    let actual = encode_solid_rgba_png([255, 255, 255, 255])?;
+
+    let (ratio, diff) = diff_ratio_and_image(&baseline, &actual)?;
+    assert!((ratio - 0.75).abs() < f64::EPSILON, "ratio should be 0.75");
+    assert_eq!(diff.get_pixel(0, 0).0, [255, 255, 255, 255]);
+
+    Ok(())
+}
+
+fn encode_solid_rgba_png(pixel: [u8; 4]) -> Result<Vec<u8>> {
+    let image = RgbaImage::from_pixel(1, 1, Rgba(pixel));
+    let dynamic = DynamicImage::ImageRgba8(image);
+
+    let mut buffer = Vec::new();
+    let mut cursor = Cursor::new(&mut buffer);
+    dynamic.write_to(&mut cursor, ImageFormat::Png)?;
+    Ok(buffer)
 }

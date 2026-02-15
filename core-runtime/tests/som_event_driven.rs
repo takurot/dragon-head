@@ -113,6 +113,46 @@ fn test_som_generated_by_act_ambiguous_trigger() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_som_generated_by_act_ambiguous_without_stable_key() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html><body><button id='submit'>Submit</button></body></html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let fake_id = 999999;
+    let result = page.act(Some(fake_id), None, "click", None);
+    assert!(result.is_err(), "act should fail with invalid id");
+
+    let err = result.unwrap_err();
+    let action_err = err
+        .downcast_ref::<core_runtime::ActionError>()
+        .expect("error should be ActionError::VerifyRequired");
+    assert!(matches!(
+        action_err,
+        core_runtime::ActionError::VerifyRequired
+    ));
+
+    assert_eq!(page.som_generation_count(), 1);
+    let capture = page
+        .last_visual_capture()
+        .expect("capture must exist after ambiguous act");
+    assert_eq!(capture.trigger, SomTrigger::ActAmbiguous);
+    assert_marks_integrity(&capture.marks);
+
+    maybe_dump_png("act_ambiguous_without_stable_key", &capture.image_png)?;
+
+    Ok(())
+}
+
+#[test]
 fn test_som_generated_by_verify_failure_trigger() -> anyhow::Result<()> {
     if should_skip() {
         return Ok(());

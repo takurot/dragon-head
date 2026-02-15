@@ -212,7 +212,8 @@ impl PageSession {
                     }
 
                     if stable_key.is_none() {
-                        return Err(e);
+                        self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
+                        return Err(ActionError::VerifyRequired.into());
                     }
                     // Fallback proceed...
                 }
