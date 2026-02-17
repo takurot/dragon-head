@@ -15,7 +15,8 @@ pub fn normalize_dom(profile: LoadProfile, node: &Node) -> Result<SemanticNode> 
 
 pub struct SubtreeRefinementConfig<'a> {
     pub dirty_paths: &'a HashSet<String>,
-    pub cached_subtrees: &'a HashMap<String, SemanticNode>,
+    pub cached_paths: &'a HashMap<String, Vec<usize>>,
+    pub cached_root: &'a SemanticNode,
 }
 
 pub fn normalize_dom_with_refinement(
@@ -225,12 +226,24 @@ fn resolve_cached_subtree<'a>(
     if path_overlaps_dirty_set(current_path, refinement.dirty_paths) {
         return None;
     }
-    let cached = refinement.cached_subtrees.get(current_path)?;
+    let index_path = refinement.cached_paths.get(current_path)?;
+    let cached = node_by_child_index_path(refinement.cached_root, index_path)?;
     if cached.role == role {
         Some(cached)
     } else {
         None
     }
+}
+
+fn node_by_child_index_path<'a>(
+    root: &'a SemanticNode,
+    child_index_path: &[usize],
+) -> Option<&'a SemanticNode> {
+    let mut current = root;
+    for child_index in child_index_path {
+        current = current.children.get(*child_index)?;
+    }
+    Some(current)
 }
 
 fn path_overlaps_dirty_set(path: &str, dirty_paths: &HashSet<String>) -> bool {
@@ -482,6 +495,9 @@ fn slugify(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use headless_chrome::protocol::cdp::DOM::Node;
+    use serde_json::json;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn test_is_dynamic_class() {
@@ -550,5 +566,151 @@ mod tests {
             "root/#document/html/body/division",
             "root/#document/html/body/div"
         ));
+    }
+
+    #[test]
+    fn test_refinement_reuses_clean_subtree_and_reparses_dirty_subtree() -> Result<()> {
+        let previous_dom = build_document_fixture("left_v1", "right_v1", 100)?;
+        let previous = normalize_dom(LoadProfile::Minimal, &previous_dom)?;
+        let cached_paths = semantic_path_index_fixture();
+        let dirty_paths = HashSet::from(["root/#document/html/body/section".to_string()]);
+
+        // DIV changed too, but only SECTION is marked dirty.
+        // The clean DIV path should be reused from cached subtree.
+        let next_dom = build_document_fixture("left_v2_should_be_ignored", "right_v2", 500)?;
+        let refined = normalize_dom_with_refinement(
+            LoadProfile::Minimal,
+            &next_dom,
+            SubtreeRefinementConfig {
+                dirty_paths: &dirty_paths,
+                cached_paths: &cached_paths,
+                cached_root: &previous,
+            },
+        )?;
+
+        let body = &refined.children[0].children[0];
+        let div = &body.children[0];
+        let section = &body.children[1];
+
+        assert_eq!(div.label.as_deref(), Some("left_v1"));
+        assert_eq!(div.backend_node_id, 104);
+        assert_eq!(section.label.as_deref(), Some("right_v2"));
+        assert_eq!(section.backend_node_id, 506);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_refinement_reparses_descendants_when_ancestor_is_dirty() -> Result<()> {
+        let previous_dom = build_document_fixture("left_v1", "right_v1", 100)?;
+        let previous = normalize_dom(LoadProfile::Minimal, &previous_dom)?;
+        let cached_paths = semantic_path_index_fixture();
+        let dirty_paths = HashSet::from(["root/#document/html/body".to_string()]);
+        let next_dom = build_document_fixture("left_v2", "right_v2", 500)?;
+
+        let refined = normalize_dom_with_refinement(
+            LoadProfile::Minimal,
+            &next_dom,
+            SubtreeRefinementConfig {
+                dirty_paths: &dirty_paths,
+                cached_paths: &cached_paths,
+                cached_root: &previous,
+            },
+        )?;
+
+        let body = &refined.children[0].children[0];
+        let div = &body.children[0];
+        let section = &body.children[1];
+
+        assert_eq!(div.label.as_deref(), Some("left_v2"));
+        assert_eq!(div.backend_node_id, 504);
+        assert_eq!(section.label.as_deref(), Some("right_v2"));
+        assert_eq!(section.backend_node_id, 506);
+
+        Ok(())
+    }
+
+    fn semantic_path_index_fixture() -> HashMap<String, Vec<usize>> {
+        HashMap::from([
+            ("root/#document".to_string(), vec![]),
+            ("root/#document/html".to_string(), vec![0]),
+            ("root/#document/html/body".to_string(), vec![0, 0]),
+            ("root/#document/html/body/div".to_string(), vec![0, 0, 0]),
+            (
+                "root/#document/html/body/section".to_string(),
+                vec![0, 0, 1],
+            ),
+        ])
+    }
+
+    fn build_document_fixture(left_text: &str, right_text: &str, id_base: u32) -> Result<Node> {
+        let div = make_element_node(
+            id_base + 4,
+            "div",
+            vec![],
+            vec![make_text_node(id_base + 5, left_text)?],
+        )?;
+        let section = make_element_node(
+            id_base + 6,
+            "section",
+            vec![],
+            vec![make_text_node(id_base + 7, right_text)?],
+        )?;
+        let body = make_element_node(id_base + 3, "body", vec![], vec![div, section])?;
+        let html = make_element_node(id_base + 2, "html", vec![], vec![body])?;
+        make_document_node(id_base + 1, vec![html])
+    }
+
+    fn make_document_node(node_id: u32, children: Vec<Node>) -> Result<Node> {
+        Ok(serde_json::from_value(json!({
+            "nodeId": node_id,
+            "backendNodeId": node_id,
+            "nodeType": 9,
+            "nodeName": "#document",
+            "localName": "",
+            "nodeValue": "",
+            "childNodeCount": children.len(),
+            "children": children
+        }))?)
+    }
+
+    fn make_element_node(
+        node_id: u32,
+        tag: &str,
+        attributes: Vec<(&str, &str)>,
+        children: Vec<Node>,
+    ) -> Result<Node> {
+        let attrs = flatten_attrs(attributes);
+        Ok(serde_json::from_value(json!({
+            "nodeId": node_id,
+            "backendNodeId": node_id,
+            "nodeType": 1,
+            "nodeName": tag.to_uppercase(),
+            "localName": tag,
+            "nodeValue": "",
+            "attributes": attrs,
+            "childNodeCount": children.len(),
+            "children": children
+        }))?)
+    }
+
+    fn make_text_node(node_id: u32, text: &str) -> Result<Node> {
+        Ok(serde_json::from_value(json!({
+            "nodeId": node_id,
+            "backendNodeId": node_id,
+            "nodeType": 3,
+            "nodeName": "#text",
+            "localName": "",
+            "nodeValue": text
+        }))?)
+    }
+
+    fn flatten_attrs(attributes: Vec<(&str, &str)>) -> Vec<String> {
+        let mut flat = Vec::with_capacity(attributes.len() * 2);
+        for (key, value) in attributes {
+            flat.push(key.to_string());
+            flat.push(value.to_string());
+        }
+        flat
     }
 }

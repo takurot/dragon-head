@@ -647,25 +647,28 @@ impl PageSession {
     }
 
     fn capture_state(&self, profile: LoadProfile) -> Result<SemanticState> {
-        self.capture_state_with_refinement(profile, &[], None)
+        self.capture_state_with_refinement(profile, &[], None, None)
     }
 
     fn capture_state_with_refinement(
         &self,
         profile: LoadProfile,
         dirty_paths: &[String],
-        cached_subtrees: Option<&HashMap<String, SemanticNode>>,
+        cached_root: Option<&SemanticNode>,
+        cached_paths: Option<&HashMap<String, Vec<usize>>>,
     ) -> Result<SemanticState> {
         let root = self.get_document_node()?;
         let normalized_dirty_paths = normalize_dirty_paths(dirty_paths);
-        let sem_root = if let Some(cached_subtrees) = cached_subtrees {
-            if !normalized_dirty_paths.is_empty() && !cached_subtrees.is_empty() {
+        let sem_root = if let (Some(cached_root), Some(cached_paths)) = (cached_root, cached_paths)
+        {
+            if !normalized_dirty_paths.is_empty() && !cached_paths.is_empty() {
                 normalize_dom_with_refinement(
                     profile,
                     &root,
                     SubtreeRefinementConfig {
                         dirty_paths: &normalized_dirty_paths,
-                        cached_subtrees,
+                        cached_paths,
+                        cached_root,
                     },
                 )?
             } else {
@@ -880,7 +883,7 @@ struct SreEventSubscriber<'a> {
     session: &'a PageSession,
     profile: LoadProfile,
     last_state: Option<SemanticState>,
-    cached_subtrees: HashMap<String, SemanticNode>,
+    cached_path_index: HashMap<String, Vec<usize>>,
     last_event_version: u64,
     initial_snapshot_emitted: bool,
 }
@@ -891,7 +894,7 @@ impl<'a> SreEventSubscriber<'a> {
             session,
             profile,
             last_state: None,
-            cached_subtrees: HashMap::new(),
+            cached_path_index: HashMap::new(),
             last_event_version: 0,
             initial_snapshot_emitted: false,
         }
@@ -929,7 +932,8 @@ impl<'a> SreEventSubscriber<'a> {
         let state = self.session.capture_state_with_refinement(
             self.profile,
             &dirty_paths,
-            Some(&self.cached_subtrees),
+            self.last_state.as_ref().map(SemanticState::root),
+            Some(&self.cached_path_index),
         )?;
 
         let is_unchanged_hash = self
@@ -937,7 +941,7 @@ impl<'a> SreEventSubscriber<'a> {
             .as_ref()
             .is_some_and(|previous| previous.state_hash() == state.state_hash());
 
-        self.cached_subtrees = build_semantic_path_cache(state.root());
+        self.cached_path_index = build_semantic_path_index(state.root());
         self.last_state = Some(state.clone());
 
         if is_unchanged_hash {
@@ -1001,13 +1005,14 @@ fn normalize_dirty_paths(raw_paths: &[String]) -> HashSet<String> {
         .collect()
 }
 
-fn build_semantic_path_cache(root: &SemanticNode) -> HashMap<String, SemanticNode> {
+fn build_semantic_path_index(root: &SemanticNode) -> HashMap<String, Vec<usize>> {
     let mut counts = HashMap::new();
     count_semantic_paths(root, "root", &mut counts);
 
-    let mut cache = HashMap::new();
-    collect_unique_semantic_paths(root, "root", &counts, &mut cache);
-    cache
+    let mut index = HashMap::new();
+    let mut current_child_path = Vec::new();
+    collect_unique_semantic_paths(root, "root", &counts, &mut current_child_path, &mut index);
+    index
 }
 
 fn count_semantic_paths(
@@ -1027,15 +1032,18 @@ fn collect_unique_semantic_paths(
     node: &SemanticNode,
     parent_path: &str,
     counts: &HashMap<String, usize>,
-    cache: &mut HashMap<String, SemanticNode>,
+    current_child_path: &mut Vec<usize>,
+    index: &mut HashMap<String, Vec<usize>>,
 ) {
     let current_path = semantic_path(parent_path, &node.role);
     if counts.get(&current_path).copied() == Some(1) {
-        cache.insert(current_path.clone(), node.clone());
+        index.insert(current_path.clone(), current_child_path.clone());
     }
 
-    for child in &node.children {
-        collect_unique_semantic_paths(child, &current_path, counts, cache);
+    for (child_index, child) in node.children.iter().enumerate() {
+        current_child_path.push(child_index);
+        collect_unique_semantic_paths(child, &current_path, counts, current_child_path, index);
+        current_child_path.pop();
     }
 }
 
@@ -1322,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_semantic_path_cache_uses_unique_paths_only() {
+    fn test_build_semantic_path_index_uses_unique_paths_only() {
         let tree = SemanticNode {
             role: "#document".to_string(),
             children: vec![SemanticNode {
@@ -1356,10 +1364,13 @@ mod tests {
             ..Default::default()
         };
 
-        let cache = build_semantic_path_cache(&tree);
-        assert!(cache.contains_key("root/#document"));
-        assert!(!cache.contains_key("root/#document/html/body/button"));
-        assert!(cache.contains_key("root/#document/html/body/section/input"));
+        let index = build_semantic_path_index(&tree);
+        assert_eq!(index.get("root/#document"), Some(&Vec::<usize>::new()));
+        assert!(!index.contains_key("root/#document/html/body/button"));
+        assert_eq!(
+            index.get("root/#document/html/body/section/input"),
+            Some(&vec![0, 0, 2, 0])
+        );
     }
 }
 
