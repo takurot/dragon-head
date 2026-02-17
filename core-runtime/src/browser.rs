@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use headless_chrome::{Browser, LaunchOptions};
 use std::{
     cmp::min,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -10,7 +10,10 @@ use std::{
 
 use crate::{
     error::{ActionError, VerifyError, WaitError},
-    sre::{normalize_dom, LoadProfile, SemanticNode, SemanticState},
+    sre::{
+        normalize_dom, normalize_dom_with_refinement, LoadProfile, SemanticNode, SemanticState,
+        SubtreeRefinementConfig,
+    },
 };
 
 const DEFAULT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -201,7 +204,10 @@ impl PageSession {
         existing &&
         typeof existing === "object" &&
         Number.isFinite(existing.version) &&
-        Array.isArray(existing.waiters);
+        Array.isArray(existing.waiters) &&
+        Array.isArray(existing.dirtyPaths) &&
+        existing.dirtyPathSet &&
+        typeof existing.dirtyPathSet.clear === "function";
 
     if (isValidExisting) {{
         return Math.floor(existing.version);
@@ -213,8 +219,89 @@ impl PageSession {
         }} catch (_ignored) {{}}
     }}
 
-    const state = {{ version: 0, waiters: [] }};
-    const notify = () => {{
+    const state = {{
+        version: 0,
+        waiters: [],
+        dirtyPaths: [],
+        dirtyPathSet: new Set(),
+    }};
+
+    const toSemanticPath = (node) => {{
+        if (!node) {{
+            return null;
+        }}
+
+        if (node.nodeType === Node.DOCUMENT_NODE) {{
+            return 'root/#document';
+        }}
+
+        let current = node;
+        if (current.nodeType !== Node.ELEMENT_NODE) {{
+            current = current.parentElement;
+        }}
+        if (!current) {{
+            return null;
+        }}
+
+        const parts = [];
+        while (current && current.nodeType === Node.ELEMENT_NODE) {{
+            parts.push(current.tagName.toLowerCase());
+            current = current.parentElement;
+        }}
+
+        parts.reverse();
+        parts.unshift('#document');
+        return `root/${{parts.join("/")}}`;
+    }};
+
+    const queuePath = (path) => {{
+        if (typeof path !== "string" || path.length === 0) {{
+            return;
+        }}
+        if (state.dirtyPathSet.has(path)) {{
+            return;
+        }}
+
+        if (state.dirtyPaths.length >= 512) {{
+            state.dirtyPaths = ['root/#document'];
+            state.dirtyPathSet.clear();
+            state.dirtyPathSet.add('root/#document');
+            return;
+        }}
+
+        state.dirtyPathSet.add(path);
+        state.dirtyPaths.push(path);
+    }};
+
+    const queueNodeAndParent = (node) => {{
+        if (!node) {{
+            return;
+        }}
+        queuePath(toSemanticPath(node));
+        queuePath(toSemanticPath(node.parentElement));
+    }};
+
+    const notify = (mutations = []) => {{
+        for (const mutation of mutations) {{
+            const target = mutation.target;
+            const elementTarget =
+                target && target.nodeType === Node.ELEMENT_NODE
+                    ? target
+                    : target && target.parentElement
+                        ? target.parentElement
+                        : null;
+            queueNodeAndParent(elementTarget);
+
+            if (mutation.type === "childList") {{
+                for (const added of mutation.addedNodes || []) {{
+                    queueNodeAndParent(added);
+                }}
+                for (const removed of mutation.removedNodes || []) {{
+                    queueNodeAndParent(mutation.target);
+                }}
+            }}
+        }}
+
         state.version += 1;
         const waiters = state.waiters.splice(0, state.waiters.length);
         for (const waiter of waiters) {{
@@ -225,7 +312,7 @@ impl PageSession {
     }};
 
     const target = document.documentElement || document;
-    const observer = new MutationObserver(() => notify());
+    const observer = new MutationObserver((mutations) => notify(mutations));
     observer.observe(target, {{
         subtree: true,
         childList: true,
@@ -294,6 +381,37 @@ impl PageSession {
             .evaluate_script_value(&script, true)
             .context("Failed while waiting for SRE event")?;
         value_to_u64(&value).context("Invalid SRE event version")
+    }
+
+    fn take_sre_dirty_paths(&self) -> Result<Vec<String>> {
+        let script = format!(
+            r#"
+(() => {{
+    const bridgeKey = Symbol.for("{SRE_EVENT_BRIDGE_SYMBOL}");
+    const state = window[bridgeKey];
+    const isValidState =
+        state &&
+        typeof state === "object" &&
+        Array.isArray(state.dirtyPaths) &&
+        state.dirtyPathSet &&
+        typeof state.dirtyPathSet.clear === "function";
+
+    if (!isValidState) {{
+        return [];
+    }}
+
+    const paths = state.dirtyPaths.slice();
+    state.dirtyPaths = [];
+    state.dirtyPathSet.clear();
+    return paths;
+}})()
+"#
+        );
+
+        let value = self
+            .evaluate_script_value(&script, false)
+            .context("Failed to fetch dirty semantic paths")?;
+        value_to_string_vec(&value)
     }
 
     /// Explicitly request a visual capture with SoM marks.
@@ -529,8 +647,36 @@ impl PageSession {
     }
 
     fn capture_state(&self, profile: LoadProfile) -> Result<SemanticState> {
+        self.capture_state_with_refinement(profile, &[], None, None)
+    }
+
+    fn capture_state_with_refinement(
+        &self,
+        profile: LoadProfile,
+        dirty_paths: &[String],
+        cached_root: Option<&SemanticNode>,
+        cached_paths: Option<&HashMap<String, Vec<usize>>>,
+    ) -> Result<SemanticState> {
         let root = self.get_document_node()?;
-        let sem_root = normalize_dom(profile, &root)?;
+        let normalized_dirty_paths = normalize_dirty_paths(dirty_paths);
+        let sem_root = if let (Some(cached_root), Some(cached_paths)) = (cached_root, cached_paths)
+        {
+            if !normalized_dirty_paths.is_empty() && !cached_paths.is_empty() {
+                normalize_dom_with_refinement(
+                    profile,
+                    &root,
+                    SubtreeRefinementConfig {
+                        dirty_paths: &normalized_dirty_paths,
+                        cached_paths,
+                        cached_root,
+                    },
+                )?
+            } else {
+                normalize_dom(profile, &root)?
+            }
+        } else {
+            normalize_dom(profile, &root)?
+        };
         self.replace_stable_key_index(&sem_root);
         Ok(SemanticState::new(sem_root, profile))
     }
@@ -736,7 +882,8 @@ impl PageSession {
 struct SreEventSubscriber<'a> {
     session: &'a PageSession,
     profile: LoadProfile,
-    last_state_hash: Option<String>,
+    last_state: Option<SemanticState>,
+    cached_path_index: HashMap<String, Vec<usize>>,
     last_event_version: u64,
     initial_snapshot_emitted: bool,
 }
@@ -746,7 +893,8 @@ impl<'a> SreEventSubscriber<'a> {
         Self {
             session,
             profile,
-            last_state_hash: None,
+            last_state: None,
+            cached_path_index: HashMap::new(),
             last_event_version: 0,
             initial_snapshot_emitted: false,
         }
@@ -755,13 +903,14 @@ impl<'a> SreEventSubscriber<'a> {
     fn wait_next_state_event(&mut self, max_wait: Duration) -> Result<Option<SemanticState>> {
         if !self.initial_snapshot_emitted {
             self.initial_snapshot_emitted = true;
-            return self.capture_next_state_if_changed();
+            return self.capture_next_state_if_changed(Vec::new());
         }
 
         let bridge_version = self.session.ensure_sre_event_bridge()?;
         if bridge_version != self.last_event_version {
             self.last_event_version = bridge_version;
-            return self.capture_next_state_if_changed();
+            let dirty_paths = self.session.take_sre_dirty_paths()?;
+            return self.capture_next_state_if_changed(dirty_paths);
         }
 
         let next_version = self
@@ -772,18 +921,32 @@ impl<'a> SreEventSubscriber<'a> {
         }
 
         self.last_event_version = next_version;
-        self.capture_next_state_if_changed()
+        let dirty_paths = self.session.take_sre_dirty_paths()?;
+        self.capture_next_state_if_changed(dirty_paths)
     }
 
-    fn capture_next_state_if_changed(&mut self) -> Result<Option<SemanticState>> {
-        let state = self.session.capture_state(self.profile)?;
-        let current_hash = state.state_hash().to_owned();
+    fn capture_next_state_if_changed(
+        &mut self,
+        dirty_paths: Vec<String>,
+    ) -> Result<Option<SemanticState>> {
+        let state = self.session.capture_state_with_refinement(
+            self.profile,
+            &dirty_paths,
+            self.last_state.as_ref().map(SemanticState::root),
+            Some(&self.cached_path_index),
+        )?;
 
-        if self.last_state_hash.as_deref() == Some(current_hash.as_str()) {
+        let is_unchanged_hash = self
+            .last_state
+            .as_ref()
+            .is_some_and(|previous| previous.state_hash() == state.state_hash());
+
+        self.cached_path_index = build_semantic_path_index(state.root());
+        self.last_state = Some(state.clone());
+
+        if is_unchanged_hash {
             return Ok(None);
         }
-
-        self.last_state_hash = Some(current_hash);
         Ok(Some(state))
     }
 }
@@ -831,6 +994,61 @@ fn find_node_by_key<'a>(node: &'a SemanticNode, target_key: &str) -> Option<&'a 
     }
 
     None
+}
+
+fn normalize_dirty_paths(raw_paths: &[String]) -> HashSet<String> {
+    raw_paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn build_semantic_path_index(root: &SemanticNode) -> HashMap<String, Vec<usize>> {
+    let mut counts = HashMap::new();
+    count_semantic_paths(root, "root", &mut counts);
+
+    let mut index = HashMap::new();
+    let mut current_child_path = Vec::new();
+    collect_unique_semantic_paths(root, "root", &counts, &mut current_child_path, &mut index);
+    index
+}
+
+fn count_semantic_paths(
+    node: &SemanticNode,
+    parent_path: &str,
+    counts: &mut HashMap<String, usize>,
+) {
+    let current_path = semantic_path(parent_path, &node.role);
+    *counts.entry(current_path.clone()).or_insert(0) += 1;
+
+    for child in &node.children {
+        count_semantic_paths(child, &current_path, counts);
+    }
+}
+
+fn collect_unique_semantic_paths(
+    node: &SemanticNode,
+    parent_path: &str,
+    counts: &HashMap<String, usize>,
+    current_child_path: &mut Vec<usize>,
+    index: &mut HashMap<String, Vec<usize>>,
+) {
+    let current_path = semantic_path(parent_path, &node.role);
+    if counts.get(&current_path).copied() == Some(1) {
+        index.insert(current_path.clone(), current_child_path.clone());
+    }
+
+    for (child_index, child) in node.children.iter().enumerate() {
+        current_child_path.push(child_index);
+        collect_unique_semantic_paths(child, &current_path, counts, current_child_path, index);
+        current_child_path.pop();
+    }
+}
+
+fn semantic_path(parent_path: &str, role: &str) -> String {
+    format!("{}/{}", parent_path, role.to_lowercase())
 }
 
 fn collect_stable_key_entries(node: &SemanticNode, out: &mut HashMap<String, StableKeyIndexEntry>) {
@@ -991,6 +1209,18 @@ fn value_to_u64(value: &serde_json::Value) -> Result<u64> {
     anyhow::bail!("Expected integer value, received: {value}");
 }
 
+fn value_to_string_vec(value: &serde_json::Value) -> Result<Vec<String>> {
+    let entries = value
+        .as_array()
+        .context("Expected array value for dirty semantic paths")?;
+
+    Ok(entries
+        .iter()
+        .filter_map(|entry| entry.as_str())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
 fn duration_to_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -1082,6 +1312,64 @@ mod tests {
         assert_eq!(
             transient_error_backoff(Duration::from_millis(80)),
             Duration::from_millis(80)
+        );
+    }
+
+    #[test]
+    fn test_normalize_dirty_paths_deduplicates_and_trims() {
+        let dirty_paths = vec![
+            " root/#document/html/body/div ".to_string(),
+            "root/#document/html/body/div".to_string(),
+            String::new(),
+            "   ".to_string(),
+        ];
+
+        let normalized = normalize_dirty_paths(&dirty_paths);
+        assert_eq!(normalized.len(), 1);
+        assert!(normalized.contains("root/#document/html/body/div"));
+    }
+
+    #[test]
+    fn test_build_semantic_path_index_uses_unique_paths_only() {
+        let tree = SemanticNode {
+            role: "#document".to_string(),
+            children: vec![SemanticNode {
+                role: "html".to_string(),
+                children: vec![SemanticNode {
+                    role: "body".to_string(),
+                    children: vec![
+                        SemanticNode {
+                            role: "button".to_string(),
+                            label: Some("first".to_string()),
+                            ..Default::default()
+                        },
+                        SemanticNode {
+                            role: "button".to_string(),
+                            label: Some("second".to_string()),
+                            ..Default::default()
+                        },
+                        SemanticNode {
+                            role: "section".to_string(),
+                            children: vec![SemanticNode {
+                                role: "input".to_string(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let index = build_semantic_path_index(&tree);
+        assert_eq!(index.get("root/#document"), Some(&Vec::<usize>::new()));
+        assert!(!index.contains_key("root/#document/html/body/button"));
+        assert_eq!(
+            index.get("root/#document/html/body/section/input"),
+            Some(&vec![0, 0, 2, 0])
         );
     }
 }
