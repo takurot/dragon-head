@@ -932,16 +932,17 @@ impl<'a> SreEventSubscriber<'a> {
             Some(&self.cached_subtrees),
         )?;
 
-        if self
+        let is_unchanged_hash = self
             .last_state
             .as_ref()
-            .is_some_and(|previous| previous.state_hash() == state.state_hash())
-        {
-            return Ok(None);
-        }
+            .is_some_and(|previous| previous.state_hash() == state.state_hash());
 
         self.cached_subtrees = build_semantic_path_cache(state.root());
         self.last_state = Some(state.clone());
+
+        if is_unchanged_hash {
+            return Ok(None);
+        }
         Ok(Some(state))
     }
 }
