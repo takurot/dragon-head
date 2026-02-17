@@ -164,21 +164,21 @@
   - [x] SoM生成回数がイベント発火時に限定される。
 
 ### PR-07: SRE-02 Semantic Delta (RFC 6902)
-- Status: `IN_PROGRESS`
+- Status: `DONE` (Local)
 - Spec Ref: SRE-02
 - Dependencies: PR-02
 - 実装タスク
   - [x] `state_hash` 差分に基づく JSON Patch（RFC 6902）生成を実装する。
-  - [ ] MutationObserver連携で変更サブツリーのみ再解析する。
+  - [x] MutationObserver連携で変更サブツリーのみ再解析する。
   - [x] Full StateとDeltaの切り替えポリシーを実装する。
 - テストタスク
   - [x] 軽微DOM変更でpatchサイズが縮小することを検証する。
   - [x] patch適用後の再構築Stateが原本一致することを検証する。
 - CIタスク
-  - [ ] RFC 6902準拠テストスイートをCI必須化する。
-  - [ ] patchサイズ回帰（肥大化）検出チェックを追加する。
+  - [x] RFC 6902準拠テストスイートをCI必須化する。
+  - [x] patchサイズ回帰（肥大化）検出チェックを追加する。
 - Exit Criteria
-  - [ ] Delta送信でフル再送を回避できる。
+  - [x] Delta送信でフル再送を回避できる。
 
 ### PR-08: Async Pipeline Architecture
 - Status: `NOT_STARTED`

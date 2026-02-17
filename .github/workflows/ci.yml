@@ -84,6 +84,13 @@ jobs:
         CHROME_INSTALLED: "true"
       run: cargo test -p core-runtime --test sre_profile_filtering --verbose
 
+  sre-semantic-delta:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run RFC 6902 semantic delta suite
+      run: cargo test -p core-runtime --test sre_semantic_delta --verbose
+
   som-regression:
     runs-on: ubuntu-latest
     steps:

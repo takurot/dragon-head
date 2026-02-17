@@ -191,3 +191,81 @@ fn test_state_update_delta_ratio_uses_full_update_payload() -> anyhow::Result<()
 
     Ok(())
 }
+
+#[test]
+fn test_semantic_delta_patch_is_rfc6902_compliant() -> anyhow::Result<()> {
+    let previous = build_catalog_state(usize::MAX, "");
+    let next = build_catalog_state(22, "updated");
+    let delta = next
+        .build_delta(&previous)?
+        .expect("Minor change should produce a patch");
+
+    let patch_json = serde_json::to_value(&delta.patch)?;
+    let operations = patch_json
+        .as_array()
+        .expect("RFC 6902 patch must be a JSON array");
+    assert!(
+        !operations.is_empty(),
+        "Patch must contain at least one operation"
+    );
+
+    for operation in operations {
+        let op = operation
+            .get("op")
+            .and_then(|value| value.as_str())
+            .expect("Each operation must contain 'op'");
+        let path = operation
+            .get("path")
+            .and_then(|value| value.as_str())
+            .expect("Each operation must contain 'path'");
+        assert!(
+            path.starts_with('/'),
+            "RFC 6902 paths must be JSON pointers: {path}"
+        );
+
+        match op {
+            "add" | "replace" | "test" => {
+                assert!(
+                    operation.get("value").is_some(),
+                    "{op} must include a value field"
+                );
+            }
+            "move" | "copy" => {
+                assert!(
+                    operation
+                        .get("from")
+                        .and_then(|value| value.as_str())
+                        .is_some(),
+                    "{op} must include a from field"
+                );
+            }
+            "remove" => {}
+            _ => panic!("Unsupported RFC 6902 operation emitted: {op}"),
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_semantic_delta_patch_ratio_regression_guard() -> anyhow::Result<()> {
+    let previous = build_catalog_state(usize::MAX, "");
+    let next = build_catalog_state(22, "updated");
+    let delta = next
+        .build_delta(&previous)?
+        .expect("Minor change should produce a patch");
+
+    let patch_bytes = delta.patch_size_bytes() as f64;
+    let full_update_bytes = serde_json::to_vec(&StateUpdate::Full {
+        state: next.clone(),
+    })?
+    .len() as f64;
+    let ratio = patch_bytes / full_update_bytes;
+
+    assert!(
+        ratio <= 0.20,
+        "Patch ratio regressed above threshold (ratio={ratio:.4}, patch={patch_bytes}, full={full_update_bytes})"
+    );
+
+    Ok(())
+}

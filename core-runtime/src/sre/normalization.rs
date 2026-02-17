@@ -4,15 +4,36 @@ use super::state::SemanticNode;
 use anyhow::Result;
 use headless_chrome::protocol::cdp::DOM::Node;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const DEFAULT_VIEWPORT_WIDTH_PX: f64 = 800.0;
 const DEFAULT_VIEWPORT_HEIGHT_PX: f64 = 600.0;
 
 pub fn normalize_dom(profile: LoadProfile, node: &Node) -> Result<SemanticNode> {
+    normalize_dom_internal(profile, node, None)
+}
+
+pub struct SubtreeRefinementConfig<'a> {
+    pub dirty_paths: &'a HashSet<String>,
+    pub cached_subtrees: &'a HashMap<String, SemanticNode>,
+}
+
+pub fn normalize_dom_with_refinement(
+    profile: LoadProfile,
+    node: &Node,
+    refinement: SubtreeRefinementConfig<'_>,
+) -> Result<SemanticNode> {
+    normalize_dom_internal(profile, node, Some(&refinement))
+}
+
+fn normalize_dom_internal(
+    profile: LoadProfile,
+    node: &Node,
+    refinement: Option<&SubtreeRefinementConfig<'_>>,
+) -> Result<SemanticNode> {
     let mut key_generator = StableKeyGenerator::new();
     // Start traversal with root path
-    let internal_node = traverse_node(profile, node, &mut key_generator, "root")?;
+    let internal_node = traverse_node(profile, node, &mut key_generator, "root", refinement)?;
     Ok(internal_node.unwrap_or_default())
 }
 
@@ -57,6 +78,7 @@ fn traverse_node(
     node: &Node,
     key_gen: &mut StableKeyGenerator,
     parent_path: &str,
+    refinement: Option<&SubtreeRefinementConfig<'_>>,
 ) -> Result<Option<SemanticNode>> {
     // Basic filtering based on node type
     // NodeType: 1=Element, 3=Text, 9=Document
@@ -85,6 +107,12 @@ fn traverse_node(
 
     if node_type != 1 && node_type != 9 {
         return Ok(None); // Skip comments, etc.
+    }
+
+    let current_path = format!("{}/{}", parent_path, node_name);
+
+    if let Some(cached) = resolve_cached_subtree(&current_path, &node_name, refinement) {
+        return Ok(Some(cached.clone()));
     }
 
     // Filter by tag name based on Load Profile (SPEC SRE-01)
@@ -138,10 +166,6 @@ fn traverse_node(
         }
     }
 
-    // Generate path for this node to pass to children
-    // path format: parent_path/role (without index to ensure stability on sibling insertion, unless collision happens in key gen)
-    let current_path = format!("{}/{}", parent_path, node_name);
-
     let mut children = Vec::new();
     if let Some(child_nodes) = &node.children {
         // We need to track sibling index per role? Or just absolute index?
@@ -149,7 +173,9 @@ fn traverse_node(
         // we might want "nth-of-type".
         // For now, let's use the loop index.
         for child in child_nodes {
-            if let Some(normalized_child) = traverse_node(profile, child, key_gen, &current_path)? {
+            if let Some(normalized_child) =
+                traverse_node(profile, child, key_gen, &current_path, refinement)?
+            {
                 children.push(normalized_child);
             }
         }
@@ -188,6 +214,38 @@ fn traverse_node(
         alias,
         backend_node_id: node.backend_node_id.into(),
     }))
+}
+
+fn resolve_cached_subtree<'a>(
+    current_path: &str,
+    role: &str,
+    refinement: Option<&'a SubtreeRefinementConfig<'_>>,
+) -> Option<&'a SemanticNode> {
+    let refinement = refinement?;
+    if path_overlaps_dirty_set(current_path, refinement.dirty_paths) {
+        return None;
+    }
+    let cached = refinement.cached_subtrees.get(current_path)?;
+    if cached.role == role {
+        Some(cached)
+    } else {
+        None
+    }
+}
+
+fn path_overlaps_dirty_set(path: &str, dirty_paths: &HashSet<String>) -> bool {
+    dirty_paths.iter().any(|dirty| {
+        dirty == path || is_descendant_path(path, dirty) || is_descendant_path(dirty, path)
+    })
+}
+
+fn is_descendant_path(path: &str, ancestor: &str) -> bool {
+    if path.len() <= ancestor.len() || !path.starts_with(ancestor) {
+        return false;
+    }
+    path.as_bytes()
+        .get(ancestor.len())
+        .is_some_and(|separator| *separator == b'/')
 }
 
 fn extract_direct_text_label(node: &Node) -> Option<String> {
@@ -455,5 +513,42 @@ mod tests {
             filter_dynamic_classes("btn primary"),
             Some("btn primary".to_string())
         );
+    }
+
+    #[test]
+    fn test_path_overlaps_dirty_set_detects_ancestor_or_descendant() {
+        let dirty_paths = HashSet::from([
+            "root/#document/html/body/div".to_string(),
+            "root/#document/html/body/section/button".to_string(),
+        ]);
+
+        assert!(path_overlaps_dirty_set(
+            "root/#document/html/body/div/span",
+            &dirty_paths
+        ));
+        assert!(path_overlaps_dirty_set(
+            "root/#document/html/body",
+            &dirty_paths
+        ));
+        assert!(path_overlaps_dirty_set(
+            "root/#document/html/body/section/button",
+            &dirty_paths
+        ));
+        assert!(!path_overlaps_dirty_set(
+            "root/#document/html/head/title",
+            &dirty_paths
+        ));
+    }
+
+    #[test]
+    fn test_is_descendant_path_requires_segment_boundary() {
+        assert!(is_descendant_path(
+            "root/#document/html/body/div/span",
+            "root/#document/html/body/div"
+        ));
+        assert!(!is_descendant_path(
+            "root/#document/html/body/division",
+            "root/#document/html/body/div"
+        ));
     }
 }

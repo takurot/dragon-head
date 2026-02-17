@@ -3,7 +3,7 @@ pub mod profile;
 pub mod stable_key;
 pub mod state;
 
-pub use normalization::normalize_dom;
+pub use normalization::{normalize_dom, normalize_dom_with_refinement, SubtreeRefinementConfig};
 pub use profile::LoadProfile;
 pub use stable_key::StableKeyGenerator;
 pub use state::{
