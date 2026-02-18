@@ -499,11 +499,19 @@ impl PageSession {
     /// Replace policy rules for this page session.
     pub fn set_policy_rules(&self, rules: Vec<PolicyRule>) -> Result<()> {
         let engine = PolicyEngine::try_new(rules)?;
-        let mut guard = self
+        let mut engine_guard = self
             .policy_engine
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock policy engine"))?;
-        *guard = engine;
+        *engine_guard = engine;
+        drop(engine_guard);
+
+        let mut approvals_guard = self
+            .policy_approvals
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
+        approvals_guard.pending = None;
+        approvals_guard.granted.clear();
         Ok(())
     }
 
@@ -1259,7 +1267,10 @@ fn policy_target_signature(
 
 fn is_grant_valid(grant: &GrantedPolicyApproval, navigation_epoch: u64, now_ms: u128) -> bool {
     match grant.request.scope {
-        ApprovalScope::ActionOnly => grant.remaining_uses.unwrap_or(0) > 0,
+        ApprovalScope::ActionOnly => {
+            grant.granted_navigation_epoch == navigation_epoch
+                && grant.remaining_uses.unwrap_or(0) > 0
+        }
         ApprovalScope::UntilNavigation => grant.granted_navigation_epoch == navigation_epoch,
         ApprovalScope::Timeboxed { .. } => grant
             .expires_at_epoch_ms

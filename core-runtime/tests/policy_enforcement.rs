@@ -128,6 +128,120 @@ fn test_action_only_approval_scope_expires_after_single_use() -> anyhow::Result<
 }
 
 #[test]
+fn test_action_only_approval_scope_expires_on_navigation() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+    page.set_policy_rules(vec![PolicyRule {
+        id: "approve-pay".to_string(),
+        domain: None,
+        path_prefix: None,
+        role: Some("button".to_string()),
+        text_regex: Some("(?i)pay".to_string()),
+        context_regex: None,
+        action: PolicyAction::RequireHumanApproval,
+        scope: Some(ApprovalScope::ActionOnly),
+    }])?;
+
+    let html = r#"
+        <html>
+            <body>
+                <button id="pay" onclick="document.body.dataset.payCount = String((Number(document.body.dataset.payCount||0)+1))">Pay</button>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let (target_id, target_key) = find_button_info(&page)?;
+    assert!(page
+        .act(Some(target_id), Some(&target_key), "click", None)
+        .is_err());
+    page.approve_pending_policy_action()?;
+
+    page.navigate(&url)?;
+    let (target_id_after_nav, target_key_after_nav) = find_button_info(&page)?;
+    let attempt = page.act(
+        Some(target_id_after_nav),
+        Some(&target_key_after_nav),
+        "click",
+        None,
+    );
+    assert!(
+        attempt.is_err(),
+        "action_only approval must expire after navigation"
+    );
+    let err = attempt.unwrap_err();
+    let action_err = err
+        .downcast_ref::<ActionError>()
+        .expect("error should be ActionError");
+    assert!(matches!(
+        action_err,
+        ActionError::HumanApprovalRequired { .. }
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn test_set_policy_rules_clears_stale_approvals() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+    let rule = PolicyRule {
+        id: "approve-pay".to_string(),
+        domain: None,
+        path_prefix: None,
+        role: Some("button".to_string()),
+        text_regex: Some("(?i)pay".to_string()),
+        context_regex: None,
+        action: PolicyAction::RequireHumanApproval,
+        scope: Some(ApprovalScope::ActionOnly),
+    };
+    page.set_policy_rules(vec![rule.clone()])?;
+
+    let html = r#"
+        <html>
+            <body>
+                <button id="pay" onclick="document.body.dataset.payCount = String((Number(document.body.dataset.payCount||0)+1))">Pay</button>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let (target_id, target_key) = find_button_info(&page)?;
+    assert!(page
+        .act(Some(target_id), Some(&target_key), "click", None)
+        .is_err());
+    page.approve_pending_policy_action()?;
+
+    page.set_policy_rules(vec![rule])?;
+
+    let after_reload = page.act(Some(target_id), Some(&target_key), "click", None);
+    assert!(
+        after_reload.is_err(),
+        "replacing policy rules must clear previously granted approvals"
+    );
+    let err = after_reload.unwrap_err();
+    let action_err = err
+        .downcast_ref::<ActionError>()
+        .expect("error should be ActionError");
+    assert!(matches!(
+        action_err,
+        ActionError::HumanApprovalRequired { .. }
+    ));
+
+    Ok(())
+}
+
+#[test]
 fn test_until_navigation_and_timeboxed_scopes_expire() -> anyhow::Result<()> {
     if should_skip() {
         return Ok(());
