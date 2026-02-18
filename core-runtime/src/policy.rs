@@ -210,7 +210,6 @@ impl PolicyEngine {
         }
     }
 
-
     pub fn try_new(rules: Vec<PolicyRule>) -> Result<Self> {
         validate_rule_set(&rules)?;
         let compiled_rules = rules
