@@ -189,11 +189,16 @@ pub struct PolicyEngine {
 }
 
 impl Default for PolicyEngine {
+    /// Loads the embedded default policy rules.
+    ///
+    /// # Panics
+    /// Panics if the embedded `default_rules.json` asset is malformed.
+    /// This is intentional: a broken build-time asset must be caught at
+    /// startup rather than silently falling back to an allow-all policy
+    /// (fail-closed, not fail-open).
     fn default() -> Self {
-        Self::try_from_json_str(DEFAULT_POLICY_RULES_JSON).unwrap_or_else(|err| {
-            eprintln!("[WARN] Failed to load default policy rules: {err:#}");
-            Self::empty()
-        })
+        Self::try_from_json_str(DEFAULT_POLICY_RULES_JSON)
+            .expect("Embedded default policy rules are malformed — this is a build-time bug")
     }
 }
 
@@ -205,12 +210,6 @@ impl PolicyEngine {
         }
     }
 
-    pub fn new(rules: Vec<PolicyRule>) -> Self {
-        Self::try_new(rules).unwrap_or_else(|err| {
-            eprintln!("[WARN] Failed to compile provided policy rules: {err:#}");
-            Self::empty()
-        })
-    }
 
     pub fn try_new(rules: Vec<PolicyRule>) -> Result<Self> {
         validate_rule_set(&rules)?;
@@ -264,6 +263,16 @@ pub fn validate_rule_set(rules: &[PolicyRule]) -> Result<()> {
             seen_ids.insert(id.to_string()),
             "Duplicated policy rule id: {id}"
         );
+
+        // A whitespace-only path_prefix trims to "", making starts_with("") always
+        // true — effectively a wildcard that bypasses all subsequent rules.
+        if let Some(prefix) = rule.path_prefix.as_deref() {
+            anyhow::ensure!(
+                !prefix.trim().is_empty(),
+                "Policy rule '{}' has an empty or whitespace-only path_prefix (would match all paths)",
+                rule.id
+            );
+        }
 
         match rule.action {
             PolicyAction::RequireHumanApproval => {
