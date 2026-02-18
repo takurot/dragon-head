@@ -181,16 +181,16 @@
   - [x] Delta送信でフル再送を回避できる。
 
 ### PR-08: Async Pipeline Architecture
-- Status: `NOT_STARTED`
+- Status: `IN_PROGRESS`
 - Spec Ref: Section 2.2, Section 6（TTFT）
 - Dependencies: PR-07
 - 実装タスク
-  - [ ] `Render Queue`, `SRE Queue`, `Audit/Policy Queue` を非同期分離する。
-  - [ ] `Fast State` 優先スケジューリングを実装する。
-  - [ ] Queue間のバックプレッシャー制御を実装する。
+  - [x] `Render Queue`, `SRE Queue`, `Audit/Policy Queue` を非同期分離する。
+  - [x] `Fast State` 優先スケジューリングを実装する。
+  - [x] Queue間のバックプレッシャー制御を実装する。
 - テストタスク
-  - [ ] 高負荷下でもデッドロックしないことを検証する負荷テストを追加する。
-  - [ ] TTFT計測テスト（Fast State条件）を追加する。
+  - [x] 高負荷下でもデッドロックしないことを検証する負荷テストを追加する。
+  - [x] TTFT計測テスト（Fast State条件）を追加する。
 - CIタスク
   - [ ] PRでは短時間ベンチ、nightlyでは長時間ベンチを実行する。
   - [ ] TTFTの回帰を検知して警告/失敗にするしきい値を設定する。
