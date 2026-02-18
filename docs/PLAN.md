@@ -1,7 +1,7 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-02-15
+- 最終更新日: 2026-02-18
 - プラン状態: Ready for Implementation
 
 ## 1. 進捗管理ルール
@@ -181,7 +181,7 @@
   - [x] Delta送信でフル再送を回避できる。
 
 ### PR-08: Async Pipeline Architecture
-- Status: `IN_PROGRESS`
+- Status: `DONE` (Local)
 - Spec Ref: Section 2.2, Section 6（TTFT）
 - Dependencies: PR-07
 - 実装タスク
@@ -192,10 +192,10 @@
   - [x] 高負荷下でもデッドロックしないことを検証する負荷テストを追加する。
   - [x] TTFT計測テスト（Fast State条件）を追加する。
 - CIタスク
-  - [ ] PRでは短時間ベンチ、nightlyでは長時間ベンチを実行する。
-  - [ ] TTFTの回帰を検知して警告/失敗にするしきい値を設定する。
+  - [x] PRでは短時間ベンチ、nightlyでは長時間ベンチを実行する。
+  - [x] TTFTの回帰を検知して警告/失敗にするしきい値を設定する。
 - Exit Criteria
-  - [ ] Queue分離後も機能退行がなく、TTFT目標達成の見込みが示せる。
+  - [x] Queue分離後も機能退行がなく、TTFT目標達成の見込みが示せる。
 
 ### PR-09: SEC-01 Context-Aware Policy Engine
 - Status: `NOT_STARTED`

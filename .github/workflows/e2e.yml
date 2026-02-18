@@ -6,6 +6,17 @@ on:
   workflow_dispatch:
 
 jobs:
+  ttft-bench-long:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run TTFT long benchmark gate
+      env:
+        TTFT_LONG_ITERATIONS: "400"
+        TTFT_WARN_MS: "40"
+        TTFT_FAIL_MS: "50"
+      run: cargo test -p core-runtime --test async_pipeline test_async_pipeline_ttft_benchmark_long_gate -- --ignored --nocapture
+
   full-e2e:
     runs-on: ubuntu-latest
     steps:
@@ -25,4 +36,3 @@ jobs:
         path: |
           *.png
           *.log
-

@@ -1,5 +1,5 @@
 use std::{
-    thread,
+    env, thread,
     time::{Duration, Instant},
 };
 
@@ -34,6 +34,89 @@ fn build_state(label: &str) -> SemanticState {
     };
 
     SemanticState::new(root, LoadProfile::Minimal)
+}
+
+fn env_usize_with_default(key: &str, default: usize) -> usize {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn env_u64_with_default(key: &str, default: u64) -> u64 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn percentile_ms(samples: &[Duration], quantile: f64) -> f64 {
+    debug_assert!(!samples.is_empty());
+    let mut micros = samples
+        .iter()
+        .map(Duration::as_micros)
+        .collect::<Vec<u128>>();
+    micros.sort_unstable();
+
+    let rank = ((micros.len().saturating_sub(1)) as f64 * quantile).ceil() as usize;
+    micros[rank] as f64 / 1_000.0
+}
+
+fn average_ms(samples: &[Duration]) -> f64 {
+    let total_micros: u128 = samples.iter().map(Duration::as_micros).sum();
+    total_micros as f64 / samples.len() as f64 / 1_000.0
+}
+
+fn max_ms(samples: &[Duration]) -> f64 {
+    samples.iter().map(Duration::as_micros).max().unwrap_or(0) as f64 / 1_000.0
+}
+
+fn run_ttft_benchmark(
+    name: &str,
+    iterations: usize,
+    warn_ms: u64,
+    fail_ms: u64,
+) -> anyhow::Result<()> {
+    let pipeline = AsyncPipeline::new(AsyncPipelineConfig::default());
+    let mut samples = Vec::with_capacity(iterations);
+
+    for idx in 0..iterations {
+        let started = Instant::now();
+        let handle = loop {
+            match pipeline.submit_state(build_state(&format!("{name}-{idx}"))) {
+                Ok(handle) => break handle,
+                Err(_) => thread::sleep(Duration::from_millis(1)),
+            }
+        };
+
+        handle.recv_fast(Duration::from_millis(500))?;
+        samples.push(started.elapsed());
+        handle.recv_full(Duration::from_millis(500))?;
+    }
+
+    let avg_ms = average_ms(&samples);
+    let p95_ms = percentile_ms(&samples, 0.95);
+    let p99_ms = percentile_ms(&samples, 0.99);
+    let max_ms = max_ms(&samples);
+
+    println!(
+        "TTFT benchmark ({name}) samples={} avg={avg_ms:.3}ms p95={p95_ms:.3}ms p99={p99_ms:.3}ms max={max_ms:.3}ms warn={warn_ms}ms fail={fail_ms}ms",
+        samples.len()
+    );
+
+    if p95_ms > warn_ms as f64 {
+        println!(
+            "::warning title=TTFT warning::p95 TTFT {p95_ms:.3}ms exceeded warning threshold {warn_ms}ms in {name} benchmark"
+        );
+    }
+
+    assert!(
+        p95_ms <= fail_ms as f64,
+        "TTFT regression in {name} benchmark: p95={p95_ms:.3}ms exceeded fail threshold {fail_ms}ms"
+    );
+
+    Ok(())
 }
 
 #[test]
@@ -139,4 +222,25 @@ fn test_async_pipeline_ttft_fast_state_under_50ms() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+#[test]
+fn test_async_pipeline_ttft_benchmark_short_gate() -> anyhow::Result<()> {
+    run_ttft_benchmark(
+        "short",
+        env_usize_with_default("TTFT_SHORT_ITERATIONS", 40),
+        env_u64_with_default("TTFT_WARN_MS", 35),
+        env_u64_with_default("TTFT_FAIL_MS", 50),
+    )
+}
+
+#[test]
+#[ignore = "Nightly long benchmark; run explicitly in scheduled CI"]
+fn test_async_pipeline_ttft_benchmark_long_gate() -> anyhow::Result<()> {
+    run_ttft_benchmark(
+        "long",
+        env_usize_with_default("TTFT_LONG_ITERATIONS", 400),
+        env_u64_with_default("TTFT_WARN_MS", 40),
+        env_u64_with_default("TTFT_FAIL_MS", 50),
+    )
 }

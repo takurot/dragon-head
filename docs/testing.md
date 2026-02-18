@@ -32,6 +32,7 @@ The CI pipeline is defined in `.github/workflows/`.
 
 - **`ci.yml`**: Runs `fmt`, `clippy`, unit tests, and integration tests.
 - **`e2e.yml`**: Runs E2E tests against a headless browser.
+- **Performance Gate**: `ci.yml` runs a short TTFT benchmark on PRs, and `e2e.yml` runs the long TTFT benchmark on nightly schedule.
 
 ## 3. Running Tests Locally
 
