@@ -152,9 +152,10 @@ fn test_action_execution_verify_required() -> anyhow::Result<()> {
 
     // Check if error is ActionError::VerifyRequired
     if let Some(action_err) = err.downcast_ref::<core_runtime::error::ActionError>() {
-        match action_err {
-            core_runtime::error::ActionError::VerifyRequired => return Ok(()),
+        if matches!(action_err, core_runtime::error::ActionError::VerifyRequired) {
+            return Ok(());
         }
+        panic!("Expected VerifyRequired, got ActionError variant: {action_err:?}");
     }
 
     panic!("Expected ActionError::VerifyRequired, got: {:?}", err);

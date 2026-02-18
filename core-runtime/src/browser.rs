@@ -3,13 +3,17 @@ use headless_chrome::{Browser, LaunchOptions};
 use std::{
     cmp::min,
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
     error::{ActionError, VerifyError, WaitError},
+    policy::{ApprovalScope, PolicyAction, PolicyContext, PolicyEngine, PolicyRule},
     sre::{
         normalize_dom, normalize_dom_with_refinement, LoadProfile, SemanticNode, SemanticState,
         SubtreeRefinementConfig,
@@ -83,6 +87,28 @@ struct StableKeyIndexEntry {
     alias: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyApprovalRequest {
+    pub rule_id: String,
+    pub scope: ApprovalScope,
+    pub action: String,
+    pub target_signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GrantedPolicyApproval {
+    request: PolicyApprovalRequest,
+    granted_navigation_epoch: u64,
+    expires_at_epoch_ms: Option<u128>,
+    remaining_uses: Option<u32>,
+}
+
+#[derive(Default)]
+struct PolicyApprovalState {
+    pending: Option<PolicyApprovalRequest>,
+    granted: Vec<GrantedPolicyApproval>,
+}
+
 pub struct BrowserClient {
     inner: Browser,
 }
@@ -104,6 +130,9 @@ impl BrowserClient {
             inner: tab,
             som_pipeline: Arc::new(Mutex::new(SomPipelineState::default())),
             stable_key_index: Arc::new(Mutex::new(HashMap::new())),
+            policy_engine: Arc::new(Mutex::new(PolicyEngine::default())),
+            policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
+            navigation_epoch: Arc::new(AtomicU64::new(0)),
         })
     }
 }
@@ -112,6 +141,9 @@ pub struct PageSession {
     inner: Arc<headless_chrome::Tab>,
     som_pipeline: Arc<Mutex<SomPipelineState>>,
     stable_key_index: Arc<Mutex<HashMap<String, StableKeyIndexEntry>>>,
+    policy_engine: Arc<Mutex<PolicyEngine>>,
+    policy_approvals: Arc<Mutex<PolicyApprovalState>>,
+    navigation_epoch: Arc<AtomicU64>,
 }
 
 impl PageSession {
@@ -121,6 +153,8 @@ impl PageSession {
             .wait_until_navigated()
             .context("Failed to wait for navigation")?;
         self.clear_stable_key_index();
+        self.navigation_epoch.fetch_add(1, Ordering::Relaxed);
+        self.clear_pending_policy_approval();
         Ok(())
     }
 
@@ -462,6 +496,54 @@ impl PageSession {
             .and_then(|index| index.get(stable_key).and_then(|entry| entry.alias.clone()))
     }
 
+    /// Replace policy rules for this page session.
+    pub fn set_policy_rules(&self, rules: Vec<PolicyRule>) -> Result<()> {
+        let engine = PolicyEngine::try_new(rules)?;
+        let mut guard = self
+            .policy_engine
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock policy engine"))?;
+        *guard = engine;
+        Ok(())
+    }
+
+    /// Returns the current pending human-approval request, if any.
+    pub fn pending_policy_approval(&self) -> Option<PolicyApprovalRequest> {
+        self.policy_approvals
+            .lock()
+            .ok()
+            .and_then(|state| state.pending.clone())
+    }
+
+    /// Approve the latest pending policy request.
+    pub fn approve_pending_policy_action(&self) -> Result<()> {
+        let mut guard = self
+            .policy_approvals
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
+
+        let Some(request) = guard.pending.take() else {
+            anyhow::bail!("No pending policy approval request");
+        };
+
+        let granted_navigation_epoch = self.navigation_epoch.load(Ordering::Relaxed);
+        let now_ms = epoch_millis();
+        let (expires_at_epoch_ms, remaining_uses) = match request.scope {
+            ApprovalScope::ActionOnly => (None, Some(1)),
+            ApprovalScope::UntilNavigation => (None, None),
+            ApprovalScope::Timeboxed { ms } => (Some(now_ms + u128::from(ms)), None),
+        };
+
+        guard.granted.push(GrantedPolicyApproval {
+            request,
+            granted_navigation_epoch,
+            expires_at_epoch_ms,
+            remaining_uses,
+        });
+
+        Ok(())
+    }
+
     /// Verify element text against an expected value.
     /// On mismatch, triggers a SoM capture to help disambiguate recovery.
     pub fn verify_text(&self, target_id: i64, expected_text: &str) -> Result<()> {
@@ -489,6 +571,8 @@ impl PageSession {
         action: &str,
         value: Option<&str>,
     ) -> Result<()> {
+        self.enforce_policy(target_id, stable_key, action)?;
+
         // First attempt: use target_id if available
         if let Some(bid) = target_id {
             match self.perform_action_by_id(bid, action, value) {
@@ -544,6 +628,135 @@ impl PageSession {
 
         self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
         Err(ActionError::VerifyRequired.into())
+    }
+
+    fn enforce_policy(
+        &self,
+        target_id: Option<i64>,
+        stable_key: Option<&str>,
+        action: &str,
+    ) -> Result<()> {
+        let captured = self.capture_state(LoadProfile::Interactive)?;
+        let target_node = resolve_policy_target_node(captured.root(), target_id, stable_key);
+
+        let target_role = target_node.map(|node| node.role.clone());
+        let target_text = target_node.and_then(policy_target_text);
+        let surrounding_text = target_node.map(policy_context_text);
+        let target_signature = policy_target_signature(target_node, target_id, stable_key);
+        let url = self.current_url()?;
+
+        let decision = {
+            let guard = self
+                .policy_engine
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Failed to lock policy engine"))?;
+            guard.evaluate(&PolicyContext {
+                url,
+                action: action.to_string(),
+                target_role,
+                target_text,
+                surrounding_text,
+            })
+        };
+
+        match decision.action {
+            PolicyAction::Allow => Ok(()),
+            PolicyAction::Block => Err(ActionError::Blocked {
+                rule_id: decision
+                    .rule_id
+                    .unwrap_or_else(|| "unnamed-policy-rule".to_string()),
+            }
+            .into()),
+            PolicyAction::RequireHumanApproval => {
+                let rule_id = decision
+                    .rule_id
+                    .unwrap_or_else(|| "unnamed-policy-rule".to_string());
+                let scope = decision.scope.unwrap_or(ApprovalScope::ActionOnly);
+
+                if self.consume_granted_policy_approval(&rule_id, scope, action, &target_signature)
+                {
+                    return Ok(());
+                }
+
+                self.set_pending_policy_approval(PolicyApprovalRequest {
+                    rule_id: rule_id.clone(),
+                    scope,
+                    action: action.to_string(),
+                    target_signature,
+                })?;
+                Err(ActionError::HumanApprovalRequired { rule_id, scope }.into())
+            }
+        }
+    }
+
+    fn current_url(&self) -> Result<String> {
+        let value = self.evaluate_script_value("window.location.href", false)?;
+        value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .context("Failed to resolve current page URL for policy evaluation")
+    }
+
+    fn set_pending_policy_approval(&self, request: PolicyApprovalRequest) -> Result<()> {
+        let mut guard = self
+            .policy_approvals
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
+        guard.pending = Some(request);
+        Ok(())
+    }
+
+    fn clear_pending_policy_approval(&self) {
+        if let Ok(mut guard) = self.policy_approvals.lock() {
+            guard.pending = None;
+        }
+    }
+
+    fn consume_granted_policy_approval(
+        &self,
+        rule_id: &str,
+        scope: ApprovalScope,
+        action: &str,
+        target_signature: &str,
+    ) -> bool {
+        let now_ms = epoch_millis();
+        let navigation_epoch = self.navigation_epoch.load(Ordering::Relaxed);
+
+        let Ok(mut guard) = self.policy_approvals.lock() else {
+            return false;
+        };
+
+        guard
+            .granted
+            .retain(|grant| is_grant_valid(grant, navigation_epoch, now_ms));
+
+        let Some(index) = guard.granted.iter().position(|grant| {
+            grant.request.rule_id == rule_id
+                && grant.request.scope == scope
+                && grant.request.action == action
+                && grant.request.target_signature == target_signature
+        }) else {
+            return false;
+        };
+
+        match scope {
+            ApprovalScope::ActionOnly => {
+                let mut should_remove = true;
+                if let Some(remaining) = guard.granted[index].remaining_uses.as_mut() {
+                    if *remaining > 1 {
+                        *remaining -= 1;
+                        should_remove = false;
+                    }
+                }
+
+                if should_remove {
+                    guard.granted.remove(index);
+                }
+            }
+            ApprovalScope::UntilNavigation | ApprovalScope::Timeboxed { .. } => {}
+        }
+
+        true
     }
 
     /// Wait until a semantic target reaches the requested state.
@@ -951,6 +1164,109 @@ impl<'a> SreEventSubscriber<'a> {
     }
 }
 
+fn resolve_policy_target_node<'a>(
+    root: &'a SemanticNode,
+    target_id: Option<i64>,
+    stable_key: Option<&str>,
+) -> Option<&'a SemanticNode> {
+    if let Some(id) = target_id {
+        if let Some(node) = find_node_by_id(root, id) {
+            return Some(node);
+        }
+    }
+
+    if let Some(key) = stable_key {
+        if let Some(node) = find_node_by_key(root, key) {
+            return Some(node);
+        }
+    }
+
+    None
+}
+
+fn policy_context_text(node: &SemanticNode) -> String {
+    let mut parts = Vec::new();
+
+    push_policy_text_part(&mut parts, node.label.as_deref());
+
+    if let Some(attrs) = &node.attributes {
+        for value in attrs.values() {
+            push_policy_text_part(&mut parts, Some(value.as_str()));
+        }
+    }
+
+    parts.join(" ")
+}
+
+fn policy_target_text(node: &SemanticNode) -> Option<String> {
+    let mut parts = Vec::new();
+    push_policy_text_part(&mut parts, node.label.as_deref());
+    collect_policy_descendant_text(node, &mut parts);
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
+fn collect_policy_descendant_text(node: &SemanticNode, parts: &mut Vec<String>) {
+    for child in &node.children {
+        if child.role == "text" {
+            push_policy_text_part(parts, child.label.as_deref());
+        }
+        collect_policy_descendant_text(child, parts);
+    }
+}
+
+fn push_policy_text_part(parts: &mut Vec<String>, value: Option<&str>) {
+    let Some(normalized) = value
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
+    else {
+        return;
+    };
+
+    if parts.iter().any(|existing| existing == normalized) {
+        return;
+    }
+
+    parts.push(normalized.to_string());
+}
+
+fn policy_target_signature(
+    node: Option<&SemanticNode>,
+    target_id: Option<i64>,
+    stable_key: Option<&str>,
+) -> String {
+    if let Some(key) = node.and_then(|resolved| resolved.stable_key.as_deref()) {
+        return key.to_string();
+    }
+
+    if let Some(key) = stable_key {
+        let normalized = key.trim();
+        if !normalized.is_empty() {
+            return normalized.to_string();
+        }
+    }
+
+    if let Some(id) = node.map(|resolved| resolved.backend_node_id).or(target_id) {
+        return format!("backend_node_id:{id}");
+    }
+
+    "unknown-target".to_string()
+}
+
+fn is_grant_valid(grant: &GrantedPolicyApproval, navigation_epoch: u64, now_ms: u128) -> bool {
+    match grant.request.scope {
+        ApprovalScope::ActionOnly => grant.remaining_uses.unwrap_or(0) > 0,
+        ApprovalScope::UntilNavigation => grant.granted_navigation_epoch == navigation_epoch,
+        ApprovalScope::Timeboxed { .. } => grant
+            .expires_at_epoch_ms
+            .is_some_and(|expires_at| now_ms <= expires_at),
+    }
+}
+
 fn target_matches_state(
     state: &SemanticState,
     target: &SemanticTarget,
@@ -1223,6 +1539,13 @@ fn value_to_string_vec(value: &serde_json::Value) -> Result<Vec<String>> {
 
 fn duration_to_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn epoch_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 #[cfg(test)]
