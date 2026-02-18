@@ -4,7 +4,8 @@ use std::{
 };
 
 use core_runtime::sre::{
-    AsyncPipeline, AsyncPipelineConfig, AuditEvent, LoadProfile, SemanticNode, SemanticState,
+    AsyncPipeline, AsyncPipelineConfig, AuditEvent, LoadProfile, PipelineSubmitError, SemanticNode,
+    SemanticState,
 };
 
 fn build_state(label: &str) -> SemanticState {
@@ -86,7 +87,14 @@ fn run_ttft_benchmark(
         let handle = loop {
             match pipeline.submit_state(build_state(&format!("{name}-{idx}"))) {
                 Ok(handle) => break handle,
-                Err(_) => thread::sleep(Duration::from_millis(1)),
+                Err(PipelineSubmitError::Backpressure { .. }) => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(PipelineSubmitError::Closed { queue }) => {
+                    anyhow::bail!(
+                        "pipeline queue {queue:?} closed while collecting {name} benchmark sample {idx}"
+                    );
+                }
             }
         };
 
