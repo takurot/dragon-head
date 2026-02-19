@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dragon-head.dev/schema/policy-rules.schema.json",
+  "title": "PolicyRuleSet",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "action"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "domain": {
+        "type": "string",
+        "minLength": 1
+      },
+      "path_prefix": {
+        "type": "string",
+        "minLength": 1
+      },
+      "role": {
+        "type": "string",
+        "minLength": 1
+      },
+      "text_regex": {
+        "type": "string",
+        "minLength": 1
+      },
+      "context_regex": {
+        "type": "string",
+        "minLength": 1
+      },
+      "action": {
+        "type": "string",
+        "enum": [
+          "allow",
+          "block",
+          "require_human_approval"
+        ]
+      },
+      "scope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "action_only",
+              "until_navigation",
+              "timeboxed"
+            ]
+          },
+          "ms": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "timeboxed"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "ms"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "ms"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "action": {
+              "const": "require_human_approval"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "scope"
+          ]
+        },
+        "else": {
+          "not": {
+            "required": [
+              "scope"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

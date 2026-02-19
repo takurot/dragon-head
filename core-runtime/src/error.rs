@@ -1,9 +1,18 @@
 use thiserror::Error;
 
+use crate::policy::ApprovalScope;
+
 #[derive(Error, Debug)]
 pub enum ActionError {
     #[error("Action failed: target_id and stable_key both failed. Verification required.")]
     VerifyRequired,
+    #[error("Action blocked by policy rule '{rule_id}'.")]
+    Blocked { rule_id: String },
+    #[error("Action requires human approval by policy rule '{rule_id}' with scope {scope:?}.")]
+    HumanApprovalRequired {
+        rule_id: String,
+        scope: ApprovalScope,
+    },
 }
 
 #[derive(Error, Debug)]

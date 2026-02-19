@@ -102,6 +102,28 @@ jobs:
     - name: Run RFC 6902 semantic delta suite
       run: cargo test -p core-runtime --test sre_semantic_delta --verbose
 
+  policy-regression:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install chromium
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
+    - name: Run policy engine and enforcement regression suite
+      env:
+        CHROME_INSTALLED: "true"
+      run: |
+        cargo test -p core-runtime --test policy_engine --verbose
+        cargo test -p core-runtime --test policy_enforcement --verbose
+
+  policy-schema-lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run policy rules schema lint
+      run: cargo test -p core-runtime --test policy_schema_lint --verbose
+
   som-regression:
     runs-on: ubuntu-latest
     steps:

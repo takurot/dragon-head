@@ -198,21 +198,21 @@
   - [x] Queue分離後も機能退行がなく、TTFT目標達成の見込みが示せる。
 
 ### PR-09: SEC-01 Context-Aware Policy Engine
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: SEC-01
 - Dependencies: PR-04
 - 実装タスク
-  - [ ] Policyルール定義（domain/path/role/text/context）を実装する。
-  - [ ] `allow` / `block` / `require_human_approval` の判定を実装する。
-  - [ ] approval scope（`action_only`, `until_navigation`, `timeboxed(ms)`）を実装する。
+  - [x] Policyルール定義（domain/path/role/text/context）を実装する。
+  - [x] `allow` / `block` / `require_human_approval` の判定を実装する。
+  - [x] approval scope（`action_only`, `until_navigation`, `timeboxed(ms)`）を実装する。
 - テストタスク
-  - [ ] ルール条件ごとの判定テストを追加する。
-  - [ ] scopeの有効期限・navigation跨ぎの挙動テストを追加する。
+  - [x] ルール条件ごとの判定テストを追加する。
+  - [x] scopeの有効期限・navigation跨ぎの挙動テストを追加する。
 - CIタスク
-  - [ ] policy regression suiteを必須ジョブ化する。
-  - [ ] ルールファイルの静的検証（schema lint）を追加する。
+  - [x] policy regression suiteを必須ジョブ化する。
+  - [x] ルールファイルの静的検証（schema lint）を追加する。
 - Exit Criteria
-  - [ ] 重要アクションに対する事前審査が必ず実行される。
+  - [x] 重要アクションに対する事前審査が必ず実行される。
 
 ### PR-10: AUD-01 Structured Audit Log & PII Redaction
 - Status: `NOT_STARTED`

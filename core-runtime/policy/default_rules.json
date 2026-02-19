@@ -1,0 +1,30 @@
+[
+  {
+    "id": "block-account-destruction",
+    "role": "button",
+    "text_regex": "(?i)delete\\s+account|remove\\s+account|close\\s+account",
+    "context_regex": "(?i)account|profile",
+    "action": "block"
+  },
+  {
+    "id": "require-approval-financial-action",
+    "role": "button",
+    "text_regex": "(?i)pay|purchase|transfer|submit\\s+order|confirm",
+    "context_regex": "(?i)total\\s*:|amount\\s*:|\\$\\s*[0-9]",
+    "action": "require_human_approval",
+    "scope": {
+      "type": "action_only"
+    }
+  },
+  {
+    "id": "require-approval-payments-domain",
+    "domain": "payments.example.com",
+    "path_prefix": "/checkout",
+    "role": "button",
+    "text_regex": "(?i)submit|confirm|pay",
+    "action": "require_human_approval",
+    "scope": {
+      "type": "until_navigation"
+    }
+  }
+]
