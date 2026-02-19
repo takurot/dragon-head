@@ -99,6 +99,9 @@ pub struct PolicyApprovalRequest {
 struct GrantedPolicyApproval {
     request: PolicyApprovalRequest,
     granted_navigation_epoch: u64,
+    /// URL at the time of approval grant. Used to detect click-driven navigations
+    /// that bypass `navigate()` and thus do not increment `navigation_epoch`.
+    granted_url: String,
     expires_at_epoch_ms: Option<u128>,
     remaining_uses: Option<u32>,
 }
@@ -534,7 +537,11 @@ impl PageSession {
             anyhow::bail!("No pending policy approval request");
         };
 
+        // Drop the lock before calling current_url() to avoid potential deadlock.
+        drop(guard);
+
         let granted_navigation_epoch = self.navigation_epoch.load(Ordering::Relaxed);
+        let granted_url = self.current_url().unwrap_or_default();
         let now_ms = epoch_millis();
         let (expires_at_epoch_ms, remaining_uses) = match request.scope {
             ApprovalScope::ActionOnly => (None, Some(1)),
@@ -542,9 +549,14 @@ impl PageSession {
             ApprovalScope::Timeboxed { ms } => (Some(now_ms + u128::from(ms)), None),
         };
 
+        let mut guard = self
+            .policy_approvals
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
         guard.granted.push(GrantedPolicyApproval {
             request,
             granted_navigation_epoch,
+            granted_url,
             expires_at_epoch_ms,
             remaining_uses,
         });
@@ -649,7 +661,8 @@ impl PageSession {
 
         let target_role = target_node.map(|node| node.role.clone());
         let target_text = target_node.and_then(policy_target_text);
-        let surrounding_text = target_node.map(policy_context_text);
+        let surrounding_text =
+            target_node.map(|node| policy_context_text(node, captured.root()));
         let target_signature = policy_target_signature(target_node, target_id, stable_key);
         let url = self.current_url()?;
 
@@ -659,7 +672,7 @@ impl PageSession {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Failed to lock policy engine"))?;
             guard.evaluate(&PolicyContext {
-                url,
+                url: url.clone(),
                 action: action.to_string(),
                 target_role,
                 target_text,
@@ -681,8 +694,13 @@ impl PageSession {
                     .unwrap_or_else(|| "unnamed-policy-rule".to_string());
                 let scope = decision.scope.unwrap_or(ApprovalScope::ActionOnly);
 
-                if self.consume_granted_policy_approval(&rule_id, scope, action, &target_signature)
-                {
+                if self.consume_granted_policy_approval(
+                    &rule_id,
+                    scope,
+                    action,
+                    &target_signature,
+                    &url,
+                ) {
                     return Ok(());
                 }
 
@@ -726,6 +744,7 @@ impl PageSession {
         scope: ApprovalScope,
         action: &str,
         target_signature: &str,
+        current_url: &str,
     ) -> bool {
         let now_ms = epoch_millis();
         let navigation_epoch = self.navigation_epoch.load(Ordering::Relaxed);
@@ -736,7 +755,7 @@ impl PageSession {
 
         guard
             .granted
-            .retain(|grant| is_grant_valid(grant, navigation_epoch, now_ms));
+            .retain(|grant| is_grant_valid(grant, navigation_epoch, current_url, now_ms));
 
         let Some(index) = guard.granted.iter().position(|grant| {
             grant.request.rule_id == rule_id
@@ -1192,14 +1211,45 @@ fn resolve_policy_target_node<'a>(
     None
 }
 
-fn policy_context_text(node: &SemanticNode) -> String {
+/// Find the immediate parent node of `target` in the semantic tree rooted at `root`.
+fn find_parent_of_node<'a>(
+    root: &'a SemanticNode,
+    target: &SemanticNode,
+) -> Option<&'a SemanticNode> {
+    for child in &root.children {
+        if std::ptr::eq(child as *const _, target as *const _) {
+            return Some(root);
+        }
+        if let Some(found) = find_parent_of_node(child, target) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Collect surrounding context text for policy evaluation.
+///
+/// In addition to the target node's own label and attributes, this walks the
+/// parent container and collects visible text from sibling nodes so that
+/// `context_regex` rules (e.g. matching `Total: $149` outside a button) work
+/// correctly for realistic checkout DOM structures.
+fn policy_context_text(node: &SemanticNode, root: &SemanticNode) -> String {
     let mut parts = Vec::new();
 
+    // Target node: label + attribute values
     push_policy_text_part(&mut parts, node.label.as_deref());
-
     if let Some(attrs) = &node.attributes {
         for value in attrs.values() {
             push_policy_text_part(&mut parts, Some(value.as_str()));
+        }
+    }
+
+    // Parent container: label and direct children's text
+    if let Some(parent) = find_parent_of_node(root, node) {
+        push_policy_text_part(&mut parts, parent.label.as_deref());
+        for sibling in &parent.children {
+            // Collect text-role siblings and their descendant text
+            collect_policy_descendant_text(sibling, &mut parts);
         }
     }
 
@@ -1265,13 +1315,23 @@ fn policy_target_signature(
     "unknown-target".to_string()
 }
 
-fn is_grant_valid(grant: &GrantedPolicyApproval, navigation_epoch: u64, now_ms: u128) -> bool {
+fn is_grant_valid(
+    grant: &GrantedPolicyApproval,
+    navigation_epoch: u64,
+    current_url: &str,
+    now_ms: u128,
+) -> bool {
     match grant.request.scope {
         ApprovalScope::ActionOnly => {
             grant.granted_navigation_epoch == navigation_epoch
                 && grant.remaining_uses.unwrap_or(0) > 0
         }
-        ApprovalScope::UntilNavigation => grant.granted_navigation_epoch == navigation_epoch,
+        // UntilNavigation expires when either the explicit navigate() increments the epoch
+        // OR the URL changed due to a click-driven navigation (which does not increment epoch).
+        ApprovalScope::UntilNavigation => {
+            grant.granted_navigation_epoch == navigation_epoch
+                && grant.granted_url == current_url
+        }
         ApprovalScope::Timeboxed { .. } => grant
             .expires_at_epoch_ms
             .is_some_and(|expires_at| now_ms <= expires_at),

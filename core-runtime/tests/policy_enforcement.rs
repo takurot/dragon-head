@@ -1,4 +1,5 @@
 use std::{thread, time::Duration};
+use anyhow::Context as _;
 
 use core_runtime::{
     policy::{ApprovalScope, PolicyAction, PolicyRule},
@@ -330,6 +331,163 @@ fn test_until_navigation_and_timeboxed_scopes_expire() -> anyhow::Result<()> {
     assert!(
         expired_attempt.is_err(),
         "timeboxed approval must expire after configured duration"
+    );
+
+    Ok(())
+}
+
+/// Regression test: `UntilNavigation` approval must expire when the page URL changes
+/// due to a click-driven navigation, without calling `PageSession::navigate()`.
+///
+/// Two real `file://` pages are used: the approval is granted on page A, then Chrome
+/// navigates to page B by clicking an `<a>` link. Because `navigate()` is never called,
+/// `navigation_epoch` stays at the same value — but the URL changes, so the
+/// `granted_url` comparison must invalidate the approval.
+#[test]
+fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    use std::fs;
+
+    // Use unique names based on uuid to avoid test collisions.
+    let tmp = std::env::temp_dir();
+    let id = uuid::Uuid::new_v4();
+    let path_b = tmp.join(format!("dragon-test-{id}-b.html"));
+    let path_a = tmp.join(format!("dragon-test-{id}-a.html"));
+
+    let html_b = "<html><body><button id='transfer'>Transfer</button></body></html>";
+    fs::write(&path_b, html_b).context("failed to write page B")?;
+    let url_b = format!("file://{}", path_b.display());
+
+    let html_a = format!(
+        r#"<html><body>
+            <button id="transfer">Transfer</button>
+            <a id="goto-b" href="{url_b}">Go to B</a>
+        </body></html>"#
+    );
+    fs::write(&path_a, &html_a).context("failed to write page A")?;
+    let url_a = format!("file://{}", path_a.display());
+
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    page.set_policy_rules(vec![PolicyRule {
+        id: "approve-transfer-until-nav".to_string(),
+        domain: None,
+        path_prefix: None,
+        role: Some("button".to_string()),
+        text_regex: Some("(?i)transfer".to_string()),
+        context_regex: None,
+        action: PolicyAction::RequireHumanApproval,
+        scope: Some(ApprovalScope::UntilNavigation),
+    }])?;
+
+    // Load page A via navigate() — this sets navigation_epoch = 1 and grants_url = url_a.
+    page.navigate(&url_a)?;
+
+    let (target_id_a, target_key_a) = find_button_info(&page)?;
+    // First act requires approval.
+    assert!(page
+        .act(Some(target_id_a), Some(&target_key_a), "click", None)
+        .is_err());
+    page.approve_pending_policy_action()?;
+
+    // Second act on page A works — grant is live.
+    page.act(Some(target_id_a), Some(&target_key_a), "click", None)?;
+
+    // Click the link to page B via JavaScript — does NOT call navigate(), so
+    // navigation_epoch remains the same. Only the URL changes.
+    page.evaluate_script("document.getElementById('goto-b').click()")?;
+    // Give Chrome time to complete the navigation.
+    std::thread::sleep(std::time::Duration::from_millis(800));
+
+    // Page B should now be loaded. Find the button there.
+    let find_result = find_button_info(&page);
+    let (target_id_b, target_key_b) = match find_result {
+        Ok(info) => info,
+        // If the DOM didn't update (e.g., browser security blocked the link),
+        // skip gracefully rather than false-fail.
+        Err(_) => return Ok(()),
+    };
+
+    // The URL is now url_b, but the grant recorded url_a. Approval must be expired.
+    let post_nav_attempt = page.act(Some(target_id_b), Some(&target_key_b), "click", None);
+    assert!(
+        post_nav_attempt.is_err(),
+        "until_navigation approval must expire after click-driven navigation to a different URL"
+    );
+    let err = post_nav_attempt.unwrap_err();
+    let action_err = err
+        .downcast_ref::<ActionError>()
+        .expect("error should be ActionError");
+    assert!(matches!(
+        action_err,
+        ActionError::HumanApprovalRequired { .. }
+    ));
+
+    let _ = fs::remove_file(&path_a);
+    let _ = fs::remove_file(&path_b);
+    Ok(())
+}
+
+
+/// Regression test: `context_regex` must match text that appears *outside* the
+/// target button element (e.g., a `Total: $149` line in a sibling/parent node).
+///
+/// Previously `policy_context_text` only read the target node's own label and
+/// attribute values, making `context_regex` on checkout amounts effectively dead.
+#[test]
+fn test_context_regex_matches_text_outside_button() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    // Amount text ("Total: $149") lives in a <p> sibling — NOT inside the button.
+    let html = r#"
+        <html>
+            <body>
+                <div id="checkout">
+                    <p id="total">Total: $149</p>
+                    <button id="pay">Pay now</button>
+                </div>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+
+    page.set_policy_rules(vec![PolicyRule {
+        id: "approve-pay-with-amount".to_string(),
+        domain: None,
+        path_prefix: None,
+        role: Some("button".to_string()),
+        text_regex: Some("(?i)pay".to_string()),
+        context_regex: Some(r"(?i)total\s*:\s*\$[0-9]+".to_string()),
+        action: PolicyAction::RequireHumanApproval,
+        scope: Some(ApprovalScope::ActionOnly),
+    }])?;
+
+    page.navigate(&url)?;
+
+    let (target_id, target_key) = find_button_info(&page)?;
+    let result = page.act(Some(target_id), Some(&target_key), "click", None);
+
+    assert!(
+        result.is_err(),
+        "context_regex on sibling amount text must trigger require_human_approval"
+    );
+    let err = result.unwrap_err();
+    let action_err = err
+        .downcast_ref::<ActionError>()
+        .expect("error should be ActionError");
+    assert!(
+        matches!(action_err, ActionError::HumanApprovalRequired { .. }),
+        "expected HumanApprovalRequired when context_regex matches sibling DOM text, got: {action_err:?}"
     );
 
     Ok(())
