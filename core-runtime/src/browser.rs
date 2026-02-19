@@ -661,8 +661,7 @@ impl PageSession {
 
         let target_role = target_node.map(|node| node.role.clone());
         let target_text = target_node.and_then(policy_target_text);
-        let surrounding_text =
-            target_node.map(|node| policy_context_text(node, captured.root()));
+        let surrounding_text = target_node.map(|node| policy_context_text(node, captured.root()));
         let target_signature = policy_target_signature(target_node, target_id, stable_key);
         let url = self.current_url()?;
 
@@ -1329,8 +1328,7 @@ fn is_grant_valid(
         // UntilNavigation expires when either the explicit navigate() increments the epoch
         // OR the URL changed due to a click-driven navigation (which does not increment epoch).
         ApprovalScope::UntilNavigation => {
-            grant.granted_navigation_epoch == navigation_epoch
-                && grant.granted_url == current_url
+            grant.granted_navigation_epoch == navigation_epoch && grant.granted_url == current_url
         }
         ApprovalScope::Timeboxed { .. } => grant
             .expires_at_epoch_ms

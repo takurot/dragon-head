@@ -1,5 +1,5 @@
-use std::{thread, time::Duration};
 use anyhow::Context as _;
+use std::{thread, time::Duration};
 
 use core_runtime::{
     policy::{ApprovalScope, PolicyAction, PolicyRule},
@@ -370,7 +370,6 @@ fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<
     fs::write(&path_a, &html_a).context("failed to write page A")?;
     let url_a = format!("file://{}", path_a.display());
 
-
     let client = BrowserClient::new()?;
     let page = client.new_page()?;
 
@@ -432,7 +431,6 @@ fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<
     let _ = fs::remove_file(&path_b);
     Ok(())
 }
-
 
 /// Regression test: `context_regex` must match text that appears *outside* the
 /// target button element (e.g., a `Total: $149` line in a sibling/parent node).
