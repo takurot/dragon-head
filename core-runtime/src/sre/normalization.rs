@@ -3,8 +3,12 @@ use super::stable_key::StableKeyGenerator;
 use super::state::SemanticNode;
 use anyhow::Result;
 use headless_chrome::protocol::cdp::DOM::Node;
+use regex::Regex;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::OnceLock,
+};
 
 const DEFAULT_VIEWPORT_WIDTH_PX: f64 = 800.0;
 const DEFAULT_VIEWPORT_HEIGHT_PX: f64 = 600.0;
@@ -165,6 +169,14 @@ fn traverse_node(
                 attributes.insert(key.clone(), val.clone());
             }
         }
+
+        if node_name == "input" {
+            if let Some(t) = attributes.get("type") {
+                if (t == "password" || t == "email") && attributes.contains_key("value") {
+                    attributes.insert("value".to_string(), "***".to_string());
+                }
+            }
+        }
     }
 
     let mut children = Vec::new();
@@ -271,7 +283,7 @@ fn extract_direct_text_label(node: &Node) -> Option<String> {
         }
         let text = child.node_value.trim();
         if !text.is_empty() {
-            parts.push(text.to_string());
+            parts.push(redact_sensitive_text(text));
         }
     }
 
@@ -280,6 +292,13 @@ fn extract_direct_text_label(node: &Node) -> Option<String> {
     } else {
         Some(parts.join(" "))
     }
+}
+
+fn redact_sensitive_text(text: &str) -> String {
+    static CC_RE: OnceLock<Regex> = OnceLock::new();
+    let re = CC_RE.get_or_init(|| Regex::new(r"(?:\d[ -]*?){13,16}").expect("Invalid CC regex"));
+
+    re.replace_all(text, "****-****-****-XXXX").into_owned()
 }
 
 fn resolve_quadrant(
@@ -626,6 +645,65 @@ mod tests {
         assert_eq!(div.backend_node_id, 504);
         assert_eq!(section.label.as_deref(), Some("right_v2"));
         assert_eq!(section.backend_node_id, 506);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pii_redaction() -> Result<()> {
+        let password_input = make_element_node(
+            104,
+            "input",
+            vec![("type", "password"), ("value", "MySecretP@ssw0rd!")],
+            vec![],
+        )?;
+        let email_input = make_element_node(
+            105,
+            "input",
+            vec![("type", "email"), ("value", "test@example.com")],
+            vec![],
+        )?;
+        let safe_input = make_element_node(
+            106,
+            "input",
+            vec![("type", "text"), ("value", "Hello World")],
+            vec![],
+        )?;
+
+        let cc_text = make_text_node(107, "Here is my card: 1234-5678-9012-3456 please charge it")?;
+        let cc_container = make_element_node(108, "div", vec![], vec![cc_text])?;
+
+        let body = make_element_node(
+            103,
+            "body",
+            vec![],
+            vec![password_input, email_input, safe_input, cc_container],
+        )?;
+        let html = make_element_node(102, "html", vec![], vec![body])?;
+        let dom = make_document_node(101, vec![html])?;
+
+        let sem_node = normalize_dom(LoadProfile::Minimal, &dom)?;
+
+        let body_node = &sem_node.children[0].children[0];
+
+        // Check password output
+        let pass_attr = body_node.children[0].attributes.as_ref().unwrap();
+        assert_eq!(pass_attr.get("value").unwrap(), "***");
+
+        // Check email output
+        let email_attr = body_node.children[1].attributes.as_ref().unwrap();
+        assert_eq!(email_attr.get("value").unwrap(), "***");
+
+        // Check safe text output
+        let safe_attr = body_node.children[2].attributes.as_ref().unwrap();
+        assert_eq!(safe_attr.get("value").unwrap(), "Hello World");
+
+        // Check text redact output
+        let cc_extracted_label = body_node.children[3].label.as_deref().unwrap();
+        assert_eq!(
+            cc_extracted_label,
+            "Here is my card: ****-****-****-XXXX please charge it"
+        );
 
         Ok(())
     }

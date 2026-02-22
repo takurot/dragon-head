@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod browser;
 pub mod policy;
 pub mod sre;

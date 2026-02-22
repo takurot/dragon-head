@@ -12,6 +12,7 @@ use std::{
 };
 
 use crate::{
+    audit::{AuditEvent, AuditLogger},
     error::{ActionError, VerifyError, WaitError},
     policy::{ApprovalScope, PolicyAction, PolicyContext, PolicyEngine, PolicyRule},
     sre::{
@@ -136,6 +137,7 @@ impl BrowserClient {
             policy_engine: Arc::new(Mutex::new(PolicyEngine::default())),
             policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
             navigation_epoch: Arc::new(AtomicU64::new(0)),
+            audit_logger: Arc::new(AuditLogger::new()),
         })
     }
 }
@@ -147,6 +149,7 @@ pub struct PageSession {
     policy_engine: Arc<Mutex<PolicyEngine>>,
     policy_approvals: Arc<Mutex<PolicyApprovalState>>,
     navigation_epoch: Arc<AtomicU64>,
+    pub audit_logger: Arc<AuditLogger>,
 }
 
 impl PageSession {
@@ -567,6 +570,15 @@ impl PageSession {
     /// Verify element text against an expected value.
     /// On mismatch, triggers a SoM capture to help disambiguate recovery.
     pub fn verify_text(&self, target_id: i64, expected_text: &str) -> Result<()> {
+        self.audit_logger.log(AuditEvent::ToolCall {
+            tool_name: "verify_text".to_string(),
+            args: serde_json::json!({
+                "target_id": target_id,
+                "expected_text": expected_text
+            }),
+            timestamp: epoch_millis() as u64,
+        });
+
         let actual_text = self.get_element_text(target_id)?;
         if normalize_text(&actual_text) == normalize_text(expected_text) {
             return Ok(());
@@ -591,6 +603,17 @@ impl PageSession {
         action: &str,
         value: Option<&str>,
     ) -> Result<()> {
+        self.audit_logger.log(AuditEvent::ToolCall {
+            tool_name: "act".to_string(),
+            args: serde_json::json!({
+                "target_id": target_id,
+                "stable_key": stable_key,
+                "action": action,
+                "value": value
+            }),
+            timestamp: epoch_millis() as u64,
+        });
+
         self.enforce_policy(target_id, stable_key, action)?;
 
         // First attempt: use target_id if available
@@ -679,6 +702,20 @@ impl PageSession {
             })
         };
 
+        self.audit_logger.log(AuditEvent::PolicyDecision {
+            rule_id: decision
+                .rule_id
+                .clone()
+                .unwrap_or_else(|| "unnamed-policy-rule".to_string()),
+            action: action.to_string(),
+            decision: match decision.action {
+                PolicyAction::Allow => "allow".to_string(),
+                PolicyAction::Block => "block".to_string(),
+                PolicyAction::RequireHumanApproval => "require_human_approval".to_string(),
+            },
+            timestamp: epoch_millis() as u64,
+        });
+
         match decision.action {
             PolicyAction::Allow => Ok(()),
             PolicyAction::Block => Err(ActionError::Blocked {
@@ -709,6 +746,14 @@ impl PageSession {
                     action: action.to_string(),
                     target_signature,
                 })?;
+
+                self.audit_logger.log(AuditEvent::HitlEvent {
+                    event_type: "request".to_string(),
+                    reason: Some(format!("Requires human approval for rule {}", rule_id)),
+                    user_id: None,
+                    timestamp: epoch_millis() as u64,
+                });
+
                 Err(ActionError::HumanApprovalRequired { rule_id, scope }.into())
             }
         }
@@ -917,7 +962,14 @@ impl PageSession {
             normalize_dom(profile, &root)?
         };
         self.replace_stable_key_index(&sem_root);
-        Ok(SemanticState::new(sem_root, profile))
+        let state = SemanticState::new(sem_root, profile);
+        self.audit_logger.log(AuditEvent::StateSnapshot {
+            state_hash: state.state_hash().to_string(),
+            page_instance_id: state.page_instance_id().to_string(),
+            timestamp: epoch_millis() as u64,
+            payload: serde_json::to_value(state.root()).unwrap_or(serde_json::Value::Null),
+        });
+        Ok(state)
     }
 
     fn replace_stable_key_index(&self, root: &SemanticNode) {
@@ -955,6 +1007,17 @@ impl PageSession {
             marks,
             image_png,
         };
+
+        self.audit_logger.log(AuditEvent::VisualCapture {
+            trigger: match capture.trigger {
+                SomTrigger::GetVisual => "get_visual".to_string(),
+                SomTrigger::ActAmbiguous => "act_ambiguous".to_string(),
+                SomTrigger::VerifyFailed => "verify_failed".to_string(),
+            },
+            marks_count: capture.marks.len(),
+            timestamp: epoch_millis() as u64,
+        });
+
         self.store_som_capture(capture.clone());
         Ok(capture)
     }
