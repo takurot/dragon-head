@@ -75,6 +75,8 @@ impl AuditLogger {
     }
 
     pub fn log(&self, event: AuditEvent) {
-        let _ = self.sender.send(event);
+        if let Err(e) = self.sender.send(event) {
+            eprintln!("[AUDIT][ERROR] Failed to send audit event: {}", e);
+        }
     }
 }

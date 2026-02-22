@@ -58,3 +58,31 @@ fn test_policy_decision_serialization() {
     assert!(serialized.contains(r#""type":"POLICY_DECISION""#));
     assert!(serialized.contains(r#""decision":"block""#));
 }
+
+#[test]
+fn test_state_patch_serialization() {
+    let event = AuditEvent::StatePatch {
+        state_hash: "patch-hash-456".to_string(),
+        page_instance_id: "page-02".to_string(),
+        timestamp: 9876543210,
+        patch: serde_json::json!([{"op": "replace", "path": "/title", "value": "New"}]),
+    };
+
+    let serialized = serde_json::to_string(&event).unwrap();
+    assert!(serialized.contains(r#""type":"STATE_PATCH""#));
+    assert!(serialized.contains(r#""state_hash":"patch-hash-456""#));
+}
+
+#[test]
+fn test_visual_capture_serialization() {
+    let event = AuditEvent::VisualCapture {
+        trigger: "get_visual".to_string(),
+        marks_count: 42,
+        timestamp: 1111111111,
+    };
+
+    let serialized = serde_json::to_string(&event).unwrap();
+    assert!(serialized.contains(r#""type":"VISUAL_CAPTURE""#));
+    assert!(serialized.contains(r#""trigger":"get_visual""#));
+    assert!(serialized.contains(r#""marks_count":42"#));
+}

@@ -149,7 +149,7 @@ pub struct PageSession {
     policy_engine: Arc<Mutex<PolicyEngine>>,
     policy_approvals: Arc<Mutex<PolicyApprovalState>>,
     navigation_epoch: Arc<AtomicU64>,
-    pub audit_logger: Arc<AuditLogger>,
+    pub(crate) audit_logger: Arc<AuditLogger>,
 }
 
 impl PageSession {
@@ -576,7 +576,7 @@ impl PageSession {
                 "target_id": target_id,
                 "expected_text": expected_text
             }),
-            timestamp: epoch_millis() as u64,
+            timestamp: epoch_millis_u64(),
         });
 
         let actual_text = self.get_element_text(target_id)?;
@@ -611,7 +611,7 @@ impl PageSession {
                 "action": action,
                 "value": value
             }),
-            timestamp: epoch_millis() as u64,
+            timestamp: epoch_millis_u64(),
         });
 
         self.enforce_policy(target_id, stable_key, action)?;
@@ -713,7 +713,7 @@ impl PageSession {
                 PolicyAction::Block => "block".to_string(),
                 PolicyAction::RequireHumanApproval => "require_human_approval".to_string(),
             },
-            timestamp: epoch_millis() as u64,
+            timestamp: epoch_millis_u64(),
         });
 
         match decision.action {
@@ -751,7 +751,7 @@ impl PageSession {
                     event_type: "request".to_string(),
                     reason: Some(format!("Requires human approval for rule {}", rule_id)),
                     user_id: None,
-                    timestamp: epoch_millis() as u64,
+                    timestamp: epoch_millis_u64(),
                 });
 
                 Err(ActionError::HumanApprovalRequired { rule_id, scope }.into())
@@ -966,7 +966,7 @@ impl PageSession {
         self.audit_logger.log(AuditEvent::StateSnapshot {
             state_hash: state.state_hash().to_string(),
             page_instance_id: state.page_instance_id().to_string(),
-            timestamp: epoch_millis() as u64,
+            timestamp: epoch_millis_u64(),
             payload: serde_json::to_value(state.root()).unwrap_or(serde_json::Value::Null),
         });
         Ok(state)
@@ -1015,7 +1015,7 @@ impl PageSession {
                 SomTrigger::VerifyFailed => "verify_failed".to_string(),
             },
             marks_count: capture.marks.len(),
-            timestamp: epoch_millis() as u64,
+            timestamp: epoch_millis_u64(),
         });
 
         self.store_som_capture(capture.clone());
@@ -1678,6 +1678,14 @@ fn epoch_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+}
+
+/// Epoch milliseconds truncated to u64 for audit event timestamps.
+/// Safe until ~year 584 million. Debug-asserts no truncation occurred.
+fn epoch_millis_u64() -> u64 {
+    let ms = epoch_millis();
+    debug_assert!(ms <= u128::from(u64::MAX), "epoch_millis overflowed u64");
+    ms as u64
 }
 
 #[cfg(test)]
