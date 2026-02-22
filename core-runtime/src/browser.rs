@@ -123,7 +123,7 @@ impl BrowserClient {
     pub fn new() -> Result<Self> {
         use rand::RngCore;
         let mut key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
+        rand::rng().fill_bytes(&mut key);
         let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
         let vault = Arc::new(LocalSessionVault::new(kms));
         Self::new_with_vault(vault)
@@ -190,6 +190,7 @@ impl PageSession {
         self.inner.get_title().context("Failed to get page title")
     }
 
+    /// Saves the current session (cookies) to the vault with the given session ID.
     pub async fn save_to_vault(&self, session_id: &str) -> Result<()> {
         let cookies = self.inner.get_cookies().context("Failed to get cookies")?;
         let cookie_data: Vec<CookieData> = cookies
@@ -219,9 +220,26 @@ impl PageSession {
         Ok(())
     }
 
+    /// Loads a session from the vault and restores cookies to the browser.
     pub async fn load_from_vault(&self, session_id: &str) -> Result<()> {
+        use headless_chrome::protocol::cdp::Network::{CookiePriority, CookieSameSite};
+
         if let Some(data) = self.vault.load_session(session_id).await? {
             for cookie in data.cookies {
+                let same_site = match cookie.same_site.as_deref() {
+                    Some("Strict") => Some(CookieSameSite::Strict),
+                    Some("Lax") => Some(CookieSameSite::Lax),
+                    Some("None") => Some(CookieSameSite::None),
+                    _ => None,
+                };
+
+                let priority = match cookie.priority.as_str() {
+                    "Low" => Some(CookiePriority::Low),
+                    "Medium" => Some(CookiePriority::Medium),
+                    "High" => Some(CookiePriority::High),
+                    _ => None,
+                };
+
                 self.inner
                     .call_method(headless_chrome::protocol::cdp::Network::SetCookie {
                         name: cookie.name,
@@ -231,9 +249,9 @@ impl PageSession {
                         path: Some(cookie.path),
                         secure: Some(cookie.secure),
                         http_only: Some(cookie.http_only),
-                        same_site: None, // Serialization for same_site is tricky, default for now
+                        same_site,
                         expires: Some(cookie.expires),
-                        priority: None,
+                        priority,
                         same_party: None,
                         source_scheme: None,
                         source_port: None,

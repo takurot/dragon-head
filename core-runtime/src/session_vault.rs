@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
+/// Encapsulates cookie data for storage and restoration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CookieData {
     pub name: String,
@@ -19,6 +20,7 @@ pub struct CookieData {
     pub priority: String,
 }
 
+/// Represents the complete state of a browser session including cookies and other tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionData {
     pub domain: String,
@@ -26,29 +28,46 @@ pub struct SessionData {
     pub tokens: HashMap<String, String>,
 }
 
+/// Interface for Key Management System (KMS) operations.
 #[async_trait]
 pub trait KmsAdapter: Send + Sync {
+    /// Encrypts plaintext using the current active key.
+    /// Returns (ciphertext, key_id).
     async fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, String)>;
+
+    /// Decrypts ciphertext using a specific key ID.
     async fn decrypt(&self, ciphertext: &[u8], key_id: &str) -> Result<Vec<u8>>;
+
+    /// Returns the ID of the current active key.
     fn current_key_id(&self) -> String;
+
+    /// Adds a new key to the adapter.
     fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool);
 }
 
+/// Trait for storing and loading encrypted session data.
 #[async_trait]
 pub trait SessionVault: Send + Sync {
+    /// Stores session data encrypted for a given session ID.
     async fn store_session(&self, session_id: &str, data: &SessionData) -> Result<()>;
+
+    /// Loads and decrypts session data for a given session ID.
     async fn load_session(&self, session_id: &str) -> Result<Option<SessionData>>;
+
+    /// Rotates keys by re-encrypting all stored sessions with a new key.
     async fn rotate_key(&self, new_key: [u8; 32], new_key_id: String) -> Result<()>;
 }
 
 type VaultStorage = HashMap<String, (Vec<u8>, String)>;
 
+/// A local implementation of SessionVault using an in-memory storage.
 pub struct LocalSessionVault {
     kms: Arc<Mutex<Box<dyn KmsAdapter>>>,
     storage: Arc<Mutex<VaultStorage>>,
 }
 
 impl LocalSessionVault {
+    /// Creates a new LocalSessionVault with the provided KMS adapter.
     pub fn new(kms: Box<dyn KmsAdapter>) -> Self {
         Self {
             kms: Arc::new(Mutex::new(kms)),
@@ -61,21 +80,28 @@ impl LocalSessionVault {
 impl SessionVault for LocalSessionVault {
     async fn store_session(&self, session_id: &str, data: &SessionData) -> Result<()> {
         let plaintext = serde_json::to_vec(data).context("Failed to serialize session data")?;
-        let kms = self.kms.lock().await;
-        let (ciphertext, key_id) = kms.encrypt(&plaintext).await?;
+        let (ciphertext, key_id) = {
+            let kms = self.kms.lock().await;
+            kms.encrypt(&plaintext).await?
+        };
         let mut storage = self.storage.lock().await;
         storage.insert(session_id.to_string(), (ciphertext, key_id));
         Ok(())
     }
 
     async fn load_session(&self, session_id: &str) -> Result<Option<SessionData>> {
-        let storage = self.storage.lock().await;
-        let (ciphertext, key_id) = match storage.get(session_id) {
-            Some(entry) => entry,
+        let entry = {
+            let storage = self.storage.lock().await;
+            storage.get(session_id).cloned()
+        };
+
+        let (ciphertext, key_id) = match entry {
+            Some(e) => e,
             None => return Ok(None),
         };
+
         let kms = self.kms.lock().await;
-        let plaintext = kms.decrypt(ciphertext, key_id).await?;
+        let plaintext = kms.decrypt(&ciphertext, &key_id).await?;
         let data =
             serde_json::from_slice(&plaintext).context("Failed to deserialize session data")?;
         Ok(Some(data))
@@ -86,17 +112,17 @@ impl SessionVault for LocalSessionVault {
         let mut storage = self.storage.lock().await;
 
         // 1. Decrypt everything with current keys
-        let mut all_data = Vec::new();
+        let mut decrypted_items = Vec::with_capacity(storage.len());
         for (sid, (ct, kid)) in storage.iter() {
             let pt = kms_guard.decrypt(ct, kid).await?;
-            all_data.push((sid.clone(), pt));
+            decrypted_items.push((sid.clone(), pt));
         }
 
         // 2. Add new key and make it current
-        kms_guard.add_key(new_key, new_key_id.clone(), true);
+        kms_guard.add_key(new_key, new_key_id, true);
 
         // 3. Re-encrypt everything with the NEW current key
-        for (sid, pt) in all_data {
+        for (sid, pt) in decrypted_items {
             let (ct, kid) = kms_guard.encrypt(&pt).await?;
             storage.insert(sid, (ct, kid));
         }
@@ -105,12 +131,14 @@ impl SessionVault for LocalSessionVault {
     }
 }
 
+/// Software-based KMS implementation using local keys.
 pub struct SoftwareKms {
     keys: HashMap<String, [u8; 32]>,
     current_key_id: String,
 }
 
 impl SoftwareKms {
+    /// Creates a new SoftwareKms with an initial key.
     pub fn new(key: [u8; 32], key_id: String) -> Self {
         let mut keys = HashMap::new();
         keys.insert(key_id.clone(), key);
@@ -136,7 +164,7 @@ impl KmsAdapter for SoftwareKms {
             .context("Current key not found")?;
         let cipher = Aes256Gcm::new(key.into());
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        rand::rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = cipher
