@@ -4,10 +4,25 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CookieData {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+    pub expires: f64,
+    pub size: u32,
+    pub http_only: bool,
+    pub secure: bool,
+    pub session: bool,
+    pub same_site: Option<String>,
+    pub priority: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionData {
     pub domain: String,
-    pub cookies: Vec<String>, // Simplification for now: each string is a Set-Cookie value
+    pub cookies: Vec<CookieData>,
     pub tokens: HashMap<String, String>,
 }
 
@@ -110,7 +125,7 @@ impl SoftwareKms {
 impl KmsAdapter for SoftwareKms {
     async fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, String)> {
         use aes_gcm::{
-            aead::{Aead, KeyInit, OsRng},
+            aead::{Aead, KeyInit},
             Aes256Gcm, Nonce,
         };
         use rand::RngCore;
@@ -121,7 +136,7 @@ impl KmsAdapter for SoftwareKms {
             .context("Current key not found")?;
         let cipher = Aes256Gcm::new(key.into());
         let mut nonce_bytes = [0u8; 12];
-        OsRng.fill_bytes(&mut nonce_bytes);
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = cipher
@@ -179,7 +194,19 @@ mod tests {
         let session_id = "test-session";
         let data = SessionData {
             domain: "example.com".to_string(),
-            cookies: vec!["sessionid=abc".to_string()],
+            cookies: vec![CookieData {
+                name: "sessionid".to_string(),
+                value: "abc".to_string(),
+                domain: "example.com".to_string(),
+                path: "/".to_string(),
+                expires: -1.0,
+                size: 10,
+                http_only: true,
+                secure: true,
+                session: true,
+                same_site: None,
+                priority: "Medium".to_string(),
+            }],
             tokens: [("auth".to_string(), "xyz".to_string())]
                 .into_iter()
                 .collect(),
@@ -206,7 +233,19 @@ mod tests {
         let session_id = "test-session";
         let data = SessionData {
             domain: "example.com".to_string(),
-            cookies: vec!["sessionid=123".to_string()],
+            cookies: vec![CookieData {
+                name: "sessionid".to_string(),
+                value: "123".to_string(),
+                domain: "example.com".to_string(),
+                path: "/".to_string(),
+                expires: -1.0,
+                size: 10,
+                http_only: true,
+                secure: true,
+                session: true,
+                same_site: None,
+                priority: "Medium".to_string(),
+            }],
             tokens: HashMap::new(),
         };
 
@@ -220,7 +259,7 @@ mod tests {
         // Should still be loadable (decrypted with key2 after rotation)
         let loaded = vault.load_session(session_id).await?;
         assert!(loaded.is_some());
-        assert_eq!(loaded.unwrap().cookies[0], "sessionid=123");
+        assert_eq!(loaded.unwrap().cookies[0].value, "123");
 
         // Verify it was re-encrypted with key2
         let storage = vault.storage.lock().await;

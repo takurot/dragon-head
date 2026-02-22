@@ -15,7 +15,7 @@ use crate::{
     audit::{AuditEvent, AuditLogger},
     error::{ActionError, VerifyError, WaitError},
     policy::{ApprovalScope, PolicyAction, PolicyContext, PolicyEngine, PolicyRule},
-    session_vault::{LocalSessionVault, SessionData, SessionVault, SoftwareKms},
+    session_vault::{CookieData, LocalSessionVault, SessionData, SessionVault, SoftwareKms},
     sre::{
         normalize_dom, normalize_dom_with_refinement, LoadProfile, SemanticNode, SemanticState,
         SubtreeRefinementConfig,
@@ -121,7 +121,9 @@ pub struct BrowserClient {
 
 impl BrowserClient {
     pub fn new() -> Result<Self> {
-        let key = [0u8; 32];
+        use rand::RngCore;
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
         let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
         let vault = Arc::new(LocalSessionVault::new(kms));
         Self::new_with_vault(vault)
@@ -190,19 +192,26 @@ impl PageSession {
 
     pub async fn save_to_vault(&self, session_id: &str) -> Result<()> {
         let cookies = self.inner.get_cookies().context("Failed to get cookies")?;
-        // Convert headless_chrome::protocol::cdp::Network::Cookie to a serializable format if needed
-        // For now, let's just store the JSON representation of cookies.
-        let cookie_strings: Vec<String> = cookies
-            .iter()
-            .map(|c| {
-                // This is a simplification. Real implementation should handle domain/path/etc.
-                format!("{}={}", c.name, c.value)
+        let cookie_data: Vec<CookieData> = cookies
+            .into_iter()
+            .map(|c| CookieData {
+                name: c.name,
+                value: c.value,
+                domain: c.domain,
+                path: c.path,
+                expires: c.expires,
+                size: c.size,
+                http_only: c.http_only,
+                secure: c.secure,
+                session: c.session,
+                same_site: c.same_site.map(|s| format!("{:?}", s)),
+                priority: format!("{:?}", c.priority),
             })
             .collect();
 
         let data = SessionData {
             domain: self.current_url().unwrap_or_default(),
-            cookies: cookie_strings,
+            cookies: cookie_data,
             tokens: HashMap::new(), // Placeholder for other tokens (e.g. localStorage)
         };
 
@@ -212,28 +221,25 @@ impl PageSession {
 
     pub async fn load_from_vault(&self, session_id: &str) -> Result<()> {
         if let Some(data) = self.vault.load_session(session_id).await? {
-            for cookie_str in data.cookies {
-                let parts: Vec<&str> = cookie_str.splitn(2, '=').collect();
-                if parts.len() == 2 {
-                    self.inner
-                        .call_method(headless_chrome::protocol::cdp::Network::SetCookie {
-                            name: parts[0].to_string(),
-                            value: parts[1].to_string(),
-                            url: Some(data.domain.clone()),
-                            domain: None,
-                            path: None,
-                            secure: None,
-                            http_only: None,
-                            same_site: None,
-                            expires: None,
-                            priority: None,
-                            same_party: None,
-                            source_scheme: None,
-                            source_port: None,
-                            partition_key: None,
-                        })
-                        .context("Failed to set cookie")?;
-                }
+            for cookie in data.cookies {
+                self.inner
+                    .call_method(headless_chrome::protocol::cdp::Network::SetCookie {
+                        name: cookie.name,
+                        value: cookie.value,
+                        url: Some(data.domain.clone()),
+                        domain: Some(cookie.domain),
+                        path: Some(cookie.path),
+                        secure: Some(cookie.secure),
+                        http_only: Some(cookie.http_only),
+                        same_site: None, // Serialization for same_site is tricky, default for now
+                        expires: Some(cookie.expires),
+                        priority: None,
+                        same_party: None,
+                        source_scheme: None,
+                        source_port: None,
+                        partition_key: None,
+                    })
+                    .context("Failed to set cookie")?;
             }
         }
         Ok(())
