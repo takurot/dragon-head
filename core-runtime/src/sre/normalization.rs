@@ -296,8 +296,9 @@ fn extract_direct_text_label(node: &Node) -> Option<String> {
 
 fn redact_sensitive_text(text: &str) -> String {
     static CC_RE: OnceLock<Regex> = OnceLock::new();
-    let re = CC_RE
-        .get_or_init(|| Regex::new(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{1,4}\b").expect("Invalid CC regex"));
+    let re = CC_RE.get_or_init(|| {
+        Regex::new(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{1,4}\b").expect("Invalid CC regex")
+    });
 
     re.replace_all(text, "****-****-****-XXXX").into_owned()
 }
