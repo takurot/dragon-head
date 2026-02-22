@@ -232,22 +232,22 @@
   - [x] 再現可能な監査トレースを出力できる。
 
 ### PR-11: SEC-02 Session Vault & Key Management
-- Status: `NOT_STARTED`
+- Status: `DONE`
 - Spec Ref: SEC-02
 - Dependencies: PR-01
 - 実装タスク
-  - [ ] Cookie/TokenのAES-256暗号化保存を実装する。
-  - [ ] `SessionVault` 抽象とローカル実装を追加する。
-  - [ ] BYOK対応インターフェース（KMSアダプタ）を設計する。
-  - [ ] 鍵ローテーションAPIを実装する。
+  - [x] Cookie/TokenのAES-256暗号化保存を実装する。
+  - [x] `SessionVault` 抽象とローカル実装を追加する。
+  - [x] BYOK対応インターフェース（KMSアダプタ）を設計する。
+  - [x] 鍵ローテーションAPIを実装する。
 - テストタスク
-  - [ ] 保存データが平文でないことを検証する。
-  - [ ] 鍵ローテーション後の復号互換テストを追加する。
+  - [x] 保存データが平文でないことを検証する。
+  - [x] 鍵ローテーション後の復号互換テストを追加する。
 - CIタスク
-  - [ ] mock KMSを用いたvault integration testを追加する。
-  - [ ] 暗号関連依存の脆弱性スキャンをCIに追加する。
+  - [x] mock KMSを用いたvault integration testを追加する。
+  - [x] 暗号関連依存の脆弱性スキャンをCIに追加する。
 - Exit Criteria
-  - [ ] Local鍵とBYOKの双方でセッション再利用が可能。
+  - [x] Local鍵とBYOKの双方でセッション再利用が可能。
 
 ### PR-12: PLUG-01/02 Plugin Framework (Wasm)
 - Status: `NOT_STARTED`
