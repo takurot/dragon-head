@@ -215,21 +215,21 @@
   - [x] 重要アクションに対する事前審査が必ず実行される。
 
 ### PR-10: AUD-01 Structured Audit Log & PII Redaction
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: AUD-01
 - Dependencies: PR-08
 - 実装タスク
-  - [ ] Event Model（`STATE_SNAPSHOT`, `STATE_PATCH`, `TOOL_CALL`, `POLICY_DECISION`, `HITL_EVENT`, `VISUAL_CAPTURE`）を実装する。
-  - [ ] 非同期ログ書き込みを実装する。
-  - [ ] PIIマスク（`password/email` フィールド、クレジットカード形式）を実装する。
+  - [x] Event Model（`STATE_SNAPSHOT`, `STATE_PATCH`, `TOOL_CALL`, `POLICY_DECISION`, `HITL_EVENT`, `VISUAL_CAPTURE`）を実装する。
+  - [x] 非同期ログ書き込みを実装する。
+  - [x] PIIマスク（`password/email` フィールド、クレジットカード形式）を実装する。
 - テストタスク
-  - [ ] 各イベントタイプのスキーマ検証テストを追加する。
-  - [ ] 機密入力が必ずマスクされるテストを追加する。
+  - [x] 各イベントタイプのスキーマ検証テストを追加する。
+  - [x] 機密入力が必ずマスクされるテストを追加する。
 - CIタスク
-  - [ ] 監査ログスキーマ互換性チェックを必須化する。
-  - [ ] PII漏洩検知テストを必須化する。
+  - [x] 監査ログスキーマ互換性チェックを必須化する。
+  - [x] PII漏洩検知テストを必須化する。
 - Exit Criteria
-  - [ ] 再現可能な監査トレースを出力できる。
+  - [x] 再現可能な監査トレースを出力できる。
 
 ### PR-11: SEC-02 Session Vault & Key Management
 - Status: `NOT_STARTED`
