@@ -27,6 +27,7 @@
 | 5 | Extensions & API | PR-12〜14 | 0/3 | NOT_STARTED |
 | 6 | Monetization Meters | PR-16 | 0/1 | NOT_STARTED |
 | 7 | Marketplace | PR-17 | 0/1 | NOT_STARTED |
+| 8 | Robustness & Verification | PR-18 | 0/1 | NOT_STARTED |
 
 ## 3. PRバックログ（進捗チェック付き）
 
@@ -357,6 +358,22 @@
   - [ ] Revenue Share集計回帰テストを必須化する。
 - Exit Criteria
   - [ ] Domain Pack公開に必要な最小機能が実装されている。
+
+### PR-18: Advanced E2E Verification & Security Audit
+- Status: `NOT_STARTED`
+- Spec Ref: SEC-02, AUD-01, ACT-01
+- Dependencies: PR-11, PR-10, PR-03
+- 実装タスク
+  - [ ] `core-runtime/tests/session_management.rs` の実装（ドメイン跨ぎセッション保存/復元、鍵ローテーション E2E）。
+  - [ ] `core-runtime/tests/audit_logging.rs` の実装（操作シーケンス一貫性、PIIマスク実効性）。
+  - [ ] 複雑な SPA 遷移における `stable_key` 自己修復のストレステストの実装。
+- テストタスク
+  - [ ] `TOOL_CALL` および `STATE_SNAPSHOT` の両方で PII がマスクされていることを確認。
+  - [ ] 鍵ローテーション後、新しい鍵で旧セッションデータが正しく復号・再利用できることを確認。
+- CIタスク
+  - [ ] 新規 E2E テストを `cdp-smoke` または `full-e2e` ジョブに追加。
+- Exit Criteria
+  - [ ] 実機環境（Headless Chrome）において、仕様通りのセキュリティ・監査・リカバリが保証されている。
 
 ## 4. 共通 Definition of Done（全PR共通）
 
