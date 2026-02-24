@@ -1989,9 +1989,7 @@ mod browser_tests {
         // Clear existing browser cookies so the restore path is actually exercised.
         page2
             .inner
-            .call_method(headless_chrome::protocol::cdp::Network::ClearBrowserCookies(
-                None,
-            ))?;
+            .call_method(headless_chrome::protocol::cdp::Network::ClearBrowserCookies(None))?;
         let cookies_before = page2.inner.get_cookies()?;
         let found_before = cookies_before
             .iter()
