@@ -102,6 +102,13 @@ jobs:
     - name: Run RFC 6902 semantic delta suite
       run: cargo test -p core-runtime --test sre_semantic_delta --verbose
 
+  stable-key-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run stable key compatibility vectors
+      run: cargo test -p core-runtime --test stable_key_compatibility --verbose
+
   policy-regression:
     runs-on: ubuntu-latest
     steps:

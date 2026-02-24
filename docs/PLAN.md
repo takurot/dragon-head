@@ -32,7 +32,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | Phase | Scope | PRs | Progress | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | 0 | テスト・CI基盤 | PR-00 | 1/1 | DONE |
-| 1 | Core Runtime + SRE基盤 | PR-01〜03 | 1/3 | IN_PROGRESS |
+| 1 | Core Runtime + SRE基盤 | PR-01〜03 | 2/3 | IN_PROGRESS |
 | 2 | Interaction & Reliability | PR-04〜06 | 3/3 | DONE |
 | 3 | Performance & NFR | PR-07〜08, PR-15 | 2/3 | IN_PROGRESS |
 | 4 | Security & Audit | PR-09〜11 | 3/3 | DONE |
@@ -100,7 +100,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 同一入力に対し `state_hash` が再現性を持つ。
 
 ### PR-03: ACT-01 Stable Key Generation
-- Status: `IN_PROGRESS` (Spec gap closure)
+- Status: `DONE` (Local)
 - Spec Ref: ACT-01, Section 5.1
 - Dependencies: PR-02
 - 実装タスク
@@ -118,7 +118,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] `alias` 出力と `stable_key` インデックスの整合性テストを追加する。
 - CIタスク
   - [x] stable key回帰テストをCI必須化する。 (Included in workspace tests)
-  - [ ] ハッシュ計算ロジックの変更時に互換性テストを必須化する。 (Future work)
+  - [x] ハッシュ計算ロジックの変更時に互換性テストを必須化する。 (`stable_key_compatibility` をCIジョブ化)
 - Exit Criteria
   - [x] fallback探索に必要な `stable_key` インデックスが常に利用可能。
 
