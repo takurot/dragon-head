@@ -1,8 +1,8 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-02-18
-- プラン状態: Ready for Implementation
+- 最終更新日: 2026-02-24
+- プラン状態: In Progress
 
 ## 1. 進捗管理ルール
 
@@ -14,16 +14,28 @@
   - CIタスク完了
   - 受け入れ条件（Exit Criteria）を満たす
 - 進捗率は `完了チェック数 / 全チェック数` で算出する。
+- フェーズダッシュボードの `Progress` は `DONE PR数 / フェーズ内PR総数` で算出する。
+- フェーズダッシュボードの `Status` は `DONE` / `IN_PROGRESS` / `NOT_STARTED` を使用する。
+
+### MVP完了条件
+
+MVPは「外部クライアントから安全に利用可能な Neural-Browser Runtime の最小提供ライン」と定義し、次をすべて満たした時点で完了とする。
+
+- [ ] 必須PRがすべて `DONE` である（`PR-00`〜`PR-11`, `PR-14`）。
+- [ ] 必須CIチェック（`lint`, `test`, `smoke-e2e`, `cdp-smoke`, `policy-regression`, `policy-schema-lint`, `sre-regression`, `sre-semantic-delta`, `som-regression`）が安定してグリーンである。
+- [ ] `SEC-01` / `SEC-02` / `AUD-01` の Exit Criteria（`PR-09`〜`PR-11`）がすべて満たされている。
+- [ ] `PR-14` の Exit Criteria（MCPツール群の一貫利用）が満たされ、外部契約テストがCI必須化されている。
+- [ ] 利用手順・既知制約・障害時手順が `docs/` に明示され、運用可能な状態になっている。
 
 ## 2. フェーズダッシュボード
 
 | Phase | Scope | PRs | Progress | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| 0 | テスト・CI基盤 | PR-00 | 0/1 | NOT_STARTED |
-| 1 | Core Runtime + SRE基盤 | PR-01〜03 | 0/3 | NOT_STARTED |
-| 2 | Interaction & Reliability | PR-04〜06 | 0/3 | NOT_STARTED |
-| 3 | Performance & NFR | PR-07〜08, PR-15 | 0/3 | NOT_STARTED |
-| 4 | Security & Audit | PR-09〜11 | 0/3 | NOT_STARTED |
+| 0 | テスト・CI基盤 | PR-00 | 1/1 | DONE |
+| 1 | Core Runtime + SRE基盤 | PR-01〜03 | 1/3 | IN_PROGRESS |
+| 2 | Interaction & Reliability | PR-04〜06 | 3/3 | DONE |
+| 3 | Performance & NFR | PR-07〜08, PR-15 | 2/3 | IN_PROGRESS |
+| 4 | Security & Audit | PR-09〜11 | 3/3 | DONE |
 | 5 | Extensions & API | PR-12〜14 | 0/3 | NOT_STARTED |
 | 6 | Monetization Meters | PR-16 | 0/1 | NOT_STARTED |
 | 7 | Marketplace | PR-17 | 0/1 | NOT_STARTED |
