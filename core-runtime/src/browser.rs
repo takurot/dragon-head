@@ -15,6 +15,7 @@ use crate::{
     audit::{AuditEvent, AuditLogger},
     error::{ActionError, VerifyError, WaitError},
     policy::{ApprovalScope, PolicyAction, PolicyContext, PolicyEngine, PolicyRule},
+    session_vault::{CookieData, LocalSessionVault, SessionData, SessionVault, SoftwareKms},
     sre::{
         normalize_dom, normalize_dom_with_refinement, LoadProfile, SemanticNode, SemanticState,
         SubtreeRefinementConfig,
@@ -115,17 +116,30 @@ struct PolicyApprovalState {
 
 pub struct BrowserClient {
     inner: Browser,
+    vault: Arc<dyn SessionVault>,
 }
 
 impl BrowserClient {
     pub fn new() -> Result<Self> {
+        use rand::RngCore;
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
+        let vault = Arc::new(LocalSessionVault::new(kms));
+        Self::new_with_vault(vault)
+    }
+
+    pub fn new_with_vault(vault: Arc<dyn SessionVault>) -> Result<Self> {
         let options = LaunchOptions::default_builder()
             .headless(true)
             .build()
             .context("Failed to build launch options")?;
 
         let browser = Browser::new(options).context("Failed to launch browser")?;
-        Ok(Self { inner: browser })
+        Ok(Self {
+            inner: browser,
+            vault,
+        })
     }
 
     pub fn new_page(&self) -> Result<PageSession> {
@@ -138,6 +152,7 @@ impl BrowserClient {
             policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
             navigation_epoch: Arc::new(AtomicU64::new(0)),
             audit_logger: Arc::new(AuditLogger::new()),
+            vault: Arc::clone(&self.vault),
         })
     }
 }
@@ -150,6 +165,7 @@ pub struct PageSession {
     policy_approvals: Arc<Mutex<PolicyApprovalState>>,
     navigation_epoch: Arc<AtomicU64>,
     pub(crate) audit_logger: Arc<AuditLogger>,
+    vault: Arc<dyn SessionVault>,
 }
 
 impl PageSession {
@@ -172,6 +188,87 @@ impl PageSession {
 
     pub fn get_title(&self) -> Result<String> {
         self.inner.get_title().context("Failed to get page title")
+    }
+
+    /// Saves the current session (cookies) to the vault with the given session ID.
+    pub async fn save_to_vault(&self, session_id: &str) -> Result<()> {
+        let cookies = self.inner.get_cookies().context("Failed to get cookies")?;
+        let cookie_data: Vec<CookieData> = cookies
+            .into_iter()
+            .map(|c| CookieData {
+                name: c.name,
+                value: c.value,
+                domain: c.domain,
+                path: c.path,
+                expires: c.expires,
+                size: c.size,
+                http_only: c.http_only,
+                secure: c.secure,
+                session: c.session,
+                same_site: c.same_site.map(|s| format!("{:?}", s)),
+                priority: format!("{:?}", c.priority),
+            })
+            .collect();
+
+        let data = SessionData {
+            domain: self
+                .current_url()
+                .context("Failed to resolve current URL while saving session")?,
+            cookies: cookie_data,
+            tokens: HashMap::new(), // Placeholder for other tokens (e.g. localStorage)
+        };
+
+        self.vault.store_session(session_id, &data).await?;
+        Ok(())
+    }
+
+    /// Loads a session from the vault and restores cookies to the browser.
+    pub async fn load_from_vault(&self, session_id: &str) -> Result<()> {
+        use headless_chrome::protocol::cdp::Network::{CookiePriority, CookieSameSite};
+
+        if let Some(data) = self.vault.load_session(session_id).await? {
+            let session_url = (!data.domain.is_empty()).then_some(data.domain.clone());
+            for cookie in data.cookies {
+                let same_site = match cookie.same_site.as_deref() {
+                    Some("Strict") => Some(CookieSameSite::Strict),
+                    Some("Lax") => Some(CookieSameSite::Lax),
+                    Some("None") => Some(CookieSameSite::None),
+                    _ => None,
+                };
+
+                let priority = match cookie.priority.as_str() {
+                    "Low" => Some(CookiePriority::Low),
+                    "Medium" => Some(CookiePriority::Medium),
+                    "High" => Some(CookiePriority::High),
+                    _ => None,
+                };
+                let expires = if cookie.session {
+                    None
+                } else {
+                    Some(cookie.expires)
+                };
+
+                self.inner
+                    .call_method(headless_chrome::protocol::cdp::Network::SetCookie {
+                        name: cookie.name,
+                        value: cookie.value,
+                        url: session_url.clone(),
+                        domain: Some(cookie.domain),
+                        path: Some(cookie.path),
+                        secure: Some(cookie.secure),
+                        http_only: Some(cookie.http_only),
+                        same_site,
+                        expires,
+                        priority,
+                        same_party: None,
+                        source_scheme: None,
+                        source_port: None,
+                        partition_key: None,
+                    })
+                    .context("Failed to set cookie")?;
+            }
+        }
+        Ok(())
     }
 
     pub fn get_document_node(&self) -> Result<headless_chrome::protocol::cdp::DOM::Node> {
@@ -1850,5 +1947,64 @@ mod browser_tests {
         }
         let browser = BrowserClient::new();
         assert!(browser.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_session_vault_save_load() -> Result<()> {
+        if std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err() {
+            return Ok(());
+        }
+
+        let client = BrowserClient::new()?;
+        let page = client.new_page()?;
+
+        page.navigate("https://example.com")?;
+
+        // Set a cookie manually to test save/load
+        page.inner
+            .call_method(headless_chrome::protocol::cdp::Network::SetCookie {
+                name: "test_cookie".to_string(),
+                value: "test_value".to_string(),
+                url: Some("https://example.com".to_string()),
+                domain: None,
+                path: None,
+                secure: None,
+                http_only: None,
+                same_site: None,
+                expires: None,
+                priority: None,
+                same_party: None,
+                source_scheme: None,
+                source_port: None,
+                partition_key: None,
+            })?;
+
+        // Save to vault
+        page.save_to_vault("my-session").await?;
+
+        // Create a new page and load from vault
+        let page2 = client.new_page()?;
+        page2.navigate("https://example.com")?; // Navigate first so it has the right context
+
+        // Clear existing browser cookies so the restore path is actually exercised.
+        page2
+            .inner
+            .call_method(headless_chrome::protocol::cdp::Network::ClearBrowserCookies(None))?;
+        let cookies_before = page2.inner.get_cookies()?;
+        let found_before = cookies_before
+            .iter()
+            .any(|c| c.name == "test_cookie" && c.value == "test_value");
+        assert!(!found_before, "Cookie unexpectedly present before restore");
+
+        page2.load_from_vault("my-session").await?;
+
+        // Verify cookie exists in page2
+        let cookies = page2.inner.get_cookies()?;
+        let found = cookies
+            .iter()
+            .any(|c| c.name == "test_cookie" && c.value == "test_value");
+        assert!(found, "Cookie 'test_cookie' not found in restored session");
+
+        Ok(())
     }
 }
