@@ -32,7 +32,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | Phase | Scope | PRs | Progress | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | 0 | テスト・CI基盤 | PR-00 | 1/1 | DONE |
-| 1 | Core Runtime + SRE基盤 | PR-01〜03 | 2/3 | IN_PROGRESS |
+| 1 | Core Runtime + SRE基盤 | PR-01〜03 | 3/3 | DONE |
 | 2 | Interaction & Reliability | PR-04〜06 | 3/3 | DONE |
 | 3 | Performance & NFR | PR-07〜08, PR-15 | 2/3 | IN_PROGRESS |
 | 4 | Security & Audit | PR-09〜11 | 3/3 | DONE |
@@ -80,7 +80,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] ヘッドレスブラウザ起動からHTML取得までを安定して実行できる。
 
 ### PR-02: SRE-01 Deterministic State Generation
-- Status: `IN_PROGRESS`
+- Status: `DONE` (Local)
 - Spec Ref: SRE-01, Section 5.1
 - Dependencies: PR-01
 - 実装タスク
@@ -95,7 +95,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] Fast/Full Stateの内容差分と生成順序のテストを追加する。
 - CIタスク
   - [x] SRE fixture回帰テストをCI必須ジョブ化する。
-  - [ ] 仕様変更時のスナップショット更新をPR内で強制するチェックを追加する。 (スナップショット基盤導入が必要のため保留)
+  - [x] 仕様変更時のスナップショット更新をPR内で強制するチェックを追加する。 (`sre_snapshot_regression` をCIジョブ化)
 - Exit Criteria
   - [x] 同一入力に対し `state_hash` が再現性を持つ。
 

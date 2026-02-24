@@ -1,0 +1,131 @@
+{
+  "root": {
+    "alias": "document",
+    "ambiguous": false,
+    "children": [
+      {
+        "alias": "html",
+        "ambiguous": false,
+        "children": [
+          {
+            "alias": "head",
+            "ambiguous": false,
+            "id": 0,
+            "role": "head",
+            "stable_key": "e475a717c607b236fe828d9dfff2fd0c5f7ce16442362c2b47cdf9620195c93b"
+          },
+          {
+            "alias": "body",
+            "ambiguous": false,
+            "children": [
+              {
+                "alias": "main",
+                "ambiguous": false,
+                "attributes": {
+                  "class": "app"
+                },
+                "children": [
+                  {
+                    "alias": "h1_checkout",
+                    "ambiguous": false,
+                    "children": [
+                      {
+                        "ambiguous": false,
+                        "id": 0,
+                        "label": "Checkout",
+                        "role": "text",
+                        "stable_key": "e0f838c7f3b1ee0f248dff07d7c5da3934a04364296f3c0ccad66631d6258774"
+                      }
+                    ],
+                    "id": 0,
+                    "label": "Checkout",
+                    "role": "h1",
+                    "stable_key": "d0fcd0f904dac2dc99cd85988ed3df488d797daea615eaa27b147ffa4a6f962b"
+                  },
+                  {
+                    "alias": "form_payment_form",
+                    "ambiguous": false,
+                    "attributes": {
+                      "id": "payment-form"
+                    },
+                    "children": [
+                      {
+                        "alias": "label_email",
+                        "ambiguous": false,
+                        "attributes": {
+                          "for": "email"
+                        },
+                        "children": [
+                          {
+                            "ambiguous": false,
+                            "id": 0,
+                            "label": "Email",
+                            "role": "text",
+                            "stable_key": "138ea5a457a082dd46e248d7fad200d847abf8047714a705de53a1dbad20bfa2"
+                          }
+                        ],
+                        "id": 0,
+                        "label": "Email",
+                        "role": "label",
+                        "stable_key": "7af6fe37652f0bc704aa7bae42fb56eefcab8b0617a91160515aa94939fe09af"
+                      },
+                      {
+                        "alias": "input_email",
+                        "ambiguous": false,
+                        "attributes": {
+                          "id": "email",
+                          "type": "email"
+                        },
+                        "id": 0,
+                        "label": "email",
+                        "role": "input",
+                        "stable_key": "872550101526e248abb15ac71039e99fa65ae4eb474c81969ecb19784d133eac"
+                      },
+                      {
+                        "alias": "button_pay_now",
+                        "ambiguous": false,
+                        "attributes": {
+                          "class": "btn"
+                        },
+                        "children": [
+                          {
+                            "ambiguous": false,
+                            "id": 0,
+                            "label": "Pay now",
+                            "role": "text",
+                            "stable_key": "39f4dd84cc7bb3dc17c800914bcb405c76d89e4b8d9e67566ae02c441a1f8f41"
+                          }
+                        ],
+                        "id": 0,
+                        "label": "Pay now",
+                        "role": "button",
+                        "stable_key": "2fe327c4d84f40799ba8e74cc89beedbded22f8a5aec272ee78943a0d14b8526"
+                      }
+                    ],
+                    "id": 0,
+                    "label": "payment-form",
+                    "role": "form",
+                    "stable_key": "9c4a86251e003ebad7b3560e03520648e8db7eb4f7a2593efd386f6ea9147967"
+                  }
+                ],
+                "id": 0,
+                "role": "main",
+                "stable_key": "6c0803d4d932d7cb4505548c753792dc81b61fdb1efea9d4908f879b0da32033"
+              }
+            ],
+            "id": 0,
+            "role": "body",
+            "stable_key": "d13f449f78c951d0ffffb4966e0a69921cb1d22fc5ad21b1b0913b809dc55572"
+          }
+        ],
+        "id": 0,
+        "role": "html",
+        "stable_key": "560ab7d5eb4c09913d90a8d55835cfc725b66e937f51e06b76810329edf0e8b4"
+      }
+    ],
+    "id": 0,
+    "role": "#document",
+    "stable_key": "a4e377060df03030a7d126eb53643fc8c030f2fbd7a5a105dba235fa3a9149c8"
+  },
+  "state_hash": "b23e4052c63fda7ade000a75acce961ebca675e363c18eae40223d8cd69ce94e"
+}
