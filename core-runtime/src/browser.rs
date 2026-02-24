@@ -211,7 +211,9 @@ impl PageSession {
             .collect();
 
         let data = SessionData {
-            domain: self.current_url().unwrap_or_default(),
+            domain: self
+                .current_url()
+                .context("Failed to resolve current URL while saving session")?,
             cookies: cookie_data,
             tokens: HashMap::new(), // Placeholder for other tokens (e.g. localStorage)
         };
@@ -225,6 +227,7 @@ impl PageSession {
         use headless_chrome::protocol::cdp::Network::{CookiePriority, CookieSameSite};
 
         if let Some(data) = self.vault.load_session(session_id).await? {
+            let session_url = (!data.domain.is_empty()).then_some(data.domain.clone());
             for cookie in data.cookies {
                 let same_site = match cookie.same_site.as_deref() {
                     Some("Strict") => Some(CookieSameSite::Strict),
@@ -239,18 +242,23 @@ impl PageSession {
                     "High" => Some(CookiePriority::High),
                     _ => None,
                 };
+                let expires = if cookie.session {
+                    None
+                } else {
+                    Some(cookie.expires)
+                };
 
                 self.inner
                     .call_method(headless_chrome::protocol::cdp::Network::SetCookie {
                         name: cookie.name,
                         value: cookie.value,
-                        url: Some(data.domain.clone()),
+                        url: session_url.clone(),
                         domain: Some(cookie.domain),
                         path: Some(cookie.path),
                         secure: Some(cookie.secure),
                         http_only: Some(cookie.http_only),
                         same_site,
-                        expires: Some(cookie.expires),
+                        expires,
                         priority,
                         same_party: None,
                         source_scheme: None,
@@ -1977,6 +1985,19 @@ mod browser_tests {
         // Create a new page and load from vault
         let page2 = client.new_page()?;
         page2.navigate("https://example.com")?; // Navigate first so it has the right context
+
+        // Clear existing browser cookies so the restore path is actually exercised.
+        page2
+            .inner
+            .call_method(headless_chrome::protocol::cdp::Network::ClearBrowserCookies(
+                None,
+            ))?;
+        let cookies_before = page2.inner.get_cookies()?;
+        let found_before = cookies_before
+            .iter()
+            .any(|c| c.name == "test_cookie" && c.value == "test_value");
+        assert!(!found_before, "Cookie unexpectedly present before restore");
+
         page2.load_from_vault("my-session").await?;
 
         // Verify cookie exists in page2
