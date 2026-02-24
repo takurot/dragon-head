@@ -90,6 +90,10 @@ jobs:
       env:
         CHROME_INSTALLED: "true"
       run: cargo test -p core-runtime --test sre_determinism --verbose
+    - name: Run SRE snapshot regression test
+      env:
+        CHROME_INSTALLED: "true"
+      run: cargo test -p core-runtime --test sre_snapshot_regression --verbose
     - name: Run SRE profile filtering test
       env:
         CHROME_INSTALLED: "true"
