@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticNode, SemanticState},
     BrowserClient,
@@ -66,6 +66,10 @@ fn test_sre_minimal_snapshot_regression() -> Result<()> {
     let actual = build_snapshot()?;
 
     if std::env::var(UPDATE_ENV).as_deref() == Ok("1") {
+        ensure!(
+            std::env::var("CI").is_err(),
+            "{UPDATE_ENV}=1 is not allowed in CI. Update snapshots locally and commit the fixture."
+        );
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create snapshot directory: {}", parent.display())
