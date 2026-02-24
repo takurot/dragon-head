@@ -57,3 +57,20 @@ fn test_stable_key_hash_compatibility_none_label_vector() {
     );
     assert!(!ambiguous);
 }
+
+#[test]
+fn test_stable_key_hash_compatibility_non_ascii_label_vector() {
+    // Guard Unicode lowercasing/trim path from accidental compatibility regressions.
+    let mut generator = StableKeyGenerator::new();
+    let (key, ambiguous) = generator.generate_key(
+        "button",
+        Some("  İSTANBUL Straße  "),
+        "root/#document/html/body/button[1]",
+        "Top_Right",
+    );
+    assert_eq!(
+        key,
+        "c64f7d577b24a91e8879f60c3a2e4b88e1b3c1fbbdac8dbc09ee6757af252286"
+    );
+    assert!(!ambiguous);
+}
