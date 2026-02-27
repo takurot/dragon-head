@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use headless_chrome::{Browser, LaunchOptions};
 use std::{
     cmp::min,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -25,6 +25,7 @@ use crate::{
 const DEFAULT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_TRANSIENT_ERROR_BACKOFF: Duration = Duration::from_millis(250);
 const SRE_EVENT_BRIDGE_SYMBOL: &str = "neural_browser.runtime.sre_event_bridge";
+const ACTION_LOG_BUFFER_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SemanticTarget {
@@ -159,7 +160,7 @@ impl BrowserClient {
             inner: tab,
             som_pipeline: Arc::new(Mutex::new(SomPipelineState::default())),
             stable_key_index: Arc::new(Mutex::new(HashMap::new())),
-            action_logs: Arc::new(Mutex::new(Vec::new())),
+            action_logs: Arc::new(Mutex::new(VecDeque::new())),
             policy_engine: Arc::new(Mutex::new(PolicyEngine::default())),
             policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
             navigation_epoch: Arc::new(AtomicU64::new(0)),
@@ -173,7 +174,7 @@ pub struct PageSession {
     inner: Arc<headless_chrome::Tab>,
     som_pipeline: Arc<Mutex<SomPipelineState>>,
     stable_key_index: Arc<Mutex<HashMap<String, StableKeyIndexEntry>>>,
-    action_logs: Arc<Mutex<Vec<ActionLogEntry>>>,
+    action_logs: Arc<Mutex<VecDeque<ActionLogEntry>>>,
     policy_engine: Arc<Mutex<PolicyEngine>>,
     policy_approvals: Arc<Mutex<PolicyApprovalState>>,
     navigation_epoch: Arc<AtomicU64>,
@@ -187,7 +188,7 @@ impl PageSession {
             .action_logs
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock action logs"))?;
-        Ok(guard.clone())
+        Ok(guard.iter().cloned().collect())
     }
 
     pub fn navigate(&self, url: &str) -> Result<()> {
@@ -838,7 +839,10 @@ impl PageSession {
         };
 
         if let Ok(mut guard) = self.action_logs.lock() {
-            guard.push(entry.clone());
+            guard.push_back(entry.clone());
+            while guard.len() > ACTION_LOG_BUFFER_LIMIT {
+                guard.pop_front();
+            }
         } else {
             eprintln!("[ACTION][ERROR] Failed to lock structured action log buffer");
         }
