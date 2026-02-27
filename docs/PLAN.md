@@ -36,7 +36,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 2 | Interaction & Reliability | PR-04〜06 | 3/3 | DONE |
 | 3 | Performance & NFR | PR-07〜08, PR-15 | 2/3 | IN_PROGRESS |
 | 4 | Security & Audit | PR-09〜11 | 3/3 | DONE |
-| 5 | Extensions & API | PR-12〜14 | 1/3 | IN_PROGRESS |
+| 5 | Extensions & API | PR-12〜14 | 2/3 | IN_PROGRESS |
 | 6 | Monetization Meters | PR-16 | 0/1 | NOT_STARTED |
 | 7 | Marketplace | PR-17 | 0/1 | NOT_STARTED |
 | 8 | Robustness & Verification | PR-18 | 0/1 | NOT_STARTED |
@@ -263,23 +263,23 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] Local鍵とBYOKの双方でセッション再利用が可能。
 
 ### PR-12: PLUG-01/02 Plugin Framework (Wasm)
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: PLUG-01, PLUG-02
 - Dependencies: PR-02, PR-09
 - 実装タスク
-  - [ ] Wasmランタイム（`wasmtime` 等）を導入する。
-  - [ ] Extension Point（`on_state`, `before_act`, connector）を定義する。
-  - [ ] capability manifest（`read_state`, `network_out`, `vault_access`）を実装する。
-  - [ ] 署名済みpluginのみロード可能にする。
-  - [ ] SBOM提出/検証フローを実装する。
+  - [x] Wasmランタイム（`wasmtime` 等）を導入する。
+  - [x] Extension Point（`on_state`, `before_act`, connector）を定義する。
+  - [x] capability manifest（`read_state`, `network_out`, `vault_access`）を実装する。
+  - [x] 署名済みpluginのみロード可能にする。
+  - [x] SBOM提出/検証フローを実装する。
 - テストタスク
-  - [ ] 非署名pluginが拒否されることを検証する。
-  - [ ] capability逸脱アクセスが遮断されることを検証する。
+  - [x] 非署名pluginが拒否されることを検証する。
+  - [x] capability逸脱アクセスが遮断されることを検証する。
 - CIタスク
-  - [ ] plugin署名検証ジョブを必須化する。
-  - [ ] SBOM検証ジョブを必須化する。
+  - [x] plugin署名検証ジョブを必須化する。
+  - [x] SBOM検証ジョブを必須化する。
 - Exit Criteria
-  - [ ] サンドボックス制約下で安全にplugin実行できる。
+  - [x] サンドボックス制約下で安全にplugin実行できる。
 
 ### PR-13: SKILL-01 Skills Engine
 - Status: `DONE` (Local)
