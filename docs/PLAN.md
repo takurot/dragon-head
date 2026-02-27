@@ -136,7 +136,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 二重失敗時に `verify required` を返すことを確認する。
 - CIタスク
   - [x] action回帰テストをPRごとに実行するジョブを追加する。 (Included in workspace tests)
-  - [ ] 失敗ケースのログ構造（warning/error）検証を自動化する。 (Manual verification done)
+  - [x] 失敗ケースのログ構造（warning/error）検証を自動化する。 (`action_execution` に構造化ログ検証を追加)
 - Exit Criteria
   - [x] ACT-04 Recovery Flow（1→2→3）をテストで再現できる。
 
