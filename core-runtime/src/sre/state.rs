@@ -157,6 +157,11 @@ impl SemanticState {
         &self.page_instance_id
     }
 
+    /// Accessor for timestamp (read-only, epoch seconds).
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
     /// Build Fast State (`interactive_elements`, `messages`) only.
     pub fn generate_fast_state(&self) -> FastSemanticState {
         FastSemanticState {

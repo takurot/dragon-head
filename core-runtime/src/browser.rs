@@ -613,6 +613,16 @@ impl PageSession {
             .unwrap_or_default())
     }
 
+    /// Capture semantic state with the requested load profile.
+    pub fn capture_semantic_state(&self, profile: LoadProfile) -> Result<SemanticState> {
+        self.capture_state(profile)
+    }
+
+    /// Resolve the element bounding box `[x, y, width, height]` from a backend node id.
+    pub fn get_element_bbox(&self, backend_node_id: i64) -> Result<Option<[f64; 4]>> {
+        self.resolve_node_bbox(backend_node_id)
+    }
+
     /// Resolve a backend node id from the per-session stable_key index.
     pub fn lookup_backend_node_id_by_stable_key(&self, stable_key: &str) -> Option<i64> {
         self.stable_key_index
@@ -955,7 +965,7 @@ impl PageSession {
         }
     }
 
-    fn current_url(&self) -> Result<String> {
+    pub fn current_url(&self) -> Result<String> {
         let value = self.evaluate_script_value("window.location.href", false)?;
         value
             .as_str()

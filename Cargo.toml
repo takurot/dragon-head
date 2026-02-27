@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "core-runtime",
+    "mcp-server",
     "plugin-host",
     "skills-engine",
 ]

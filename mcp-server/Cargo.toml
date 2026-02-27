@@ -1,0 +1,19 @@
+[package]
+name = "mcp-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+core-runtime = { path = "../core-runtime" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+skills-engine = { path = "../skills-engine" }
+thiserror = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+jsonschema = "0.37"
+tokio = { workspace = true }
+urlencoding = "2.1"

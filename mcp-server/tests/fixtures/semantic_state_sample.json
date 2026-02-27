@@ -1,0 +1,23 @@
+{
+  "metadata": {
+    "url": "https://example.com/checkout",
+    "page_instance_id": "550e8400-e29b-41d4-a716-446655440000",
+    "state_hash": "a1b2c3d4e5f6a7b8c9d0",
+    "load_profile": "minimal",
+    "timestamp": 1707530000
+  },
+  "interactive_elements": [
+    {
+      "id": 42,
+      "stable_key": "a1b2c3d4e5f6",
+      "alias": "btn_submit_checkout",
+      "role": "button",
+      "name": "Purchase",
+      "attributes": {
+        "disabled": false
+      },
+      "bbox": [100, 200, 150, 50],
+      "policy_flags": ["financial_transaction"]
+    }
+  ]
+}
