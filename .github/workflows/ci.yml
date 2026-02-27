@@ -170,3 +170,17 @@ jobs:
     - uses: actions/checkout@v4
     - name: Run skill schema compatibility tests
       run: cargo test -p skills-engine --test skill_schema_compatibility --verbose
+
+  plugin-signature-verification:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run plugin signature verification tests
+      run: cargo test -p plugin-host --test plugin_signature_verification --verbose
+
+  plugin-sbom-validation:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run plugin SBOM validation tests
+      run: cargo test -p plugin-host --test plugin_sbom_validation --verbose
