@@ -96,8 +96,9 @@ fn test_action_execution_fallback() -> anyhow::Result<()> {
     // Trigger mutation to invalidate old_id
     page.evaluate_script("replaceButton()")?;
 
-    // Now act with OLD ID. It should fail ID lookup, trigger fallback, find new button by key, and click.
-    page.act(Some(old_id), Some(&key), "click", None)?;
+    // Use a guaranteed stale ID to force fallback path deterministically.
+    let stale_id = old_id + 1_000_000;
+    page.act(Some(stale_id), Some(&key), "click", None)?;
 
     // Verify effect
     let clicked = page.evaluate_script("document.body.dataset.clicked")?.value;
@@ -105,6 +106,17 @@ fn test_action_execution_fallback() -> anyhow::Result<()> {
         clicked.unwrap().as_str().unwrap(),
         "true",
         "Fallback click should work"
+    );
+
+    let logs = page.action_logs()?;
+    assert!(
+        logs.iter().any(|entry| {
+            entry.level == "warning"
+                && entry.code == "stable_key_fallback_recovered"
+                && entry.action == "click"
+                && entry.stable_key.as_deref() == Some(key.as_str())
+        }),
+        "Expected structured warning log for stable_key fallback recovery"
     );
 
     Ok(())
@@ -153,6 +165,15 @@ fn test_action_execution_verify_required() -> anyhow::Result<()> {
     // Check if error is ActionError::VerifyRequired
     if let Some(action_err) = err.downcast_ref::<core_runtime::error::ActionError>() {
         if matches!(action_err, core_runtime::error::ActionError::VerifyRequired) {
+            let logs = page.action_logs()?;
+            assert!(
+                logs.iter().any(|entry| {
+                    entry.level == "error"
+                        && entry.code == "verify_required"
+                        && entry.action == "click"
+                }),
+                "Expected structured error log for verify required path"
+            );
             return Ok(());
         }
         panic!("Expected VerifyRequired, got ActionError variant: {action_err:?}");

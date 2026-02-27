@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use headless_chrome::{Browser, LaunchOptions};
 use std::{
     cmp::min,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -25,6 +25,7 @@ use crate::{
 const DEFAULT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_TRANSIENT_ERROR_BACKOFF: Duration = Duration::from_millis(250);
 const SRE_EVENT_BRIDGE_SYMBOL: &str = "neural_browser.runtime.sre_event_bridge";
+const ACTION_LOG_BUFFER_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SemanticTarget {
@@ -75,6 +76,17 @@ pub struct VisualCapture {
     pub trigger: SomTrigger,
     pub marks: Vec<SomMark>,
     pub image_png: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionLogEntry {
+    pub level: String,
+    pub code: String,
+    pub action: String,
+    pub target_id: Option<i64>,
+    pub stable_key: Option<String>,
+    pub message: String,
+    pub timestamp: u64,
 }
 
 #[derive(Default)]
@@ -148,6 +160,7 @@ impl BrowserClient {
             inner: tab,
             som_pipeline: Arc::new(Mutex::new(SomPipelineState::default())),
             stable_key_index: Arc::new(Mutex::new(HashMap::new())),
+            action_logs: Arc::new(Mutex::new(VecDeque::new())),
             policy_engine: Arc::new(Mutex::new(PolicyEngine::default())),
             policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
             navigation_epoch: Arc::new(AtomicU64::new(0)),
@@ -161,6 +174,7 @@ pub struct PageSession {
     inner: Arc<headless_chrome::Tab>,
     som_pipeline: Arc<Mutex<SomPipelineState>>,
     stable_key_index: Arc<Mutex<HashMap<String, StableKeyIndexEntry>>>,
+    action_logs: Arc<Mutex<VecDeque<ActionLogEntry>>>,
     policy_engine: Arc<Mutex<PolicyEngine>>,
     policy_approvals: Arc<Mutex<PolicyApprovalState>>,
     navigation_epoch: Arc<AtomicU64>,
@@ -169,6 +183,14 @@ pub struct PageSession {
 }
 
 impl PageSession {
+    pub fn action_logs(&self) -> Result<Vec<ActionLogEntry>> {
+        let guard = self
+            .action_logs
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock action logs"))?;
+        Ok(guard.iter().cloned().collect())
+    }
+
     pub fn navigate(&self, url: &str) -> Result<()> {
         self.inner.navigate_to(url).context("Failed to navigate")?;
         self.inner
@@ -735,6 +757,14 @@ impl PageSession {
                     }
 
                     if stable_key.is_none() {
+                        self.record_action_log(
+                            "error",
+                            "verify_required",
+                            action,
+                            target_id,
+                            stable_key,
+                            "target_id lookup failed and no stable_key was provided",
+                        );
                         self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
                         return Err(ActionError::VerifyRequired.into());
                     }
@@ -749,14 +779,25 @@ impl PageSession {
             self.capture_state(crate::sre::LoadProfile::Interactive)?;
 
             if let Some(new_id) = self.lookup_backend_node_id_by_stable_key(key) {
-                // Log success of fallback
-                eprintln!(
-                    "[WARN] Action recovered via stable key: {} -> new_id: {}",
-                    key, new_id
+                self.record_action_log(
+                    "warning",
+                    "stable_key_fallback_recovered",
+                    action,
+                    target_id,
+                    stable_key,
+                    &format!("Action recovered via stable key: {key} -> new_id: {new_id}"),
                 );
                 return self.perform_action_by_id(new_id, action, value);
             } else {
                 // Both failures -> VerifyRequired
+                self.record_action_log(
+                    "error",
+                    "verify_required",
+                    action,
+                    target_id,
+                    stable_key,
+                    &format!("target_id/stable_key lookup failed for stable_key={key}"),
+                );
                 self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
                 return Err(ActionError::VerifyRequired.into());
             }
@@ -766,8 +807,58 @@ impl PageSession {
         // Actually, if stable_key was None, we would have returned early in the target_id block if target_id was Some.
         // If target_id was None AND stable_key was None, we should also error.
 
+        self.record_action_log(
+            "error",
+            "verify_required",
+            action,
+            target_id,
+            stable_key,
+            "neither target_id nor stable_key resolved a target",
+        );
         self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
         Err(ActionError::VerifyRequired.into())
+    }
+
+    fn record_action_log(
+        &self,
+        level: &str,
+        code: &str,
+        action: &str,
+        target_id: Option<i64>,
+        stable_key: Option<&str>,
+        message: &str,
+    ) {
+        let entry = ActionLogEntry {
+            level: level.to_string(),
+            code: code.to_string(),
+            action: action.to_string(),
+            target_id,
+            stable_key: stable_key.map(|key| key.to_string()),
+            message: message.to_string(),
+            timestamp: epoch_millis_u64(),
+        };
+
+        if let Ok(mut guard) = self.action_logs.lock() {
+            guard.push_back(entry.clone());
+            while guard.len() > ACTION_LOG_BUFFER_LIMIT {
+                guard.pop_front();
+            }
+        } else {
+            eprintln!("[ACTION][ERROR] Failed to lock structured action log buffer");
+        }
+
+        eprintln!(
+            "[ACTION][{}] {}",
+            level.to_uppercase(),
+            serde_json::json!({
+                "code": entry.code,
+                "action": entry.action,
+                "target_id": entry.target_id,
+                "stable_key": entry.stable_key,
+                "message": entry.message,
+                "timestamp": entry.timestamp
+            })
+        );
     }
 
     fn enforce_policy(

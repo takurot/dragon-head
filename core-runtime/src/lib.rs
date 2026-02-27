@@ -5,8 +5,8 @@ pub mod session_vault;
 pub mod sre;
 
 pub use browser::{
-    BrowserClient, PageSession, SemanticTarget, SemanticWaitOptions, SemanticWaitState, SomMark,
-    SomTrigger, VisualCapture,
+    ActionLogEntry, BrowserClient, PageSession, SemanticTarget, SemanticWaitOptions,
+    SemanticWaitState, SomMark, SomTrigger, VisualCapture,
 };
 pub mod error;
 pub use error::{ActionError, VerifyError, WaitError};
