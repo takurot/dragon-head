@@ -191,6 +191,14 @@ impl PageSession {
         Ok(guard.iter().cloned().collect())
     }
 
+    pub fn audit_events(&self) -> Vec<AuditEvent> {
+        self.audit_logger.recent_events()
+    }
+
+    pub fn clear_audit_events(&self) {
+        self.audit_logger.clear_recent_events();
+    }
+
     pub fn navigate(&self, url: &str) -> Result<()> {
         self.inner.navigate_to(url).context("Failed to navigate")?;
         self.inner

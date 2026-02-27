@@ -26,8 +26,12 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y chromium-browser
     - name: Run full e2e suite
+      env:
+        CHROME_INSTALLED: "true"
       run: |
-        echo "Running full E2E suite..."
+        cargo test -p core-runtime --test session_management --verbose
+        cargo test -p core-runtime --test audit_logging --verbose
+        cargo test -p core-runtime --test spa_stable_key_stress --verbose
     - name: Upload e2e failure artifacts
       if: failure()
       uses: actions/upload-artifact@v4
