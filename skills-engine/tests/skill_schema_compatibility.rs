@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use skills_engine::{skill_definition_schema, validate_skill_json};
 use std::{fs, path::PathBuf};
 
@@ -15,6 +15,10 @@ fn test_skill_schema_backward_compatibility_fixture() -> Result<()> {
     let path = fixture_path();
 
     if std::env::var(UPDATE_ENV).as_deref() == Ok("1") {
+        ensure!(
+            std::env::var("CI").is_err(),
+            "{UPDATE_ENV}=1 is not allowed in CI. Update schema fixture locally and commit it."
+        );
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("failed to create schema fixture dir: {}", parent.display())
