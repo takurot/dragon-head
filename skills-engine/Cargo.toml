@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+jsonschema = "0.37"
+
+[dev-dependencies]
+anyhow = { workspace = true }

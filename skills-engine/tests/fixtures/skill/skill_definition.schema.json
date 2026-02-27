@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema_version": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "steps": {
+      "items": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "control": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_retries": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "on_failure": {
+                    "type": "string"
+                  },
+                  "on_success": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "id": {
+                "type": "string"
+              },
+              "query": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "locate"
+              }
+            },
+            "required": [
+              "type",
+              "query"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "control": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_retries": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "on_failure": {
+                    "type": "string"
+                  },
+                  "on_success": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "expected": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "target": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "verify"
+              }
+            },
+            "required": [
+              "type",
+              "target",
+              "expected"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "control": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_retries": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "on_failure": {
+                    "type": "string"
+                  },
+                  "on_success": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "id": {
+                "type": "string"
+              },
+              "target": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "act"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "action",
+              "target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "condition": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "control": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_retries": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "on_failure": {
+                    "type": "string"
+                  },
+                  "on_success": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "id": {
+                "type": "string"
+              },
+              "timeout_ms": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "const": "wait"
+              }
+            },
+            "required": [
+              "type",
+              "condition",
+              "timeout_ms"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "control": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_retries": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "on_failure": {
+                    "type": "string"
+                  },
+                  "on_success": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "id": {
+                "type": "string"
+              },
+              "key": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "selector": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "extract"
+              }
+            },
+            "required": [
+              "type",
+              "key",
+              "selector"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "assignee": {
+                "type": "string"
+              },
+              "control": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_retries": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "on_failure": {
+                    "type": "string"
+                  },
+                  "on_success": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "id": {
+                "type": "string"
+              },
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "const": "handoff"
+              }
+            },
+            "required": [
+              "type",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "name",
+    "steps"
+  ],
+  "title": "SkillDefinition",
+  "type": "object"
+}
