@@ -36,7 +36,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 2 | Interaction & Reliability | PR-04〜06 | 3/3 | DONE |
 | 3 | Performance & NFR | PR-07〜08, PR-15 | 2/3 | IN_PROGRESS |
 | 4 | Security & Audit | PR-09〜11 | 3/3 | DONE |
-| 5 | Extensions & API | PR-12〜14 | 0/3 | NOT_STARTED |
+| 5 | Extensions & API | PR-12〜14 | 1/3 | IN_PROGRESS |
 | 6 | Monetization Meters | PR-16 | 0/1 | NOT_STARTED |
 | 7 | Marketplace | PR-17 | 0/1 | NOT_STARTED |
 | 8 | Robustness & Verification | PR-18 | 0/1 | NOT_STARTED |
@@ -282,21 +282,21 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [ ] サンドボックス制約下で安全にplugin実行できる。
 
 ### PR-13: SKILL-01 Skills Engine
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: SKILL-01
 - Dependencies: PR-04, PR-09
 - 実装タスク
-  - [ ] Skill JSON schema（`locate`, `verify`, `act`, `wait`, `extract`, `handoff`）を定義する。
-  - [ ] 実行順序 `verify -> policy_check -> act -> post_check` を強制する。
-  - [ ] リトライ・分岐・handoff処理を実装する。
+  - [x] Skill JSON schema（`locate`, `verify`, `act`, `wait`, `extract`, `handoff`）を定義する。
+  - [x] 実行順序 `verify -> policy_check -> act -> post_check` を強制する。
+  - [x] リトライ・分岐・handoff処理を実装する。
 - テストタスク
-  - [ ] 正常系ワークフロー（例: 検索〜抽出）を追加する。
-  - [ ] `verify` 失敗時に `act` が抑止されるテストを追加する。
+  - [x] 正常系ワークフロー（例: 検索〜抽出）を追加する。
+  - [x] `verify` 失敗時に `act` が抑止されるテストを追加する。
 - CIタスク
-  - [ ] skill conformance testを必須ジョブ化する。
-  - [ ] schema変更時の後方互換性チェックを追加する。
+  - [x] skill conformance testを必須ジョブ化する。
+  - [x] schema変更時の後方互換性チェックを追加する。
 - Exit Criteria
-  - [ ] 宣言的Skillで再現性あるタスク実行が可能。
+  - [x] 宣言的Skillで再現性あるタスク実行が可能。
 
 ### PR-14: MCP Tool Interface
 - Status: `NOT_STARTED`

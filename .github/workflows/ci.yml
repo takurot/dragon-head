@@ -156,3 +156,17 @@ jobs:
       with:
         name: som-regression-artifacts
         path: core-runtime/target/som-artifacts/*.png
+
+  skill-conformance:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run skill conformance tests
+      run: cargo test -p skills-engine --test skill_conformance --verbose
+
+  skill-schema-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run skill schema compatibility tests
+      run: cargo test -p skills-engine --test skill_schema_compatibility --verbose
