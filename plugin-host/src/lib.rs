@@ -1,7 +1,7 @@
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use thiserror::Error;
 use wasmtime::{Engine, Module};
 
@@ -196,9 +196,8 @@ impl PluginHost {
             }
         })?;
 
-        let exported_names = collect_exported_names(&module);
         for extension in &package.manifest.entry_points {
-            if !exported_names.contains(extension.export_name()) {
+            if module.get_export(extension.export_name()).is_none() {
                 return Err(PluginError::MissingExport {
                     extension: *extension,
                 });
@@ -207,7 +206,6 @@ impl PluginHost {
 
         Ok(LoadedPlugin {
             manifest: package.manifest.clone(),
-            exported_names,
         })
     }
 
@@ -246,7 +244,6 @@ impl PluginHost {
 #[derive(Debug, Clone)]
 pub struct LoadedPlugin {
     manifest: PluginManifest,
-    exported_names: HashSet<String>,
 }
 
 impl LoadedPlugin {
@@ -255,7 +252,7 @@ impl LoadedPlugin {
     }
 
     pub fn authorize_extension(&self, extension: ExtensionPoint) -> Result<(), PluginError> {
-        if !self.exported_names.contains(extension.export_name()) {
+        if !self.manifest.entry_points.contains(&extension) {
             return Err(PluginError::MissingExport { extension });
         }
 
@@ -325,11 +322,4 @@ fn validate_sbom(sbom: &SbomDocument) -> Result<(), PluginError> {
     }
 
     Ok(())
-}
-
-fn collect_exported_names(module: &Module) -> HashSet<String> {
-    module
-        .exports()
-        .map(|export| export.name().to_string())
-        .collect()
 }
