@@ -1,7 +1,7 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-02-24
+- 最終更新日: 2026-02-27
 - プラン状態: In Progress
 
 ## 1. 進捗管理ルール
@@ -22,7 +22,7 @@
 MVPは「外部クライアントから安全に利用可能な Neural-Browser Runtime の最小提供ライン」と定義し、次をすべて満たした時点で完了とする。
 
 - [ ] 必須PRがすべて `DONE` である（`PR-00`〜`PR-11`, `PR-14`）。
-- [ ] 必須CIチェック（`lint`, `test`, `smoke-e2e`, `cdp-smoke`, `policy-regression`, `policy-schema-lint`, `sre-regression`, `sre-semantic-delta`, `som-regression`）が安定してグリーンである。
+- [ ] 必須CIチェック（`lint`, `test`, `smoke-e2e`, `cdp-smoke`, `policy-regression`, `policy-schema-lint`, `sre-regression`, `sre-semantic-delta`, `som-regression`, `mcp-protocol-compliance`, `mcp-api-schema-diff`, `mcp-schema-compatibility`）が安定してグリーンである。
 - [ ] `SEC-01` / `SEC-02` / `AUD-01` の Exit Criteria（`PR-09`〜`PR-11`）がすべて満たされている。
 - [ ] `PR-14` の Exit Criteria（MCPツール群の一貫利用）が満たされ、外部契約テストがCI必須化されている。
 - [ ] 利用手順・既知制約・障害時手順が `docs/` に明示され、運用可能な状態になっている。
@@ -36,7 +36,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 2 | Interaction & Reliability | PR-04〜06 | 3/3 | DONE |
 | 3 | Performance & NFR | PR-07〜08, PR-15 | 2/3 | IN_PROGRESS |
 | 4 | Security & Audit | PR-09〜11 | 3/3 | DONE |
-| 5 | Extensions & API | PR-12〜14 | 2/3 | IN_PROGRESS |
+| 5 | Extensions & API | PR-12〜14 | 3/3 | DONE |
 | 6 | Monetization Meters | PR-16 | 0/1 | NOT_STARTED |
 | 7 | Marketplace | PR-17 | 0/1 | NOT_STARTED |
 | 8 | Robustness & Verification | PR-18 | 0/1 | NOT_STARTED |
@@ -299,25 +299,25 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 宣言的Skillで再現性あるタスク実行が可能。
 
 ### PR-14: MCP Tool Interface
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: Section 5.2
 - Dependencies: PR-04, PR-05, PR-06, PR-09, PR-13
 - 実装タスク
-  - [ ] MCPサーバを実装し内部APIを公開する。
-  - [ ] `get_state`, `act`, `verify`, `get_visual`, `ask_human`, `run_skill` を公開する。
-  - [ ] 各tool引数・戻り値を仕様準拠に揃える（`force_refresh` など）。
-  - [ ] `get_state(format=json)` の戻り値を Section 5.1 スキーマ（`metadata.url`, `interactive_elements[].id/stable_key/alias/role/name/attributes/bbox/policy_flags`）に厳密準拠させる。
-  - [ ] 内部表現（`SemanticState`）と外部公開DTOを分離し、スキーマ互換性を管理する。
+  - [x] MCPサーバを実装し内部APIを公開する。
+  - [x] `get_state`, `act`, `verify`, `get_visual`, `ask_human`, `run_skill` を公開する。
+  - [x] 各tool引数・戻り値を仕様準拠に揃える（`force_refresh` など）。
+  - [x] `get_state(format=json)` の戻り値を Section 5.1 スキーマ（`metadata.url`, `interactive_elements[].id/stable_key/alias/role/name/attributes/bbox/policy_flags`）に厳密準拠させる。
+  - [x] 内部表現（`SemanticState`）と外部公開DTOを分離し、スキーマ互換性を管理する。
 - テストタスク
-  - [ ] MCP clientとの契約テストを追加する。
-  - [ ] `ask_human` を含むHITLフローのE2Eテストを追加する。
-  - [ ] Section 5.1 JSONサンプルに対するスキーマ準拠（golden/contract）テストを追加する。
+  - [x] MCP clientとの契約テストを追加する。
+  - [x] `ask_human` を含むHITLフローのE2Eテストを追加する。
+  - [x] Section 5.1 JSONサンプルに対するスキーマ準拠（golden/contract）テストを追加する。
 - CIタスク
-  - [ ] MCP protocol complianceテストを必須化する。
-  - [ ] API schema差分の自動検知を追加する。
-  - [ ] JSON Schema互換性チェック（後方互換）を必須化する。
+  - [x] MCP protocol complianceテストを必須化する。
+  - [x] API schema差分の自動検知を追加する。
+  - [x] JSON Schema互換性チェック（後方互換）を必須化する。
 - Exit Criteria
-  - [ ] 仕様ツール群を外部クライアントから一貫利用できる。
+  - [x] 仕様ツール群を外部クライアントから一貫利用できる。
 
 ### PR-15: NFR Benchmark & Capacity Validation
 - Status: `NOT_STARTED`

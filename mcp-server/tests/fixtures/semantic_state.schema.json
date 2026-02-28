@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SemanticState",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "metadata",
+    "interactive_elements"
+  ],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "page_instance_id",
+        "state_hash",
+        "load_profile",
+        "timestamp"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "page_instance_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "load_profile": {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "visual",
+            "interactive"
+          ]
+        },
+        "timestamp": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "interactive_elements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "stable_key",
+          "alias",
+          "role",
+          "name",
+          "attributes",
+          "bbox",
+          "policy_flags"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "stable_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "alias": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "bbox": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "policy_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

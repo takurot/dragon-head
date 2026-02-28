@@ -184,3 +184,26 @@ jobs:
     - uses: actions/checkout@v4
     - name: Run plugin SBOM validation tests
       run: cargo test -p plugin-host --test plugin_sbom_validation --verbose
+
+  mcp-protocol-compliance:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run MCP client contract and protocol compliance tests
+      run: |
+        cargo test -p mcp-server --test mcp_client_contract --verbose
+        cargo test -p mcp-server --test mcp_protocol_compliance --verbose
+
+  mcp-api-schema-diff:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run MCP API schema diff snapshot check
+      run: cargo test -p mcp-server --test mcp_schema_diff --verbose
+
+  mcp-schema-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run MCP semantic state schema compatibility tests
+      run: cargo test -p mcp-server --test mcp_schema_compatibility --verbose
