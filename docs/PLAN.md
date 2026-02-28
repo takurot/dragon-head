@@ -1,7 +1,7 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-02-27
+- 最終更新日: 2026-02-28
 - プラン状態: In Progress
 
 ## 1. 進捗管理ルール
@@ -320,16 +320,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 仕様ツール群を外部クライアントから一貫利用できる。
 
 ### PR-15: NFR Benchmark & Capacity Validation
-- Status: `NOT_STARTED`
+- Status: `IN_PROGRESS` (Local)
 - Spec Ref: Section 6
 - Dependencies: PR-08, PR-10, PR-14
 - 実装タスク
-  - [ ] TTFT `<50ms`（Fast State, Minimal Profile条件）計測基盤を実装する。
-  - [ ] State Update Latency `<100ms`（変更ノード < 50条件）を計測する。
-  - [ ] 帯域95%削減（Standard比）を計測する。
+  - [x] TTFT `<50ms`（Fast State, Minimal Profile条件）計測基盤を実装する。
+  - [x] State Update Latency `<100ms`（変更ノード < 50条件）を計測する。
+  - [x] 帯域95%削減（Standard比）を計測する。
   - [ ] 容量指標（Minimal 75 sessions/instance, Visual 20 sessions/instance）を測定する。
 - テストタスク
-  - [ ] 再現可能なベンチシナリオと負荷プロファイルを固定化する。
+  - [x] 再現可能なベンチシナリオと負荷プロファイルを固定化する。
   - [ ] 結果の統計妥当性（複数試行、p95/p99）を検証する。
 - CIタスク
   - [ ] PRでは短尺性能テスト、nightlyではフル性能テストを実行する。

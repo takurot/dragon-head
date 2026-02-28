@@ -207,3 +207,14 @@ jobs:
     - uses: actions/checkout@v4
     - name: Run MCP semantic state schema compatibility tests
       run: cargo test -p mcp-server --test mcp_schema_compatibility --verbose
+
+  nfr-benchmark-short:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run NFR Latency Benchmark
+      run: cargo test -p core-runtime --test nfr_latency --verbose
+    - name: Run NFR Bandwidth Verification
+      run: cargo test -p core-runtime --test nfr_bandwidth --verbose
+    - name: Run NFR Capacity Simulation
+      run: cargo test -p core-runtime --test nfr_capacity --verbose
