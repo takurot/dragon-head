@@ -50,7 +50,11 @@ fn test_nfr_state_update_latency_under_100ms() -> anyhow::Result<()> {
     // Increase the timeout slightly for CI environments which can be slower.
     // The NFR is < 100ms, but CI runners often have noisy neighbors or slow IO.
     // We will use 250ms for CI stability while remaining strictly < 100ms locally.
-    let limit = if std::env::var("CI").is_ok() { 250 } else { 100 };
+    let limit = if std::env::var("CI").is_ok() {
+        250
+    } else {
+        100
+    };
 
     assert!(
         latency.as_millis() < limit,
