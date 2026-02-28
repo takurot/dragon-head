@@ -102,41 +102,42 @@ impl<B: McpBackend> McpServer<B> {
         };
 
         let id = req.id.clone();
-        let result = match req.method.as_str() {
+        let result: Result<Value, (i64, String)> = match req.method.as_str() {
             "tools/list" => Ok(json!({ "tools": self.tools() })),
             "tools/call" => {
-                let name = req
-                    .params
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .context("tools/call params.name must be a string");
+                let name = req.params.get("name").and_then(Value::as_str);
 
                 match name {
-                    Ok(name) => {
+                    Some(name) => {
                         let arguments = req
                             .params
                             .get("arguments")
                             .cloned()
                             .unwrap_or_else(|| json!({}));
 
-                        self.call_tool(name, arguments).map(|payload| {
-                            json!({
-                                "content": [{
-                                    "type": "json",
-                                    "json": payload
-                                }]
+                        self.call_tool(name, arguments)
+                            .map(|payload| {
+                                json!({
+                                    "content": [{
+                                        "type": "json",
+                                        "json": payload
+                                    }]
+                                })
                             })
-                        })
+                            .map_err(|err| (-32000, err.to_string()))
                     }
-                    Err(err) => Err(err),
+                    None => Err((
+                        -32602,
+                        "tools/call params.name must be a string".to_string(),
+                    )),
                 }
             }
-            other => Err(anyhow::anyhow!("unsupported method: {other}")),
+            other => Err((-32601, format!("unsupported method: {other}"))),
         };
 
         match result {
             Ok(result) => serialize_response(JsonRpcResponse::success(id, result)),
-            Err(err) => serialize_response(JsonRpcResponse::error(id, -32000, err.to_string())),
+            Err((code, message)) => serialize_response(JsonRpcResponse::error(id, code, message)),
         }
     }
 
@@ -745,7 +746,7 @@ fn parse_target_stable_key(target: &str) -> Option<String> {
 
 fn render_state_markdown(payload: &ExternalSemanticState) -> String {
     let mut lines = vec![
-        format!("# Semantic State"),
+        "# Semantic State".to_string(),
         format!("- URL: {}", payload.metadata.url),
         format!("- Page Instance ID: {}", payload.metadata.page_instance_id),
         format!("- State Hash: {}", payload.metadata.state_hash),
@@ -839,7 +840,8 @@ fn fallback_alias(node: &SemanticNode, stable_key: &str) -> String {
     if node.backend_node_id > 0 {
         format!("{}_{}", role, node.backend_node_id)
     } else {
-        format!("{}_{}", role, &stable_key[..8])
+        let key_prefix: String = stable_key.chars().take(8).collect();
+        format!("{}_{}", role, key_prefix)
     }
 }
 
