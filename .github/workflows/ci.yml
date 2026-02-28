@@ -213,8 +213,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Run NFR Latency Benchmark
-      run: cargo test -p core-runtime --test nfr_latency --verbose -- --nocapture
+      run: cargo test -p core-runtime --test nfr_latency --verbose
     - name: Run NFR Bandwidth Verification
-      run: cargo test -p core-runtime --test nfr_bandwidth --verbose -- --nocapture
+      run: cargo test -p core-runtime --test nfr_bandwidth --verbose
     - name: Run NFR Capacity Simulation
-      run: cargo test -p core-runtime --test nfr_capacity --verbose -- --nocapture
+      run: cargo test -p core-runtime --test nfr_capacity --verbose

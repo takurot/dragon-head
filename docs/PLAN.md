@@ -1,7 +1,7 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-02-27
+- 最終更新日: 2026-02-28
 - プラン状態: In Progress
 
 ## 1. 進捗管理ルール
@@ -320,22 +320,22 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 仕様ツール群を外部クライアントから一貫利用できる。
 
 ### PR-15: NFR Benchmark & Capacity Validation
-- Status: `DONE` (Local)
+- Status: `IN_PROGRESS` (Local)
 - Spec Ref: Section 6
 - Dependencies: PR-08, PR-10, PR-14
 - 実装タスク
   - [x] TTFT `<50ms`（Fast State, Minimal Profile条件）計測基盤を実装する。
   - [x] State Update Latency `<100ms`（変更ノード < 50条件）を計測する。
   - [x] 帯域95%削減（Standard比）を計測する。
-  - [x] 容量指標（Minimal 75 sessions/instance, Visual 20 sessions/instance）を測定する。
+  - [ ] 容量指標（Minimal 75 sessions/instance, Visual 20 sessions/instance）を測定する。
 - テストタスク
   - [x] 再現可能なベンチシナリオと負荷プロファイルを固定化する。
-  - [x] 結果の統計妥当性（複数試行、p95/p99）を検証する。
+  - [ ] 結果の統計妥当性（複数試行、p95/p99）を検証する。
 - CIタスク
-  - [x] PRでは短尺性能テスト、nightlyではフル性能テストを実行する。
-  - [x] NFR回帰ダッシュボードを生成し、しきい値超過時に失敗させる。
+  - [ ] PRでは短尺性能テスト、nightlyではフル性能テストを実行する。
+  - [ ] NFR回帰ダッシュボードを生成し、しきい値超過時に失敗させる。
 - Exit Criteria
-  - [x] 主要NFR指標が計測可能かつ継続監視可能。
+  - [ ] 主要NFR指標が計測可能かつ継続監視可能。
 
 ### PR-16: Billing Meters & Plan Gating
 - Status: `NOT_STARTED`
