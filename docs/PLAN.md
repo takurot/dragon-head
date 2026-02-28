@@ -320,22 +320,22 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 仕様ツール群を外部クライアントから一貫利用できる。
 
 ### PR-15: NFR Benchmark & Capacity Validation
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: Section 6
 - Dependencies: PR-08, PR-10, PR-14
 - 実装タスク
-  - [ ] TTFT `<50ms`（Fast State, Minimal Profile条件）計測基盤を実装する。
-  - [ ] State Update Latency `<100ms`（変更ノード < 50条件）を計測する。
-  - [ ] 帯域95%削減（Standard比）を計測する。
-  - [ ] 容量指標（Minimal 75 sessions/instance, Visual 20 sessions/instance）を測定する。
+  - [x] TTFT `<50ms`（Fast State, Minimal Profile条件）計測基盤を実装する。
+  - [x] State Update Latency `<100ms`（変更ノード < 50条件）を計測する。
+  - [x] 帯域95%削減（Standard比）を計測する。
+  - [x] 容量指標（Minimal 75 sessions/instance, Visual 20 sessions/instance）を測定する。
 - テストタスク
-  - [ ] 再現可能なベンチシナリオと負荷プロファイルを固定化する。
-  - [ ] 結果の統計妥当性（複数試行、p95/p99）を検証する。
+  - [x] 再現可能なベンチシナリオと負荷プロファイルを固定化する。
+  - [x] 結果の統計妥当性（複数試行、p95/p99）を検証する。
 - CIタスク
-  - [ ] PRでは短尺性能テスト、nightlyではフル性能テストを実行する。
-  - [ ] NFR回帰ダッシュボードを生成し、しきい値超過時に失敗させる。
+  - [x] PRでは短尺性能テスト、nightlyではフル性能テストを実行する。
+  - [x] NFR回帰ダッシュボードを生成し、しきい値超過時に失敗させる。
 - Exit Criteria
-  - [ ] 主要NFR指標が計測可能かつ継続監視可能。
+  - [x] 主要NFR指標が計測可能かつ継続監視可能。
 
 ### PR-16: Billing Meters & Plan Gating
 - Status: `NOT_STARTED`
