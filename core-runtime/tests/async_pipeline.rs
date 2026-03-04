@@ -7,6 +7,10 @@ use core_runtime::sre::{
     AsyncPipeline, AsyncPipelineConfig, AuditEvent, LoadProfile, PipelineSubmitError, SemanticNode,
     SemanticState,
 };
+use serde_json::json;
+
+#[path = "support/nfr_metrics.rs"]
+mod nfr_metrics;
 
 fn build_state(label: &str) -> SemanticState {
     let root = SemanticNode {
@@ -118,6 +122,25 @@ fn run_ttft_benchmark(
             "::warning title=TTFT warning::p95 TTFT {p95_ms:.3}ms exceeded warning threshold {warn_ms}ms in {name} benchmark"
         );
     }
+
+    nfr_metrics::write_metric(
+        &format!("ttft-{name}"),
+        json!({
+            "metric_id": format!("ttft-{name}"),
+            "mode": nfr_metrics::bench_mode(),
+            "values": {
+                "iterations": iterations,
+                "avg_ms": avg_ms,
+                "p95_ms": p95_ms,
+                "p99_ms": p99_ms,
+                "max_ms": max_ms
+            },
+            "thresholds": {
+                "p95_ms_max": fail_ms as f64
+            },
+            "display": ["iterations", "avg_ms", "p95_ms", "p99_ms", "max_ms"],
+        }),
+    )?;
 
     assert!(
         p95_ms <= fail_ms as f64,

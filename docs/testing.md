@@ -32,7 +32,9 @@ The CI pipeline is defined in `.github/workflows/`.
 
 - **`ci.yml`**: Runs `fmt`, `clippy`, unit tests, and integration tests.
 - **`e2e.yml`**: Runs E2E tests against a headless browser.
-- **Performance Gate**: `ci.yml` runs a short TTFT benchmark on PRs, and `e2e.yml` runs the long TTFT benchmark on nightly schedule.
+- **Performance Gate (PR Short)**: `ci.yml` runs a short NFR suite (`ttft`, `nfr_latency`, `nfr_bandwidth`, `nfr_capacity`) and generates `target/nfr-dashboard.md`.
+- **Performance Gate (Nightly Full)**: `e2e.yml` runs the full NFR suite (including long TTFT and full capacity targets) and publishes the same dashboard format for regression tracking.
+- **Threshold Enforcement**: `scripts/nfr_dashboard.py` evaluates metric thresholds from JSON outputs and fails CI on regressions.
 
 ## 3. Running Tests Locally
 
