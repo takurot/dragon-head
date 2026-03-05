@@ -208,6 +208,20 @@ jobs:
     - name: Run MCP semantic state schema compatibility tests
       run: cargo test -p mcp-server --test mcp_schema_compatibility --verbose
 
+  metering-regression:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run metering and plan-gating regression tests
+      run: cargo test -p mcp-server --test mcp_billing_plan_gating --verbose
+
+  pricing-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run usage pricing snapshot diff check
+      run: cargo test -p mcp-server --test mcp_pricing_snapshot --verbose
+
   nfr-benchmark-short:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

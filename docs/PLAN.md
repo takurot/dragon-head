@@ -37,7 +37,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 3 | Performance & NFR | PR-07〜08, PR-15 | 3/3 | DONE |
 | 4 | Security & Audit | PR-09〜11 | 3/3 | DONE |
 | 5 | Extensions & API | PR-12〜14 | 3/3 | DONE |
-| 6 | Monetization Meters | PR-16 | 0/1 | NOT_STARTED |
+| 6 | Monetization Meters | PR-16 | 1/1 | DONE |
 | 7 | Marketplace | PR-17 | 0/1 | NOT_STARTED |
 | 8 | Robustness & Verification | PR-18 | 0/1 | NOT_STARTED |
 
@@ -338,21 +338,21 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 主要NFR指標が計測可能かつ継続監視可能。
 
 ### PR-16: Billing Meters & Plan Gating
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: Section 7.1, 7.2
 - Dependencies: PR-10, PR-14
 - 実装タスク
-  - [ ] Meter（`State Generations`, `Visual Captures`, `Actions Executed`, `HITL Events`, `Audit Retention`）を実装する。
-  - [ ] プラン別feature gate（Developer/Pro/Enterprise）を実装する。
-  - [ ] 利用量レポートAPIを実装する。
+  - [x] Meter（`State Generations`, `Visual Captures`, `Actions Executed`, `HITL Events`, `Audit Retention`）を実装する。
+  - [x] プラン別feature gate（Developer/Pro/Enterprise）を実装する。
+  - [x] 利用量レポートAPIを実装する。
 - テストタスク
-  - [ ] メーター計測精度テストを追加する。
-  - [ ] プラン境界のアクセス制御テストを追加する。
+  - [x] メーター計測精度テストを追加する。
+  - [x] プラン境界のアクセス制御テストを追加する。
 - CIタスク
-  - [ ] メータリング回帰テストを必須化する。
-  - [ ] 料金計算スナップショット差分チェックを追加する。
+  - [x] メータリング回帰テストを必須化する。
+  - [x] 料金計算スナップショット差分チェックを追加する。
 - Exit Criteria
-  - [ ] 仕様の課金メーターが再現性を持って収集できる。
+  - [x] 仕様の課金メーターが再現性を持って収集できる。
 
 ### PR-17: Marketplace Integration
 - Status: `NOT_STARTED`

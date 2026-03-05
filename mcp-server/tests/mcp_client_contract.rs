@@ -43,6 +43,7 @@ fn test_mcp_contract_exposes_required_tools() {
     assert!(names.contains(&"get_visual"));
     assert!(names.contains(&"ask_human"));
     assert!(names.contains(&"run_skill"));
+    assert!(names.contains(&"get_usage_report"));
 }
 
 #[test]
@@ -63,4 +64,9 @@ fn test_mcp_contract_all_tools_are_callable() {
         assert_eq!(result["ok"], json!(true));
         assert_eq!(result["tool"], json!(name));
     }
+
+    let usage_report = server
+        .call_tool("get_usage_report", json!({}))
+        .expect("usage report tool call failed");
+    assert_eq!(usage_report["plan_tier"], json!("enterprise"));
 }
