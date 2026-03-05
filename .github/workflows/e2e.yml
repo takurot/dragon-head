@@ -11,7 +11,8 @@ jobs:
     env:
       CHROME_INSTALLED: "true"
       NFR_BENCH_MODE: "full"
-      NFR_METRICS_DIR: "target/nfr-metrics"
+      NFR_METRICS_DIR: "${{ github.workspace }}/core-runtime/target/nfr-metrics"
+      NFR_DASHBOARD_PATH: "${{ github.workspace }}/core-runtime/target/nfr-dashboard.md"
       TTFT_LONG_ITERATIONS: "400"
       TTFT_WARN_MS: "40"
       TTFT_FAIL_MS: "50"
@@ -40,8 +41,8 @@ jobs:
       run: cargo test -p core-runtime --test nfr_capacity --verbose
     - name: Generate NFR dashboard and enforce thresholds
       run: |
-        python3 scripts/nfr_dashboard.py --metrics-dir core-runtime/target/nfr-metrics --output core-runtime/target/nfr-dashboard.md
-        cat core-runtime/target/nfr-dashboard.md >> "$GITHUB_STEP_SUMMARY"
+        python3 scripts/nfr_dashboard.py --metrics-dir "$NFR_METRICS_DIR" --output "$NFR_DASHBOARD_PATH"
+        cat "$NFR_DASHBOARD_PATH" >> "$GITHUB_STEP_SUMMARY"
     - name: Upload NFR dashboard artifact
       if: always()
       uses: actions/upload-artifact@v4

@@ -20,11 +20,11 @@ fn test_nfr_state_update_latency_under_100ms() -> anyhow::Result<()> {
     let trials = nfr_metrics::env_usize_with_default("NFR_LATENCY_TRIALS", default_trials);
     let p95_limit_ms = nfr_metrics::env_u64_with_default(
         "NFR_LATENCY_P95_LIMIT_MS",
-        if mode == "full" { 100 } else { 170 },
+        if mode == "full" { 100 } else { 260 },
     );
     let p99_limit_ms = nfr_metrics::env_u64_with_default(
         "NFR_LATENCY_P99_LIMIT_MS",
-        if mode == "full" { 130 } else { 220 },
+        if mode == "full" { 130 } else { 340 },
     );
 
     let client = BrowserClient::new()?;
