@@ -24,6 +24,8 @@ use crate::{
 
 const DEFAULT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_TRANSIENT_ERROR_BACKOFF: Duration = Duration::from_millis(250);
+const NAVIGATION_FALLBACK_TIMEOUT: Duration = Duration::from_secs(3);
+const NAVIGATION_FALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SRE_EVENT_BRIDGE_SYMBOL: &str = "neural_browser.runtime.sre_event_bridge";
 const ACTION_LOG_BUFFER_LIMIT: usize = 256;
 
@@ -200,10 +202,14 @@ impl PageSession {
     }
 
     pub fn navigate(&self, url: &str) -> Result<()> {
+        let previous_url = self.current_url().ok();
         self.inner.navigate_to(url).context("Failed to navigate")?;
-        self.inner
-            .wait_until_navigated()
-            .context("Failed to wait for navigation")?;
+        if let Err(wait_error) = self.inner.wait_until_navigated() {
+            self.wait_for_navigation_fallback(url, previous_url.as_deref())
+                .with_context(|| {
+                    format!("Failed to wait for navigation (primary wait error: {wait_error})")
+                })?;
+        }
         self.clear_stable_key_index();
         self.navigation_epoch.fetch_add(1, Ordering::Relaxed);
         self.clear_pending_policy_approval();
@@ -971,6 +977,56 @@ impl PageSession {
             .as_str()
             .map(ToOwned::to_owned)
             .context("Failed to resolve current page URL for policy evaluation")
+    }
+
+    fn document_ready_state(&self) -> Result<String> {
+        let value = self.evaluate_script_value("document.readyState", false)?;
+        value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .context("Failed to resolve document.readyState while waiting for navigation")
+    }
+
+    fn wait_for_navigation_fallback(
+        &self,
+        requested_url: &str,
+        previous_url: Option<&str>,
+    ) -> Result<()> {
+        let started = Instant::now();
+        let (last_url, last_ready_state, last_dom_non_empty) = loop {
+            let current_url = self.current_url().ok();
+            let ready_state = self.document_ready_state().ok();
+            let dom_non_empty = self
+                .get_content()
+                .map(|content| !content.trim().is_empty())
+                .unwrap_or(false);
+
+            if navigation_fallback_condition_met(
+                requested_url,
+                previous_url,
+                current_url.as_deref(),
+                ready_state.as_deref(),
+                dom_non_empty,
+            ) {
+                return Ok(());
+            }
+
+            let remaining = remaining_timeout(started, NAVIGATION_FALLBACK_TIMEOUT);
+            if remaining.is_zero() {
+                break (current_url, ready_state, dom_non_empty);
+            }
+            thread::sleep(min(NAVIGATION_FALLBACK_POLL_INTERVAL, remaining));
+        };
+
+        anyhow::bail!(
+            "Navigation fallback timed out after {}ms (requested_url={}, previous_url={:?}, current_url={:?}, ready_state={:?}, dom_non_empty={})",
+            duration_to_millis(NAVIGATION_FALLBACK_TIMEOUT),
+            requested_url,
+            previous_url,
+            last_url,
+            last_ready_state,
+            last_dom_non_empty
+        );
     }
 
     fn set_pending_policy_approval(&self, request: PolicyApprovalRequest) -> Result<()> {
@@ -1842,6 +1898,24 @@ fn transient_error_backoff(poll_interval: Duration) -> Duration {
     )
 }
 
+fn navigation_fallback_condition_met(
+    requested_url: &str,
+    previous_url: Option<&str>,
+    current_url: Option<&str>,
+    ready_state: Option<&str>,
+    dom_non_empty: bool,
+) -> bool {
+    let reached_requested_url = current_url.is_some_and(|url| url == requested_url);
+    let moved_to_new_url = match (previous_url, current_url) {
+        (_, None) => false,
+        (Some(previous), Some(current)) => current != previous,
+        (None, Some(_)) => true,
+    };
+    let dom_ready = matches!(ready_state, Some("interactive" | "complete"));
+
+    (reached_requested_url || moved_to_new_url) && (dom_ready || dom_non_empty)
+}
+
 fn sleep_transient_backoff(started: Instant, timeout: Duration, poll_interval: Duration) {
     let remaining = remaining_timeout(started, timeout);
     if remaining.is_zero() {
@@ -1982,6 +2056,50 @@ mod tests {
             transient_error_backoff(Duration::from_millis(80)),
             Duration::from_millis(80)
         );
+    }
+
+    #[test]
+    fn test_navigation_fallback_condition_met_when_requested_url_reached() {
+        assert!(navigation_fallback_condition_met(
+            "https://example.com/next",
+            Some("https://example.com/current"),
+            Some("https://example.com/next"),
+            Some("complete"),
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_navigation_fallback_condition_met_when_url_changes_and_dom_available() {
+        assert!(navigation_fallback_condition_met(
+            "https://example.com/requested",
+            Some("https://example.com/current"),
+            Some("https://example.com/redirected"),
+            None,
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_navigation_fallback_condition_not_met_when_url_unchanged() {
+        assert!(!navigation_fallback_condition_met(
+            "https://example.com/target",
+            Some("https://example.com/current"),
+            Some("https://example.com/current"),
+            Some("complete"),
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_navigation_fallback_condition_not_met_without_dom_readiness() {
+        assert!(!navigation_fallback_condition_met(
+            "https://example.com/requested",
+            Some("https://example.com/current"),
+            Some("https://example.com/redirected"),
+            Some("loading"),
+            false,
+        ));
     }
 
     #[test]
