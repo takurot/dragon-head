@@ -36,6 +36,10 @@ fn test_mcp_contract_exposes_required_tools() {
     let server = McpServer::new(MockBackend);
     let tools = server.tools();
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+    let get_state = tools
+        .iter()
+        .find(|tool| tool.name == "get_state")
+        .expect("get_state tool must exist");
 
     assert!(names.contains(&"get_state"));
     assert!(names.contains(&"act"));
@@ -44,6 +48,10 @@ fn test_mcp_contract_exposes_required_tools() {
     assert!(names.contains(&"ask_human"));
     assert!(names.contains(&"run_skill"));
     assert!(names.contains(&"get_usage_report"));
+    assert_eq!(
+        get_state.input_schema["properties"]["delivery"]["enum"],
+        json!(["full", "delta"])
+    );
 }
 
 #[test]

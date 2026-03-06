@@ -113,6 +113,7 @@ impl UsageMeters {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlanFeature {
+    SemanticDelta,
     SomVisualCapture,
     PolicyHumanApproval,
 }
@@ -120,6 +121,7 @@ enum PlanFeature {
 impl PlanFeature {
     fn as_str(self) -> &'static str {
         match self {
+            PlanFeature::SemanticDelta => "semantic_delta",
             PlanFeature::SomVisualCapture => "som_visual_capture",
             PlanFeature::PolicyHumanApproval => "policy_human_approval",
         }
@@ -127,6 +129,7 @@ impl PlanFeature {
 
     fn required_plan(self) -> PlanTier {
         match self {
+            PlanFeature::SemanticDelta => PlanTier::Pro,
             PlanFeature::SomVisualCapture => PlanTier::Pro,
             PlanFeature::PolicyHumanApproval => PlanTier::Enterprise,
         }
@@ -377,6 +380,17 @@ impl<B: McpBackend> McpServer<B> {
 
     fn check_plan_gate(&self, name: &str, arguments: &Value) -> Option<Value> {
         match name {
+            "get_state" => {
+                let args = parse_get_state_arguments(arguments);
+                if args.delivery == StateDelivery::Delta {
+                    return self
+                        .ensure_plan_feature(PlanFeature::SemanticDelta)
+                        .map(|required| {
+                            self.plan_upgrade_required_payload(PlanFeature::SemanticDelta, required)
+                        });
+                }
+                None
+            }
             "get_visual" => {
                 let mode = arguments
                     .get("mode")
@@ -440,24 +454,28 @@ impl<B: McpBackend> McpServer<B> {
                 }
             }
             "get_visual" => {
-                if payload
-                    .get("image_sha256")
+                let mode = arguments
+                    .get("mode")
                     .and_then(Value::as_str)
-                    .is_some()
+                    .unwrap_or("som");
+                if !mode.eq_ignore_ascii_case("clean")
+                    && payload
+                        .get("image_sha256")
+                        .and_then(Value::as_str)
+                        .is_some()
                 {
                     self.usage_meters.visual_captures += 1;
                 }
             }
-            "act" => {
-                if payload.get("status").and_then(Value::as_str) == Some("ok") {
+            "act" => match payload.get("status").and_then(Value::as_str) {
+                Some("ok") => {
                     self.usage_meters.actions_executed += 1;
                 }
-            }
-            "ask_human" => {
-                if payload.get("approved").and_then(Value::as_bool) == Some(true) {
+                Some("requires_human_approval") => {
                     self.usage_meters.hitl_events += 1;
                 }
-            }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -1269,6 +1287,10 @@ fn get_state_input_schema() -> Value {
             },
             "force_refresh": {
                 "type": "boolean"
+            },
+            "delivery": {
+                "type": "string",
+                "enum": ["full", "delta"]
             }
         }
     })
