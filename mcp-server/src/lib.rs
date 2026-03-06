@@ -113,11 +113,6 @@ enum RevenueUsageEventKind {
     HitlEvent,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RevenueUsageEvent {
-    kind: RevenueUsageEventKind,
-}
-
 #[derive(Debug, Clone, Default)]
 struct UsageMeters {
     state_generations: StateGenerationUsage,
@@ -275,7 +270,7 @@ pub struct McpServer<B> {
     plan_tier: PlanTier,
     usage_meters: UsageMeters,
     marketplace_attribution: Option<MarketplaceAttribution>,
-    revenue_events: Vec<RevenueUsageEvent>,
+    revenue_usage: RevenueShareUsage,
 }
 
 impl<B: McpBackend> McpServer<B> {
@@ -289,7 +284,7 @@ impl<B: McpBackend> McpServer<B> {
             plan_tier,
             usage_meters: UsageMeters::default(),
             marketplace_attribution: None,
-            revenue_events: Vec::new(),
+            revenue_usage: RevenueShareUsage::default(),
         }
     }
 
@@ -449,7 +444,7 @@ impl<B: McpBackend> McpServer<B> {
             }));
         };
 
-        let usage = aggregate_revenue_usage(&self.revenue_events);
+        let usage = self.revenue_usage.clone();
         let gross = estimate_usage_cost(
             self.plan_tier,
             &usage.state_generations,
@@ -468,7 +463,12 @@ impl<B: McpBackend> McpServer<B> {
             pack_id: attribution.pack_id.clone(),
             publisher_id: attribution.publisher_id.clone(),
             revenue_share_bps: normalized_bps,
-            event_count: self.revenue_events.len() as u64,
+            event_count: usage.state_generations.fast
+                + usage.state_generations.full
+                + usage.state_generations.delta
+                + usage.visual_captures
+                + usage.actions_executed
+                + usage.hitl_events,
             usage,
             gross_microusd: gross,
             publisher_share_microusd,
@@ -597,7 +597,20 @@ impl<B: McpBackend> McpServer<B> {
         }
 
         if self.marketplace_attribution.is_some() {
-            self.revenue_events.push(RevenueUsageEvent { kind });
+            match kind {
+                RevenueUsageEventKind::StateGenerationFast => {
+                    self.revenue_usage.state_generations.fast += 1
+                }
+                RevenueUsageEventKind::StateGenerationFull => {
+                    self.revenue_usage.state_generations.full += 1
+                }
+                RevenueUsageEventKind::StateGenerationDelta => {
+                    self.revenue_usage.state_generations.delta += 1
+                }
+                RevenueUsageEventKind::VisualCapture => self.revenue_usage.visual_captures += 1,
+                RevenueUsageEventKind::ActionExecuted => self.revenue_usage.actions_executed += 1,
+                RevenueUsageEventKind::HitlEvent => self.revenue_usage.hitl_events += 1,
+            }
         }
     }
 }
@@ -755,21 +768,6 @@ fn default_skill_params() -> Value {
 
 fn parse_get_state_arguments(arguments: &Value) -> GetStateArguments {
     serde_json::from_value(arguments.clone()).unwrap_or_default()
-}
-
-fn aggregate_revenue_usage(events: &[RevenueUsageEvent]) -> RevenueShareUsage {
-    let mut usage = RevenueShareUsage::default();
-    for event in events {
-        match event.kind {
-            RevenueUsageEventKind::StateGenerationFast => usage.state_generations.fast += 1,
-            RevenueUsageEventKind::StateGenerationFull => usage.state_generations.full += 1,
-            RevenueUsageEventKind::StateGenerationDelta => usage.state_generations.delta += 1,
-            RevenueUsageEventKind::VisualCapture => usage.visual_captures += 1,
-            RevenueUsageEventKind::ActionExecuted => usage.actions_executed += 1,
-            RevenueUsageEventKind::HitlEvent => usage.hitl_events += 1,
-        }
-    }
-    usage
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
