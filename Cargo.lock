@@ -698,6 +698,7 @@ checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
+ "rand_core 0.6.4",
  "serde",
  "sha2",
  "subtle",
@@ -1501,6 +1502,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "marketplace"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "hex",
+ "plugin-host",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "skills-engine",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

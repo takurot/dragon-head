@@ -1,0 +1,17 @@
+[package]
+name = "marketplace"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+plugin-host = { path = "../plugin-host" }
+skills-engine = { path = "../skills-engine" }
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+rand_core = { version = "0.6.4", features = ["getrandom", "std"] }

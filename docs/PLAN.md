@@ -38,7 +38,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 4 | Security & Audit | PR-09〜11 | 3/3 | DONE |
 | 5 | Extensions & API | PR-12〜14 | 3/3 | DONE |
 | 6 | Monetization Meters | PR-16 | 1/1 | DONE |
-| 7 | Marketplace | PR-17 | 0/1 | NOT_STARTED |
+| 7 | Marketplace | PR-17 | 1/1 | DONE |
 | 8 | Robustness & Verification | PR-18 | 0/1 | NOT_STARTED |
 
 ## 3. PRバックログ（進捗チェック付き）
@@ -355,21 +355,21 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 仕様の課金メーターが再現性を持って収集できる。
 
 ### PR-17: Marketplace Integration
-- Status: `NOT_STARTED`
+- Status: `DONE` (Local)
 - Spec Ref: Section 7.3
 - Dependencies: PR-12, PR-16
 - 実装タスク
-  - [ ] Domain Pack（plugin + skill bundle）のパッケージ仕様を定義する。
-  - [ ] Marketplace向け公開メタデータ（署名、互換バージョン、依存情報）を実装する。
-  - [ ] Revenue Share集計に必要な利用イベント連携を実装する。
+  - [x] Domain Pack（plugin + skill bundle）のパッケージ仕様を定義する。
+  - [x] Marketplace向け公開メタデータ（署名、互換バージョン、依存情報）を実装する。
+  - [x] Revenue Share集計に必要な利用イベント連携を実装する。
 - テストタスク
-  - [ ] Bundleの署名検証・互換性検証テストを追加する。
-  - [ ] 利用イベントから収益分配集計が再現できるテストを追加する。
+  - [x] Bundleの署名検証・互換性検証テストを追加する。
+  - [x] 利用イベントから収益分配集計が再現できるテストを追加する。
 - CIタスク
-  - [ ] Marketplace bundleの検証ジョブを必須化する。
-  - [ ] Revenue Share集計回帰テストを必須化する。
+  - [x] Marketplace bundleの検証ジョブを必須化する。
+  - [x] Revenue Share集計回帰テストを必須化する。
 - Exit Criteria
-  - [ ] Domain Pack公開に必要な最小機能が実装されている。
+  - [x] Domain Pack公開に必要な最小機能が実装されている。
 
 ### PR-18: Advanced E2E Verification & Security Audit
 - Status: `NOT_STARTED`
