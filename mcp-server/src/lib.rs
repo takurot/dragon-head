@@ -23,6 +23,199 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanTier {
+    Developer,
+    Pro,
+    #[default]
+    Enterprise,
+}
+
+impl PlanTier {
+    fn as_str(self) -> &'static str {
+        match self {
+            PlanTier::Developer => "developer",
+            PlanTier::Pro => "pro",
+            PlanTier::Enterprise => "enterprise",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AuditRetentionSnapshot {
+    pub retained_events: u64,
+    pub retained_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct StateGenerationUsage {
+    pub fast: u64,
+    pub full: u64,
+    pub delta: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct UsageReport {
+    pub plan_tier: PlanTier,
+    pub state_generations: StateGenerationUsage,
+    pub visual_captures: u64,
+    pub actions_executed: u64,
+    pub hitl_events: u64,
+    pub audit_retention: AuditRetentionSnapshot,
+    pub cost_microusd: UsageCostBreakdown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct UsageCostBreakdown {
+    pub state_generations: u64,
+    pub visual_captures: u64,
+    pub actions_executed: u64,
+    pub hitl_events: u64,
+    pub audit_retention: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct UsageMeters {
+    state_generations: StateGenerationUsage,
+    visual_captures: u64,
+    actions_executed: u64,
+    hitl_events: u64,
+}
+
+impl UsageMeters {
+    fn to_report(
+        &self,
+        plan_tier: PlanTier,
+        audit_retention: AuditRetentionSnapshot,
+    ) -> UsageReport {
+        let cost_microusd = estimate_usage_cost(
+            plan_tier,
+            &self.state_generations,
+            self.visual_captures,
+            self.actions_executed,
+            self.hitl_events,
+            audit_retention,
+        );
+
+        UsageReport {
+            plan_tier,
+            state_generations: self.state_generations.clone(),
+            visual_captures: self.visual_captures,
+            actions_executed: self.actions_executed,
+            hitl_events: self.hitl_events,
+            audit_retention,
+            cost_microusd,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanFeature {
+    SemanticDelta,
+    SomVisualCapture,
+    PolicyHumanApproval,
+}
+
+impl PlanFeature {
+    fn as_str(self) -> &'static str {
+        match self {
+            PlanFeature::SemanticDelta => "semantic_delta",
+            PlanFeature::SomVisualCapture => "som_visual_capture",
+            PlanFeature::PolicyHumanApproval => "policy_human_approval",
+        }
+    }
+
+    fn required_plan(self) -> PlanTier {
+        match self {
+            PlanFeature::SemanticDelta => PlanTier::Pro,
+            PlanFeature::SomVisualCapture => PlanTier::Pro,
+            PlanFeature::PolicyHumanApproval => PlanTier::Enterprise,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PricingRateCard {
+    state_fast: u64,
+    state_full: u64,
+    state_delta: u64,
+    visual_capture: u64,
+    action_executed: u64,
+    hitl_event: u64,
+    audit_retention_per_mib: u64,
+}
+
+fn pricing_rate_card(plan_tier: PlanTier) -> PricingRateCard {
+    match plan_tier {
+        PlanTier::Developer => PricingRateCard {
+            state_fast: 0,
+            state_full: 0,
+            state_delta: 0,
+            visual_capture: 0,
+            action_executed: 0,
+            hitl_event: 0,
+            audit_retention_per_mib: 0,
+        },
+        PlanTier::Pro => PricingRateCard {
+            state_fast: 100,
+            state_full: 250,
+            state_delta: 50,
+            visual_capture: 1_000,
+            action_executed: 75,
+            hitl_event: 1_500,
+            audit_retention_per_mib: 400,
+        },
+        PlanTier::Enterprise => PricingRateCard {
+            state_fast: 80,
+            state_full: 200,
+            state_delta: 40,
+            visual_capture: 850,
+            action_executed: 60,
+            hitl_event: 1_200,
+            audit_retention_per_mib: 300,
+        },
+    }
+}
+
+pub fn estimate_usage_cost(
+    plan_tier: PlanTier,
+    state_generations: &StateGenerationUsage,
+    visual_captures: u64,
+    actions_executed: u64,
+    hitl_events: u64,
+    audit_retention: AuditRetentionSnapshot,
+) -> UsageCostBreakdown {
+    const MIB: u64 = 1_048_576;
+
+    let rates = pricing_rate_card(plan_tier);
+    let state_generations_cost = state_generations
+        .fast
+        .saturating_mul(rates.state_fast)
+        .saturating_add(state_generations.full.saturating_mul(rates.state_full))
+        .saturating_add(state_generations.delta.saturating_mul(rates.state_delta));
+    let visual_captures_cost = visual_captures.saturating_mul(rates.visual_capture);
+    let actions_executed_cost = actions_executed.saturating_mul(rates.action_executed);
+    let hitl_events_cost = hitl_events.saturating_mul(rates.hitl_event);
+    let retained_mib = audit_retention.retained_bytes.saturating_add(MIB - 1) / MIB;
+    let audit_retention_cost = retained_mib.saturating_mul(rates.audit_retention_per_mib);
+    let total = state_generations_cost
+        .saturating_add(visual_captures_cost)
+        .saturating_add(actions_executed_cost)
+        .saturating_add(hitl_events_cost)
+        .saturating_add(audit_retention_cost);
+
+    UsageCostBreakdown {
+        state_generations: state_generations_cost,
+        visual_captures: visual_captures_cost,
+        actions_executed: actions_executed_cost,
+        hitl_events: hitl_events_cost,
+        audit_retention: audit_retention_cost,
+        total,
+    }
+}
+
 pub trait McpBackend {
     fn get_state(&mut self, arguments: Value) -> Result<Value>;
     fn act(&mut self, arguments: Value) -> Result<Value>;
@@ -30,15 +223,28 @@ pub trait McpBackend {
     fn get_visual(&mut self, arguments: Value) -> Result<Value>;
     fn ask_human(&mut self, arguments: Value) -> Result<Value>;
     fn run_skill(&mut self, arguments: Value) -> Result<Value>;
+    fn audit_retention_snapshot(&self) -> Option<AuditRetentionSnapshot> {
+        None
+    }
 }
 
 pub struct McpServer<B> {
     backend: B,
+    plan_tier: PlanTier,
+    usage_meters: UsageMeters,
 }
 
 impl<B: McpBackend> McpServer<B> {
     pub fn new(backend: B) -> Self {
-        Self { backend }
+        Self::new_with_plan(backend, PlanTier::Enterprise)
+    }
+
+    pub fn new_with_plan(backend: B, plan_tier: PlanTier) -> Self {
+        Self {
+            backend,
+            plan_tier,
+            usage_meters: UsageMeters::default(),
+        }
     }
 
     pub fn tools(&self) -> Vec<ToolDefinition> {
@@ -73,19 +279,38 @@ impl<B: McpBackend> McpServer<B> {
                 description: "Execute a declarative skill workflow".to_string(),
                 input_schema: run_skill_input_schema(),
             },
+            ToolDefinition {
+                name: "get_usage_report".to_string(),
+                description: "Retrieve usage meters and plan tier summary".to_string(),
+                input_schema: get_usage_report_input_schema(),
+            },
         ]
     }
 
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
-        match name {
-            "get_state" => self.backend.get_state(arguments),
-            "act" => self.backend.act(arguments),
-            "verify" => self.backend.verify(arguments),
-            "get_visual" => self.backend.get_visual(arguments),
-            "ask_human" => self.backend.ask_human(arguments),
-            "run_skill" => self.backend.run_skill(arguments),
-            _ => anyhow::bail!("unknown MCP tool: {name}"),
+        if name == "get_usage_report" {
+            return self.get_usage_report_payload();
         }
+
+        if let Some(payload) = self.check_plan_gate(name, &arguments) {
+            return Ok(payload);
+        }
+
+        let result = match name {
+            "get_state" => self.backend.get_state(arguments.clone()),
+            "act" => self.backend.act(arguments.clone()),
+            "verify" => self.backend.verify(arguments.clone()),
+            "get_visual" => self.backend.get_visual(arguments.clone()),
+            "ask_human" => self.backend.ask_human(arguments.clone()),
+            "run_skill" => self.backend.run_skill(arguments.clone()),
+            _ => anyhow::bail!("unknown MCP tool: {name}"),
+        };
+
+        if let Ok(payload) = &result {
+            self.record_usage(name, &arguments, payload);
+        }
+
+        result
     }
 
     pub fn handle_jsonrpc(&mut self, request: &str) -> String {
@@ -143,6 +368,116 @@ impl<B: McpBackend> McpServer<B> {
 
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
+    }
+
+    fn get_usage_report_payload(&self) -> Result<Value> {
+        let report = self.usage_meters.to_report(
+            self.plan_tier,
+            self.backend.audit_retention_snapshot().unwrap_or_default(),
+        );
+        serde_json::to_value(report).context("failed to serialize usage report")
+    }
+
+    fn check_plan_gate(&self, name: &str, arguments: &Value) -> Option<Value> {
+        match name {
+            "get_state" => {
+                let args = parse_get_state_arguments(arguments);
+                if args.delivery == StateDelivery::Delta {
+                    return self
+                        .ensure_plan_feature(PlanFeature::SemanticDelta)
+                        .map(|required| {
+                            self.plan_upgrade_required_payload(PlanFeature::SemanticDelta, required)
+                        });
+                }
+                None
+            }
+            "get_visual" => {
+                let mode = arguments
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .unwrap_or("som");
+                if !mode.eq_ignore_ascii_case("clean") {
+                    return self.ensure_plan_feature(PlanFeature::SomVisualCapture).map(
+                        |required| {
+                            self.plan_upgrade_required_payload(
+                                PlanFeature::SomVisualCapture,
+                                required,
+                            )
+                        },
+                    );
+                }
+                None
+            }
+            "ask_human" => self
+                .ensure_plan_feature(PlanFeature::PolicyHumanApproval)
+                .map(|required| {
+                    self.plan_upgrade_required_payload(PlanFeature::PolicyHumanApproval, required)
+                }),
+            _ => None,
+        }
+    }
+
+    fn ensure_plan_feature(&self, feature: PlanFeature) -> Option<PlanTier> {
+        let required_plan = feature.required_plan();
+        if self.plan_tier >= required_plan {
+            None
+        } else {
+            Some(required_plan)
+        }
+    }
+
+    fn plan_upgrade_required_payload(
+        &self,
+        feature: PlanFeature,
+        required_plan: PlanTier,
+    ) -> Value {
+        json!({
+            "status": "plan_upgrade_required",
+            "feature": feature.as_str(),
+            "required_plan": required_plan.as_str(),
+            "current_plan": self.plan_tier.as_str()
+        })
+    }
+
+    fn record_usage(&mut self, name: &str, arguments: &Value, payload: &Value) {
+        match name {
+            "get_state" => {
+                let args = parse_get_state_arguments(arguments);
+                match args.delivery {
+                    StateDelivery::Delta => {
+                        self.usage_meters.state_generations.delta += 1;
+                    }
+                    StateDelivery::Full => {
+                        self.usage_meters.state_generations.fast += 1;
+                        self.usage_meters.state_generations.full += 1;
+                    }
+                }
+            }
+            "get_visual" => {
+                let mode = arguments
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .unwrap_or("som");
+                if !mode.eq_ignore_ascii_case("clean")
+                    && payload
+                        .get("image_sha256")
+                        .and_then(Value::as_str)
+                        .is_some()
+                {
+                    self.usage_meters.visual_captures += 1;
+                }
+            }
+            "act" => match payload.get("status").and_then(Value::as_str) {
+                Some("ok") => {
+                    self.usage_meters.actions_executed += 1;
+                }
+                Some("requires_human_approval") => {
+                    self.usage_meters.hitl_events += 1;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
     }
 }
 
@@ -213,12 +548,32 @@ enum StateFormat {
     Markdown,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+enum StateDelivery {
+    #[default]
+    Full,
+    Delta,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct GetStateArguments {
     #[serde(default)]
     format: StateFormat,
     #[serde(default)]
     force_refresh: bool,
+    #[serde(default)]
+    delivery: StateDelivery,
+}
+
+impl Default for GetStateArguments {
+    fn default() -> Self {
+        Self {
+            format: StateFormat::Json,
+            force_refresh: false,
+            delivery: StateDelivery::Full,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -275,6 +630,10 @@ struct RunSkillArguments {
 
 fn default_skill_params() -> Value {
     json!({})
+}
+
+fn parse_get_state_arguments(arguments: &Value) -> GetStateArguments {
+    serde_json::from_value(arguments.clone()).unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -416,13 +775,7 @@ impl CoreRuntimeBackend {
 
 impl McpBackend for CoreRuntimeBackend {
     fn get_state(&mut self, arguments: Value) -> Result<Value> {
-        let args: GetStateArguments = match serde_json::from_value(arguments) {
-            Ok(value) => value,
-            Err(_) => GetStateArguments {
-                format: StateFormat::Json,
-                force_refresh: false,
-            },
-        };
+        let args = parse_get_state_arguments(&arguments);
 
         let payload = self.semantic_state_payload(args.force_refresh)?;
         match args.format {
@@ -591,6 +944,23 @@ impl McpBackend for CoreRuntimeBackend {
                 })
                 .collect::<Vec<_>>()
         }))
+    }
+
+    fn audit_retention_snapshot(&self) -> Option<AuditRetentionSnapshot> {
+        let events = self.page.audit_events();
+        let retained_bytes = events
+            .iter()
+            .map(|event| {
+                serde_json::to_vec(event)
+                    .map(|bytes| bytes.len() as u64)
+                    .unwrap_or_default()
+            })
+            .sum();
+
+        Some(AuditRetentionSnapshot {
+            retained_events: events.len() as u64,
+            retained_bytes,
+        })
     }
 }
 
@@ -917,6 +1287,10 @@ fn get_state_input_schema() -> Value {
             },
             "force_refresh": {
                 "type": "boolean"
+            },
+            "delivery": {
+                "type": "string",
+                "enum": ["full", "delta"]
             }
         }
     })
@@ -996,5 +1370,13 @@ fn run_skill_input_schema() -> Value {
             "skill_name": { "type": "string", "minLength": 1 },
             "params": { "type": "object" }
         }
+    })
+}
+
+fn get_usage_report_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
     })
 }
