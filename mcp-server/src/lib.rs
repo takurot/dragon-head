@@ -76,6 +76,48 @@ pub struct UsageCostBreakdown {
     pub total: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MarketplaceAttribution {
+    pub pack_id: String,
+    pub publisher_id: String,
+    pub revenue_share_bps: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RevenueShareUsage {
+    pub state_generations: StateGenerationUsage,
+    pub visual_captures: u64,
+    pub actions_executed: u64,
+    pub hitl_events: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RevenueShareReport {
+    pub pack_id: String,
+    pub publisher_id: String,
+    pub revenue_share_bps: u16,
+    pub event_count: u64,
+    pub usage: RevenueShareUsage,
+    pub gross_microusd: u64,
+    pub publisher_share_microusd: u64,
+    pub platform_share_microusd: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RevenueUsageEventKind {
+    StateGenerationFast,
+    StateGenerationFull,
+    StateGenerationDelta,
+    VisualCapture,
+    ActionExecuted,
+    HitlEvent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RevenueUsageEvent {
+    kind: RevenueUsageEventKind,
+}
+
 #[derive(Debug, Clone, Default)]
 struct UsageMeters {
     state_generations: StateGenerationUsage,
@@ -232,6 +274,8 @@ pub struct McpServer<B> {
     backend: B,
     plan_tier: PlanTier,
     usage_meters: UsageMeters,
+    marketplace_attribution: Option<MarketplaceAttribution>,
+    revenue_events: Vec<RevenueUsageEvent>,
 }
 
 impl<B: McpBackend> McpServer<B> {
@@ -244,7 +288,19 @@ impl<B: McpBackend> McpServer<B> {
             backend,
             plan_tier,
             usage_meters: UsageMeters::default(),
+            marketplace_attribution: None,
+            revenue_events: Vec::new(),
         }
+    }
+
+    pub fn new_with_marketplace(
+        backend: B,
+        plan_tier: PlanTier,
+        marketplace_attribution: MarketplaceAttribution,
+    ) -> Self {
+        let mut server = Self::new_with_plan(backend, plan_tier);
+        server.marketplace_attribution = Some(marketplace_attribution);
+        server
     }
 
     pub fn tools(&self) -> Vec<ToolDefinition> {
@@ -284,12 +340,20 @@ impl<B: McpBackend> McpServer<B> {
                 description: "Retrieve usage meters and plan tier summary".to_string(),
                 input_schema: get_usage_report_input_schema(),
             },
+            ToolDefinition {
+                name: "get_revenue_share_report".to_string(),
+                description: "Retrieve marketplace revenue-share usage summary".to_string(),
+                input_schema: get_revenue_share_report_input_schema(),
+            },
         ]
     }
 
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
         if name == "get_usage_report" {
             return self.get_usage_report_payload();
+        }
+        if name == "get_revenue_share_report" {
+            return self.get_revenue_share_report_payload();
         }
 
         if let Some(payload) = self.check_plan_gate(name, &arguments) {
@@ -378,6 +442,42 @@ impl<B: McpBackend> McpServer<B> {
         serde_json::to_value(report).context("failed to serialize usage report")
     }
 
+    fn get_revenue_share_report_payload(&self) -> Result<Value> {
+        let Some(attribution) = &self.marketplace_attribution else {
+            return Ok(json!({
+                "status": "marketplace_context_required"
+            }));
+        };
+
+        let usage = aggregate_revenue_usage(&self.revenue_events);
+        let gross = estimate_usage_cost(
+            self.plan_tier,
+            &usage.state_generations,
+            usage.visual_captures,
+            usage.actions_executed,
+            usage.hitl_events,
+            AuditRetentionSnapshot::default(),
+        )
+        .total;
+
+        let normalized_bps = attribution.revenue_share_bps.min(10_000);
+        let publisher_share_microusd = gross.saturating_mul(normalized_bps as u64) / 10_000;
+        let platform_share_microusd = gross.saturating_sub(publisher_share_microusd);
+
+        let report = RevenueShareReport {
+            pack_id: attribution.pack_id.clone(),
+            publisher_id: attribution.publisher_id.clone(),
+            revenue_share_bps: normalized_bps,
+            event_count: self.revenue_events.len() as u64,
+            usage,
+            gross_microusd: gross,
+            publisher_share_microusd,
+            platform_share_microusd,
+        };
+
+        serde_json::to_value(report).context("failed to serialize revenue share report")
+    }
+
     fn check_plan_gate(&self, name: &str, arguments: &Value) -> Option<Value> {
         match name {
             "get_state" => {
@@ -445,11 +545,11 @@ impl<B: McpBackend> McpServer<B> {
                 let args = parse_get_state_arguments(arguments);
                 match args.delivery {
                     StateDelivery::Delta => {
-                        self.usage_meters.state_generations.delta += 1;
+                        self.record_usage_event(RevenueUsageEventKind::StateGenerationDelta);
                     }
                     StateDelivery::Full => {
-                        self.usage_meters.state_generations.fast += 1;
-                        self.usage_meters.state_generations.full += 1;
+                        self.record_usage_event(RevenueUsageEventKind::StateGenerationFast);
+                        self.record_usage_event(RevenueUsageEventKind::StateGenerationFull);
                     }
                 }
             }
@@ -464,19 +564,40 @@ impl<B: McpBackend> McpServer<B> {
                         .and_then(Value::as_str)
                         .is_some()
                 {
-                    self.usage_meters.visual_captures += 1;
+                    self.record_usage_event(RevenueUsageEventKind::VisualCapture);
                 }
             }
             "act" => match payload.get("status").and_then(Value::as_str) {
                 Some("ok") => {
-                    self.usage_meters.actions_executed += 1;
+                    self.record_usage_event(RevenueUsageEventKind::ActionExecuted);
                 }
                 Some("requires_human_approval") => {
-                    self.usage_meters.hitl_events += 1;
+                    self.record_usage_event(RevenueUsageEventKind::HitlEvent);
                 }
                 _ => {}
             },
             _ => {}
+        }
+    }
+
+    fn record_usage_event(&mut self, kind: RevenueUsageEventKind) {
+        match kind {
+            RevenueUsageEventKind::StateGenerationFast => {
+                self.usage_meters.state_generations.fast += 1
+            }
+            RevenueUsageEventKind::StateGenerationFull => {
+                self.usage_meters.state_generations.full += 1
+            }
+            RevenueUsageEventKind::StateGenerationDelta => {
+                self.usage_meters.state_generations.delta += 1
+            }
+            RevenueUsageEventKind::VisualCapture => self.usage_meters.visual_captures += 1,
+            RevenueUsageEventKind::ActionExecuted => self.usage_meters.actions_executed += 1,
+            RevenueUsageEventKind::HitlEvent => self.usage_meters.hitl_events += 1,
+        }
+
+        if self.marketplace_attribution.is_some() {
+            self.revenue_events.push(RevenueUsageEvent { kind });
         }
     }
 }
@@ -634,6 +755,21 @@ fn default_skill_params() -> Value {
 
 fn parse_get_state_arguments(arguments: &Value) -> GetStateArguments {
     serde_json::from_value(arguments.clone()).unwrap_or_default()
+}
+
+fn aggregate_revenue_usage(events: &[RevenueUsageEvent]) -> RevenueShareUsage {
+    let mut usage = RevenueShareUsage::default();
+    for event in events {
+        match event.kind {
+            RevenueUsageEventKind::StateGenerationFast => usage.state_generations.fast += 1,
+            RevenueUsageEventKind::StateGenerationFull => usage.state_generations.full += 1,
+            RevenueUsageEventKind::StateGenerationDelta => usage.state_generations.delta += 1,
+            RevenueUsageEventKind::VisualCapture => usage.visual_captures += 1,
+            RevenueUsageEventKind::ActionExecuted => usage.actions_executed += 1,
+            RevenueUsageEventKind::HitlEvent => usage.hitl_events += 1,
+        }
+    }
+    usage
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1374,6 +1510,14 @@ fn run_skill_input_schema() -> Value {
 }
 
 fn get_usage_report_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    })
+}
+
+fn get_revenue_share_report_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,

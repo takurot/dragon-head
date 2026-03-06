@@ -216,3 +216,11 @@ Model Context Protocol (MCP) 準拠のツール定義。
 
 - **Domain Packs**: 特定業務（経理、人事等）向けPlugin/Skillセットの販売。
 - **Revenue Share**: 認定Plugin開発者への収益分配。
+- **Domain Pack Package Specification**:
+  - `manifest`: `pack_id`, `version`, `plugin_id`, `skill_ids` を必須とする。
+  - `marketplace metadata`: `publisher_id`, `signature`（`key_id`, `signature_hex`）, `runtime_compatibility`（`runtime_api`, `min_runtime_version`, `max_runtime_version?`）, `dependencies[]`（`package`, `version_req`）を公開する。
+  - `artifacts`: 署名済み Plugin Package（Wasm + SBOM + Plugin Manifest）と Skill 定義群（`skill_id`, `version`, `definition`）を同梱する。
+  - `verification`: Plugin 署名検証 + Domain Pack 署名検証 + Runtime 互換バージョン検証 + `skill_ids` と同梱 Skill の整合検証を必須とする。
+- **Revenue Share Aggregation Rule**:
+  - `State Generations`, `Visual Captures`, `Actions Executed`, `HITL Events` を利用イベントとして連携する。
+  - 利用イベントをプラン別レートカードで `gross_microusd` に換算し、`revenue_share_bps` により publisher/platform の配分額を算出する。

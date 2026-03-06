@@ -185,6 +185,13 @@ jobs:
     - name: Run plugin SBOM validation tests
       run: cargo test -p plugin-host --test plugin_sbom_validation --verbose
 
+  marketplace-bundle-verification:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run marketplace domain pack verification tests
+      run: cargo test -p plugin-host --test marketplace_bundle --verbose
+
   mcp-protocol-compliance:
     runs-on: ubuntu-latest
     steps:
@@ -221,6 +228,13 @@ jobs:
     - uses: actions/checkout@v4
     - name: Run usage pricing snapshot diff check
       run: cargo test -p mcp-server --test mcp_pricing_snapshot --verbose
+
+  revenue-share-regression:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run marketplace revenue share regression tests
+      run: cargo test -p mcp-server --test mcp_revenue_share --verbose
 
   nfr-benchmark-short:
     if: github.event_name == 'pull_request'
