@@ -4,6 +4,7 @@ members = [
     "mcp-server",
     "plugin-host",
     "skills-engine",
+    "marketplace",
 ]
 resolver = "2"
 
