@@ -4,15 +4,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use skills_engine::SkillDefinition;
 
-/// Current runtime compatibility version used for compatibility checks.
-pub const RUNTIME_COMPATIBLE_VERSION: &str = "2.1";
-
-// Revenue share rates per event type
-const RATE_STATE_GENERATION: f64 = 0.005;
-const RATE_ACTION_EXECUTION: f64 = 0.01;
-const RATE_SKILL_RUN: f64 = 0.02;
-const RATE_DEFAULT: f64 = 0.001;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MarketplaceMetadata {
     pub pack_id: String,
@@ -38,16 +29,15 @@ pub struct UsageEvent {
 }
 
 pub fn calculate_revenue_share(event: &UsageEvent) -> f64 {
-    let rate = match event.event_type.as_str() {
-        "state_generation" => RATE_STATE_GENERATION,
-        "action_execution" => RATE_ACTION_EXECUTION,
-        "skill_run" => RATE_SKILL_RUN,
-        _ => RATE_DEFAULT,
-    };
-    (event.count as f64) * rate
+    match event.event_type.as_str() {
+        "state_generation" => (event.count as f64) * 0.005,
+        "action_execution" => (event.count as f64) * 0.01,
+        "skill_run" => (event.count as f64) * 0.02,
+        _ => (event.count as f64) * 0.001,
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum MarketplaceError {
     #[error("domain pack missing signature")]
     UnsignedPack,
@@ -57,19 +47,8 @@ pub enum MarketplaceError {
     InvalidPublicKey,
     #[error("signature encoding error")]
     InvalidSignatureEncoding,
-    #[error("incompatible version: pack requires {pack}, runtime is {runtime}")]
-    IncompatibleVersion { pack: String, runtime: String },
-}
-
-/// Check that the pack's `compatible_version` matches the current runtime version.
-pub fn check_compatibility(pack: &DomainPack) -> Result<(), MarketplaceError> {
-    if pack.metadata.compatible_version != RUNTIME_COMPATIBLE_VERSION {
-        return Err(MarketplaceError::IncompatibleVersion {
-            pack: pack.metadata.compatible_version.clone(),
-            runtime: RUNTIME_COMPATIBLE_VERSION.to_string(),
-        });
-    }
-    Ok(())
+    #[error("incompatible version: {0}")]
+    IncompatibleVersion(String),
 }
 
 pub fn verify_domain_pack(
@@ -95,30 +74,18 @@ pub fn verify_domain_pack(
     let parsed_signature = Signature::from_slice(&signature_bytes)
         .map_err(|_| MarketplaceError::InvalidSignatureEncoding)?;
 
-    let payload = build_signature_payload(&pack.metadata);
+    // Hash payload for signature: pack_id, author, version
+    let mut hasher = Sha256::new();
+    hasher.update(pack.metadata.pack_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(pack.metadata.author.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(pack.metadata.version.as_bytes());
+    let payload = hasher.finalize();
 
     verifying_key
         .verify(&payload, &parsed_signature)
         .map_err(|_| MarketplaceError::InvalidSignature)?;
 
     Ok(())
-}
-
-/// Build the canonical hash payload for signature verification.
-/// Includes all metadata fields to prevent tampering with any field.
-pub fn build_signature_payload(metadata: &MarketplaceMetadata) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(metadata.pack_id.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(metadata.author.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(metadata.version.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(metadata.compatible_version.as_bytes());
-    hasher.update(b"\0");
-    for dep in &metadata.dependencies {
-        hasher.update(dep.as_bytes());
-        hasher.update(b"\0");
-    }
-    hasher.finalize().to_vec()
 }
