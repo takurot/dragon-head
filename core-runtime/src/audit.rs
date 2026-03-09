@@ -151,7 +151,7 @@ fn redact_json_value(
             for (key, child) in map {
                 let key_lower = key.to_ascii_lowercase();
                 let masked_child = if is_sensitive_key(&key_lower)
-                    || (mask_tool_value_field && key_lower == "value")
+                    || (mask_tool_value_field && should_mask_tool_argument_key(&key_lower))
                 {
                     serde_json::Value::String("***".to_string())
                 } else {
@@ -176,6 +176,10 @@ fn redact_json_value(
         }
         _ => value.clone(),
     }
+}
+
+fn should_mask_tool_argument_key(key: &str) -> bool {
+    key == "value" || key == "text" || key.ends_with("_text")
 }
 
 fn is_sensitive_key(key: &str) -> bool {

@@ -39,7 +39,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 5 | Extensions & API | PR-12〜14 | 3/3 | DONE |
 | 6 | Monetization Meters | PR-16 | 1/1 | DONE |
 | 7 | Marketplace | PR-17 | 1/1 | DONE |
-| 8 | Robustness & Verification | PR-18 | 0/1 | NOT_STARTED |
+| 8 | Robustness & Verification | PR-18 | 1/1 | DONE |
 
 ## 3. PRバックログ（進捗チェック付き）
 
@@ -372,20 +372,20 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] Domain Pack公開に必要な最小機能が実装されている。
 
 ### PR-18: Advanced E2E Verification & Security Audit
-- Status: `NOT_STARTED`
+- Status: `DONE`
 - Spec Ref: SEC-02, AUD-01, ACT-01
 - Dependencies: PR-11, PR-10, PR-03
 - 実装タスク
-  - [ ] `core-runtime/tests/session_management.rs` の実装（ドメイン跨ぎセッション保存/復元、鍵ローテーション E2E）。
-  - [ ] `core-runtime/tests/audit_logging.rs` の実装（操作シーケンス一貫性、PIIマスク実効性）。
-  - [ ] 複雑な SPA 遷移における `stable_key` 自己修復のストレステストの実装。
+  - [x] `core-runtime/tests/session_management.rs` の実装（ドメイン跨ぎセッション保存/復元、鍵ローテーション E2E）。
+  - [x] `core-runtime/tests/audit_logging.rs` の実装（操作シーケンス一貫性、PIIマスク実効性）。
+  - [x] 複雑な SPA 遷移における `stable_key` 自己修復のストレステストの実装。
 - テストタスク
-  - [ ] `TOOL_CALL` および `STATE_SNAPSHOT` の両方で PII がマスクされていることを確認。
-  - [ ] 鍵ローテーション後、新しい鍵で旧セッションデータが正しく復号・再利用できることを確認。
+  - [x] `TOOL_CALL` および `STATE_SNAPSHOT` の両方で PII がマスクされていることを確認。
+  - [x] 鍵ローテーション後、新しい鍵で旧セッションデータが正しく復号・再利用できることを確認。
 - CIタスク
-  - [ ] 新規 E2E テストを `cdp-smoke` または `full-e2e` ジョブに追加。
+  - [x] 新規 E2E テストを `cdp-smoke` または `full-e2e` ジョブに追加。
 - Exit Criteria
-  - [ ] 実機環境（Headless Chrome）において、仕様通りのセキュリティ・監査・リカバリが保証されている。
+  - [x] 実機環境（Headless Chrome）において、仕様通りのセキュリティ・監査・リカバリが保証されている。
 
 ## 4. 共通 Definition of Done（全PR共通）
 
