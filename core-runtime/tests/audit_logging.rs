@@ -25,7 +25,7 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
             <body>
                 <input id="email" type="email" value="seed@example.com" />
                 <input id="password" type="password" value="MySecretP@ssw0rd!" />
-                <div id="cc-note">Card: 5555-4444-3333-2222</div>
+                <div id="cc-note">Card: 4000 1234 5678 9012 345</div>
                 <button id="submit">Submit</button>
             </body>
         </html>
@@ -44,7 +44,7 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
         Some(input_id),
         Some(&input_key),
         "type",
-        Some("alice@example.com 4111-1111-1111-1111"),
+        Some("alice@example.com 4000 1234 5678 9012 345"),
     )?;
 
     let events = wait_for_events(&page, 3, Duration::from_secs(2));
@@ -105,7 +105,7 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
         "state snapshot must mask password value"
     );
     assert!(
-        !snapshot_text.contains("5555-4444-3333-2222"),
+        !snapshot_text.contains("4000 1234 5678 9012 345"),
         "state snapshot must mask card number"
     );
     let email_input =
@@ -168,7 +168,7 @@ fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
     page.clear_audit_events();
     let result = page.verify_text(
         target_id,
-        "MySecretP@ssw0rd! alice@example.com 4111-1111-1111-1111",
+        "MySecretP@ssw0rd! alice@example.com 4000 1234 5678 9012 345",
     );
     assert!(
         result.is_err(),
@@ -196,7 +196,7 @@ fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
         "verify_text tool args should redact email addresses"
     );
     assert!(
-        !tool_args_text.contains("4111-1111-1111-1111"),
+        !tool_args_text.contains("4000 1234 5678 9012 345"),
         "verify_text tool args should redact card numbers"
     );
     assert_eq!(

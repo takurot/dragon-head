@@ -208,13 +208,39 @@ fn redact_sensitive_text(text: &str) -> String {
     static CC_RE: OnceLock<Regex> = OnceLock::new();
     static EMAIL_RE: OnceLock<Regex> = OnceLock::new();
 
-    let cc_re = CC_RE.get_or_init(|| {
-        Regex::new(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{1,4}\b").expect("Invalid CC regex")
-    });
+    let cc_re =
+        CC_RE.get_or_init(|| Regex::new(r"\b\d(?:[ -]?\d){12,18}\b").expect("Invalid CC regex"));
     let email_re = EMAIL_RE.get_or_init(|| {
         Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b").expect("Invalid email regex")
     });
 
     let cc_redacted = cc_re.replace_all(text, "****-****-****-XXXX");
     email_re.replace_all(&cc_redacted, "***").into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_sensitive_text;
+
+    #[test]
+    fn redact_sensitive_text_masks_card_numbers_up_to_nineteen_digits() {
+        let cases = [
+            (
+                "Card 4111-1111-1111-1111 for alice@example.com",
+                "Card ****-****-****-XXXX for ***",
+            ),
+            (
+                "Card 4000 1234 5678 9012 345 for alice@example.com",
+                "Card ****-****-****-XXXX for ***",
+            ),
+            (
+                "Card 4000123456789012345 for alice@example.com",
+                "Card ****-****-****-XXXX for ***",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(redact_sensitive_text(input), expected);
+        }
+    }
 }
