@@ -24,7 +24,8 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
         <html>
             <body>
                 <input id="email" type="email" value="seed@example.com" />
-                <div id="cc-note">Card: 5555-4444-3333-2222</div>
+                <input id="password" type="password" value="MySecretP@ssw0rd!" />
+                <div id="cc-note">Card: 4000 1234 5678 9012 345</div>
                 <button id="submit">Submit</button>
             </body>
         </html>
@@ -43,7 +44,7 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
         Some(input_id),
         Some(&input_key),
         "type",
-        Some("alice@example.com 4111-1111-1111-1111"),
+        Some("alice@example.com 4000 1234 5678 9012 345"),
     )?;
 
     let events = wait_for_events(&page, 3, Duration::from_secs(2));
@@ -100,12 +101,110 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
         "state snapshot must mask email value"
     );
     assert!(
-        !snapshot_text.contains("5555-4444-3333-2222"),
-        "state snapshot must mask card number"
+        !snapshot_text.contains("MySecretP@ssw0rd!"),
+        "state snapshot must mask password value"
     );
     assert!(
-        snapshot_text.contains("****-****-****-XXXX"),
-        "state snapshot should keep redaction marker for card numbers"
+        !snapshot_text.contains("4000 1234 5678 9012 345"),
+        "state snapshot must mask card number"
+    );
+    let email_input =
+        find_node_by_dom_id(snapshot_payload, "email").context("email input snapshot missing")?;
+    assert_eq!(
+        email_input
+            .pointer("/attributes/value")
+            .and_then(|value| value.as_str()),
+        Some("***"),
+        "email input value should be masked in state snapshot"
+    );
+
+    let password_input = find_node_by_dom_id(snapshot_payload, "password")
+        .context("password input snapshot missing")?;
+    assert_eq!(
+        password_input
+            .pointer("/attributes/value")
+            .and_then(|value| value.as_str()),
+        Some("***"),
+        "password input value should be masked in state snapshot"
+    );
+
+    let card_text =
+        find_node_by_role_and_label_fragment(snapshot_payload, "text", "****-****-****-XXXX")
+            .context("redacted card text snapshot missing")?;
+    assert_eq!(
+        card_text.get("label").and_then(|value| value.as_str()),
+        Some("Card: ****-****-****-XXXX"),
+        "card text should preserve the redaction marker"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <div id="status">Ready for verification</div>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let root = page.get_document_node()?;
+    let sem = normalize_dom(LoadProfile::Interactive, &root)?;
+    let state = SemanticState::new(sem, LoadProfile::Interactive);
+    let (target_id, _) =
+        find_node_info_by_dom_id(state.root(), "status").context("status element not found")?;
+
+    page.clear_audit_events();
+    let result = page.verify_text(
+        target_id,
+        "MySecretP@ssw0rd! alice@example.com 4000 1234 5678 9012 345",
+    );
+    assert!(
+        result.is_err(),
+        "verify_text should fail on mismatched expectation"
+    );
+
+    let events = wait_for_events(&page, 1, Duration::from_secs(2));
+    let tool_args = events
+        .iter()
+        .find_map(|event| match event {
+            AuditEvent::ToolCall {
+                tool_name, args, ..
+            } if tool_name == "verify_text" => Some(args),
+            _ => None,
+        })
+        .context("TOOL_CALL(verify_text) event not found")?;
+
+    let tool_args_text = serde_json::to_string(tool_args)?;
+    assert!(
+        !tool_args_text.contains("MySecretP@ssw0rd!"),
+        "verify_text tool args should redact password-like secrets"
+    );
+    assert!(
+        !tool_args_text.contains("alice@example.com"),
+        "verify_text tool args should redact email addresses"
+    );
+    assert!(
+        !tool_args_text.contains("4000 1234 5678 9012 345"),
+        "verify_text tool args should redact card numbers"
+    );
+    assert_eq!(
+        tool_args
+            .get("expected_text")
+            .and_then(|value| value.as_str()),
+        Some("***"),
+        "verify_text expected_text should be masked"
     );
 
     Ok(())
@@ -146,4 +245,44 @@ fn find_node_info_by_dom_id(
     }
 
     None
+}
+
+fn find_node_by_dom_id<'a>(
+    node: &'a serde_json::Value,
+    dom_id: &str,
+) -> Option<&'a serde_json::Value> {
+    let is_match = node
+        .get("attributes")
+        .and_then(|attributes| attributes.as_object())
+        .and_then(|attributes| attributes.get("id"))
+        .and_then(|value| value.as_str())
+        == Some(dom_id);
+    if is_match {
+        return Some(node);
+    }
+
+    node.get("children")?
+        .as_array()?
+        .iter()
+        .find_map(|child| find_node_by_dom_id(child, dom_id))
+}
+
+fn find_node_by_role_and_label_fragment<'a>(
+    node: &'a serde_json::Value,
+    role: &str,
+    label_fragment: &str,
+) -> Option<&'a serde_json::Value> {
+    let role_matches = node.get("role").and_then(|value| value.as_str()) == Some(role);
+    let label_matches = node
+        .get("label")
+        .and_then(|value| value.as_str())
+        .is_some_and(|label| label.contains(label_fragment));
+    if role_matches && label_matches {
+        return Some(node);
+    }
+
+    node.get("children")?
+        .as_array()?
+        .iter()
+        .find_map(|child| find_node_by_role_and_label_fragment(child, role, label_fragment))
 }

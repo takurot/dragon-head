@@ -63,7 +63,11 @@ jobs:
     - name: Run semantic wait smoke test
       env:
         CHROME_INSTALLED: "true"
-      run: cargo test -p core-runtime --test semantic_wait -- --nocapture
+      run: |
+        cargo test -p core-runtime --test semantic_wait -- --nocapture
+        cargo test -p core-runtime --test session_management --verbose
+        cargo test -p core-runtime --test audit_logging --verbose
+        cargo test -p core-runtime --test spa_stable_key_stress --verbose
   cdp-smoke:
     runs-on: ubuntu-latest
     steps:
