@@ -75,3 +75,39 @@ jobs:
         path: |
           *.png
           *.log
+
+  evaluation-bench-full:
+    runs-on: ubuntu-latest
+    env:
+      CHROME_INSTALLED: "true"
+      DRAGON_HEAD_EVAL_MODE: "full"
+      DRAGON_HEAD_EVAL_OUTPUT_DIR: "${{ github.workspace }}/target/evaluation-bench"
+      DRAGON_HEAD_EVAL_DASHBOARD_PATH: "${{ github.workspace }}/target/evaluation-dashboard.md"
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
+    - name: Run core-runtime evaluation bench
+      run: cargo test -p core-runtime --test comprehensive_evaluation -- --nocapture
+    - name: Run mcp-server evaluation bench
+      run: cargo test -p mcp-server --test comprehensive_evaluation -- --nocapture
+    - name: Run skills-engine evaluation bench
+      run: cargo test -p skills-engine --test comprehensive_evaluation --verbose
+    - name: Run plugin-host evaluation bench
+      run: cargo test -p plugin-host --test comprehensive_evaluation --verbose
+    - name: Run marketplace evaluation bench
+      run: cargo test -p marketplace --test comprehensive_evaluation --verbose
+    - name: Generate evaluation dashboard
+      run: |
+        python3 scripts/evaluation_dashboard.py --input-dir "$DRAGON_HEAD_EVAL_OUTPUT_DIR" --output "$DRAGON_HEAD_EVAL_DASHBOARD_PATH"
+        cat "$DRAGON_HEAD_EVAL_DASHBOARD_PATH" >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload evaluation bench artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: evaluation-bench-full
+        path: |
+          target/evaluation-dashboard.md
+          target/evaluation-bench/*.json

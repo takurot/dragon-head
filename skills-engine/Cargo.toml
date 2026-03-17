@@ -11,3 +11,4 @@ jsonschema = "0.37"
 
 [dev-dependencies]
 anyhow = { workspace = true }
+test-bench-support = { path = "../test-bench-support" }

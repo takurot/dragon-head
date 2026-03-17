@@ -35,6 +35,18 @@ The CI pipeline is defined in `.github/workflows/`.
 - **Performance Gate (PR Short)**: `ci.yml` runs a short NFR suite (`ttft`, `nfr_latency`, `nfr_bandwidth`, `nfr_capacity`) and generates `core-runtime/target/nfr-dashboard.md`.
 - **Performance Gate (Nightly Full)**: `e2e.yml` runs the full NFR suite (including long TTFT and full capacity targets) and publishes the same dashboard format for regression tracking.
 - **Threshold Enforcement**: `scripts/nfr_dashboard.py` evaluates metric thresholds from JSON outputs and fails CI on regressions.
+- **Comprehensive Evaluation Bench**: `just evaluation-bench-smoke` runs crate-spanning feature evaluation suites and emits JSON reports plus `target/evaluation-dashboard.md`. Nightly/full runs use the same format with `DRAGON_HEAD_EVAL_MODE=full`.
+
+## 2.1 Comprehensive Evaluation Bench
+
+- **Goal**: Provide a single dashboard that verifies the main Dragon Head feature areas across `core-runtime`, `mcp-server`, `skills-engine`, `plugin-host`, and `marketplace`.
+- **Modes**:
+  - `smoke`: Required on PRs. Covers representative scenarios for state capture, action recovery, wait semantics, policy/HITL, audit/session, MCP flow, skill execution, plugin validation, and marketplace accounting.
+  - `full`: Runs on nightly/manual workflows. Uses the same report format and is reserved for expanded scenario sets and longer-running variants.
+- **Artifacts**:
+  - JSON reports: `target/evaluation-bench/*.json`
+  - Markdown dashboard: `target/evaluation-dashboard.md`
+- **Registration Rule**: New major features are not considered complete until a corresponding scenario is added to the evaluation bench or an explicit exemption is documented in `docs/`.
 
 ## 3. Running Tests Locally
 

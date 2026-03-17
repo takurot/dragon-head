@@ -13,4 +13,6 @@ sha2 = "0.10"
 hex = "0.4"
 
 [dev-dependencies]
+anyhow = { workspace = true }
 wat = "1.240"
+test-bench-support = { path = "../test-bench-support" }
