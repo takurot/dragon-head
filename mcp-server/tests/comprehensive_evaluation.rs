@@ -68,10 +68,10 @@ fn scenario_tool_flow_state_and_act() -> Result<Value> {
 
     let target_id = state["interactive_elements"][0]["id"]
         .as_i64()
-        .expect("target id should exist");
+        .context("target id should exist")?;
     let stable_key = state["interactive_elements"][0]["stable_key"]
         .as_str()
-        .expect("stable key should exist")
+        .context("stable key should exist")?
         .to_string();
 
     let act = server.call_tool(
@@ -107,7 +107,7 @@ fn scenario_hitl_flow() -> Result<Value> {
         domain: None,
         path_prefix: None,
         role: Some("button".to_string()),
-        text_regex: Some("purchase".to_string()),
+        text_regex: Some("(?i)purchase".to_string()),
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::ActionOnly),

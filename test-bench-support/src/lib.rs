@@ -184,22 +184,12 @@ impl EvaluationBench {
     }
 
     fn push_record(&mut self, record: ScenarioRecord) {
+        self.report.summary.total += 1;
+        match record.status {
+            ScenarioStatus::Passed => self.report.summary.passed += 1,
+            ScenarioStatus::Failed => self.report.summary.failed += 1,
+        }
         self.report.scenarios.push(record);
-        self.report.summary = EvaluationSummary {
-            total: self.report.scenarios.len(),
-            passed: self
-                .report
-                .scenarios
-                .iter()
-                .filter(|record| record.status == ScenarioStatus::Passed)
-                .count(),
-            failed: self
-                .report
-                .scenarios
-                .iter()
-                .filter(|record| record.status == ScenarioStatus::Failed)
-                .count(),
-        };
     }
 }
 
