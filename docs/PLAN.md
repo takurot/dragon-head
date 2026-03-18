@@ -1,7 +1,7 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-02-28
+- 最終更新日: 2026-03-17
 - プラン状態: In Progress
 
 ## 1. 進捗管理ルール
@@ -40,6 +40,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 6 | Monetization Meters | PR-16 | 1/1 | DONE |
 | 7 | Marketplace | PR-17 | 1/1 | DONE |
 | 8 | Robustness & Verification | PR-18 | 1/1 | DONE |
+| 9 | Comprehensive Evaluation Bench | PR-19 | 1/1 | DONE |
 
 ## 3. PRバックログ（進捗チェック付き）
 
@@ -386,6 +387,29 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 新規 E2E テストを `cdp-smoke` または `full-e2e` ジョブに追加。
 - Exit Criteria
   - [x] 実機環境（Headless Chrome）において、仕様通りのセキュリティ・監査・リカバリが保証されている。
+
+### PR-19: Comprehensive Evaluation Bench Expansion
+- Status: `DONE` (Local)
+- Spec Ref: Section 2.2, Section 5.2, Section 6, Section 7.1〜7.3
+- Dependencies: PR-08, PR-10, PR-14, PR-16, PR-17, PR-18
+- 実装タスク
+  - [x] `smoke` / `full` の2モードで共通利用できる評価結果スキーマと artifact writer を整備する。
+  - [x] `core-runtime` の代表シナリオ（semantic state, stable_key recovery, semantic wait, policy/HITL, audit redaction, session vault）を横断評価するベンチを追加する。
+  - [x] `mcp-server` の代表シナリオ（tool contract, HITL flow, usage metering / plan gating）を横断評価するベンチを追加する。
+  - [x] `skills-engine` / `plugin-host` / `marketplace` が同一フォーマットで結果を出力できる評価フックを追加する。
+  - [x] 集約 JSON から Markdown ダッシュボードを生成するスクリプトと保存先規約を追加する。
+- テストタスク
+  - [x] `smoke` モードで必須シナリオ群がすべて評価対象に含まれることを失敗テストで固定化する。
+  - [x] `full` モードで crate 横断の結果集約と failure / warning 反映が行われることを検証する。
+  - [x] 主要な回帰（stable_key fallback, policy approval, audit masking, session restore, MCP ask_human）を評価ダッシュボード経由でも追跡できることを検証する。
+- CIタスク
+  - [x] PR 用の `evaluation-bench-smoke` ジョブを追加し、評価結果 JSON / Markdown を artifact として保存する。
+  - [x] nightly / dispatch 用の `evaluation-bench-full` ジョブを追加し、全 crate の評価結果とダッシュボードを保存する。
+  - [x] 必須シナリオ欠落または閾値超過時に CI を fail させるガードを追加する。
+- Exit Criteria
+  - [x] `dragon-head` の主要機能群を1つの評価ダッシュボードで横断確認できる。
+  - [x] PR では短尺 smoke、nightly では full 評価が自動実行される。
+  - [x] 追加された主要機能は評価ベンチへの登録なしでは完了扱いにできない運用ルールが `docs/` に明記されている。
 
 ## 4. 共通 Definition of Done（全PR共通）
 

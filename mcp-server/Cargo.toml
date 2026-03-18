@@ -17,3 +17,4 @@ hex = "0.4"
 jsonschema = "0.37"
 tokio = { workspace = true }
 urlencoding = "2.1"
+test-bench-support = { path = "../test-bench-support" }

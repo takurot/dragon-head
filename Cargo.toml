@@ -5,6 +5,7 @@ members = [
     "plugin-host",
     "skills-engine",
     "marketplace",
+    "test-bench-support",
 ]
 resolver = "2"
 

@@ -28,3 +28,4 @@ hmac = "0.12"
 urlencoding = "2.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 jsonschema = "0.37"
+test-bench-support = { path = "../test-bench-support" }
