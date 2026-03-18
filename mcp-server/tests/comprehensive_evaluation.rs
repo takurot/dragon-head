@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use core_runtime::{ApprovalScope, BrowserClient, PolicyAction, PolicyRule};
 use mcp_server::{AuditRetentionSnapshot, CoreRuntimeBackend, McpBackend, McpServer, PlanTier};
 use serde_json::{json, Value};
@@ -132,10 +132,12 @@ fn scenario_hitl_flow() -> Result<Value> {
         }),
     )?;
 
-    let target_id = state["interactive_elements"][0]["id"].as_i64().unwrap();
+    let target_id = state["interactive_elements"][0]["id"]
+        .as_i64()
+        .context("target id should exist in hitl state")?;
     let stable_key = state["interactive_elements"][0]["stable_key"]
         .as_str()
-        .unwrap()
+        .context("stable key should exist in hitl state")?
         .to_string();
 
     let first_act = server.call_tool(

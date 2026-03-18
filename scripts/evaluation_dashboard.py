@@ -55,13 +55,16 @@ def render_dashboard(reports: list[dict]) -> str:
             details = scenario.get("error") or json.dumps(
                 scenario.get("details", {}), ensure_ascii=False, sort_keys=True
             )
+            details = details.replace("|", "\\|")
+            if len(details) > 120:
+                details = details[:117] + "..."
             lines.append(
                 "| {scenario_id} | {feature_area} | {status} | {duration_ms:.2f} | {details} |".format(
                     scenario_id=scenario.get("scenario_id", "unknown"),
                     feature_area=scenario.get("feature_area", "unknown"),
                     status=scenario.get("status", "unknown"),
                     duration_ms=float(scenario.get("duration_ms", 0.0)),
-                    details=details.replace("|", "\\|"),
+                    details=details,
                 )
             )
 

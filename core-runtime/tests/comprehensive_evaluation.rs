@@ -191,7 +191,9 @@ fn scenario_semantic_wait() -> anyhow::Result<Value> {
     let root = page.get_document_node()?;
     let sem = normalize_dom(LoadProfile::Interactive, &root)?;
     let state = SemanticState::new(sem, LoadProfile::Interactive);
-    let stable_key = find_button_key(state.root()).context("login button stable_key missing")?;
+    let stable_key = find_button_info(state.root())
+        .map(|(_, k)| k)
+        .context("login button stable_key missing")?;
 
     page.wait_for_semantic(
         core_runtime::SemanticTarget::StableKey(stable_key.clone()),
@@ -349,18 +351,6 @@ fn find_button_info(node: &core_runtime::sre::state::SemanticNode) -> Option<(i6
     }
     for child in &node.children {
         if let Some(found) = find_button_info(child) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn find_button_key(node: &core_runtime::sre::state::SemanticNode) -> Option<String> {
-    if node.role == "button" {
-        return node.stable_key.clone();
-    }
-    for child in &node.children {
-        if let Some(found) = find_button_key(child) {
             return Some(found);
         }
     }
