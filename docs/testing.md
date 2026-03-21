@@ -54,12 +54,17 @@ The CI pipeline is defined in `.github/workflows/`.
 # Run all unit and integration tests
 cargo test
 
+# Compile the full workspace test suite without running it
+cargo test --workspace --no-run
+
 # Run specific test
 cargo test test_name
 
 # Run E2E tests (requires setup)
 cargo test --test e2e
 ```
+
+The workspace disables incremental compilation for the `test` profile so the default `cargo test --workspace` and `cargo test --workspace --no-run` flows remain stable on filesystems where incremental dep-graph artifact creation is unreliable.
 
 ## 4. Exit Criteria for PRs
 
