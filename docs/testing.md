@@ -61,6 +61,8 @@ cargo test test_name
 cargo test --test e2e
 ```
 
+The workspace disables incremental compilation for the `test` profile so the default `cargo test --workspace` flow remains stable on filesystems where incremental dep-graph artifact creation is unreliable.
+
 ## 4. Exit Criteria for PRs
 
 - All tests must pass.
