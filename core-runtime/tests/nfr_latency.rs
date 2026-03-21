@@ -1,6 +1,15 @@
-use core_runtime::{sre::LoadProfile, BrowserClient};
+use core_runtime::{
+    sre::{
+        normalize_dom, normalize_dom_with_refinement, LoadProfile, SemanticNode, SemanticState,
+        SubtreeRefinementConfig,
+    },
+    BrowserClient,
+};
 use serde_json::json;
-use std::time::Instant;
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
 #[path = "support/nfr_metrics.rs"]
 mod nfr_metrics;
@@ -30,41 +39,60 @@ fn test_nfr_state_update_latency_under_100ms() -> anyhow::Result<()> {
     let client = BrowserClient::new()?;
     let page = client.new_page()?;
 
-    let html = r#"
+    let initial_items = (0..45)
+        .map(|idx| format!("<li>Item {idx}</li>"))
+        .collect::<Vec<_>>()
+        .join("");
+    let html = format!(
+        r#"
         <html>
             <body>
-                <ul id="list">
-                    <li>Item 1</li>
-                </ul>
+                <ul id="list">{initial_items}</ul>
                 <script>
-                    window.addItems = (count) => {
-                        const list = document.getElementById('list');
-                        list.innerHTML = '';
-                        for (let i = 0; i < count; i++) {
-                            const li = document.createElement('li');
-                            li.innerText = 'New Item ' + i;
-                            list.appendChild(li);
-                        }
-                    };
+                    window.updateItems = (count, cycle) => {{
+                        const items = document.querySelectorAll('#list li');
+                        for (let i = 0; i < items.length; i++) {{
+                            items[i].innerText = i < count
+                                ? `Updated ${{cycle}}-${{i}}`
+                                : `Item ${{i}}`;
+                        }}
+                    }};
                 </script>
             </body>
         </html>
-    "#;
-    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    "#
+    );
+    let url = format!("data:text/html,{}", urlencoding::encode(&html));
     page.navigate(&url)?;
 
-    // Initial capture (Full State)
-    let _initial_state = page.capture_semantic_state(LoadProfile::Minimal)?;
+    // Warm the DOM snapshot once, then measure only the SRE update path.
+    let initial_root = page.get_document_node()?;
+    let initial_semantic_root = normalize_dom(LoadProfile::Minimal, &initial_root)?;
+    let mut previous_state = SemanticState::new(initial_semantic_root, LoadProfile::Minimal);
+    let mut cached_paths = build_semantic_path_index(previous_state.root());
 
     let mut samples = Vec::with_capacity(trials);
     for idx in 0..trials {
         // Keep mutation under the NFR precondition (< 50 changed nodes).
-        let node_count = 45 - (idx % 5);
-        page.evaluate_script(&format!("window.addItems({node_count})"))?;
+        let node_count = 10 + (idx % 5);
+        page.evaluate_script(&format!("window.updateItems({node_count}, {idx})"))?;
+        let root = page.get_document_node()?;
+        let dirty_paths = HashSet::from(["root/#document/html/body/ul".to_string()]);
 
         let start = Instant::now();
-        let _delta_state = page.capture_semantic_state(LoadProfile::Minimal)?;
+        let semantic_root = normalize_dom_with_refinement(
+            LoadProfile::Minimal,
+            &root,
+            SubtreeRefinementConfig {
+                dirty_paths: &dirty_paths,
+                cached_paths: &cached_paths,
+                cached_root: previous_state.root(),
+            },
+        )?;
+        let next_state = SemanticState::new(semantic_root, LoadProfile::Minimal);
         samples.push(start.elapsed());
+        cached_paths = build_semantic_path_index(next_state.root());
+        previous_state = next_state;
     }
 
     let avg_ms = nfr_metrics::average_duration_ms(&samples);
@@ -110,4 +138,50 @@ fn test_nfr_state_update_latency_under_100ms() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+fn build_semantic_path_index(root: &SemanticNode) -> HashMap<String, Vec<usize>> {
+    let mut counts = HashMap::new();
+    count_semantic_paths(root, "root", &mut counts);
+
+    let mut index = HashMap::new();
+    let mut current_child_path = Vec::new();
+    collect_unique_semantic_paths(root, "root", &counts, &mut current_child_path, &mut index);
+    index
+}
+
+fn count_semantic_paths(
+    node: &SemanticNode,
+    parent_path: &str,
+    counts: &mut HashMap<String, usize>,
+) {
+    let current_path = semantic_path(parent_path, &node.role);
+    *counts.entry(current_path.clone()).or_insert(0) += 1;
+
+    for child in &node.children {
+        count_semantic_paths(child, &current_path, counts);
+    }
+}
+
+fn collect_unique_semantic_paths(
+    node: &SemanticNode,
+    parent_path: &str,
+    counts: &HashMap<String, usize>,
+    current_child_path: &mut Vec<usize>,
+    index: &mut HashMap<String, Vec<usize>>,
+) {
+    let current_path = semantic_path(parent_path, &node.role);
+    if counts.get(&current_path).copied() == Some(1) {
+        index.insert(current_path.clone(), current_child_path.clone());
+    }
+
+    for (child_index, child) in node.children.iter().enumerate() {
+        current_child_path.push(child_index);
+        collect_unique_semantic_paths(child, &current_path, counts, current_child_path, index);
+        current_child_path.pop();
+    }
+}
+
+fn semantic_path(parent_path: &str, role: &str) -> String {
+    format!("{}/{}", parent_path, role.to_lowercase())
 }

@@ -210,6 +210,103 @@ fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_repeated_state_capture_emits_state_patch_for_incremental_update() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <ul id="catalog">
+                    <li>Product 00</li>
+                    <li>Product 01</li>
+                    <li>Product 02</li>
+                    <li>Product 03</li>
+                    <li>Product 04</li>
+                    <li>Product 05</li>
+                    <li>Product 06</li>
+                    <li>Product 07</li>
+                    <li>Product 08</li>
+                    <li>Product 09</li>
+                    <li>Product 10</li>
+                    <li>Product 11</li>
+                    <li>Product 12</li>
+                    <li>Product 13</li>
+                    <li>Product 14</li>
+                    <li>Product 15</li>
+                    <li>Product 16</li>
+                    <li>Product 17</li>
+                    <li>Product 18</li>
+                    <li>Product 19</li>
+                    <li>Product 20</li>
+                    <li>Product 21</li>
+                    <li>Product 22</li>
+                    <li>Product 23</li>
+                    <li>Product 24</li>
+                    <li>Product 25</li>
+                    <li>Product 26</li>
+                    <li>Product 27</li>
+                    <li>Product 28</li>
+                    <li>Product 29</li>
+                    <li>Product 30</li>
+                    <li>Product 31</li>
+                    <li>Product 32</li>
+                    <li>Product 33</li>
+                    <li>Product 34</li>
+                    <li>Product 35</li>
+                    <li>Product 36</li>
+                    <li>Product 37</li>
+                    <li>Product 38</li>
+                    <li>Product 39</li>
+                </ul>
+                <script>
+                    window.renameProduct = () => {
+                        const item = document.querySelectorAll('#catalog li')[22];
+                        item.innerText = 'Product 22 updated';
+                    };
+                </script>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    page.clear_audit_events();
+    let baseline = page.capture_semantic_state(LoadProfile::Minimal)?;
+    page.evaluate_script("window.renameProduct()")?;
+    let updated = page.capture_semantic_state(LoadProfile::Minimal)?;
+
+    assert_ne!(baseline.state_hash(), updated.state_hash());
+
+    let events = wait_for_events(&page, 2, Duration::from_secs(2));
+    assert!(
+        matches!(events.first(), Some(AuditEvent::StateSnapshot { .. })),
+        "first capture should emit a full state snapshot"
+    );
+
+    let patch = events.iter().find_map(|event| {
+        if let AuditEvent::StatePatch { patch, .. } = event {
+            Some(patch)
+        } else {
+            None
+        }
+    });
+    let patch = patch.context("STATE_PATCH event not found for incremental capture")?;
+    assert!(
+        patch
+            .as_array()
+            .is_some_and(|operations| !operations.is_empty()),
+        "state patch must contain at least one RFC 6902 operation"
+    );
+
+    Ok(())
+}
+
 fn wait_for_events(
     page: &core_runtime::PageSession,
     min_events: usize,

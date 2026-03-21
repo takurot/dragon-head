@@ -128,6 +128,12 @@ struct PolicyApprovalState {
     granted: Vec<GrantedPolicyApproval>,
 }
 
+#[derive(Clone, Default)]
+struct SemanticCaptureCache {
+    profile: Option<LoadProfile>,
+    last_state: Option<Arc<SemanticState>>,
+}
+
 pub struct BrowserClient {
     inner: Browser,
     vault: Arc<dyn SessionVault>,
@@ -167,6 +173,7 @@ impl BrowserClient {
             policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
             navigation_epoch: Arc::new(AtomicU64::new(0)),
             audit_logger: Arc::new(AuditLogger::new()),
+            semantic_capture_cache: Arc::new(Mutex::new(SemanticCaptureCache::default())),
             vault: Arc::clone(&self.vault),
         })
     }
@@ -181,6 +188,7 @@ pub struct PageSession {
     policy_approvals: Arc<Mutex<PolicyApprovalState>>,
     navigation_epoch: Arc<AtomicU64>,
     pub(crate) audit_logger: Arc<AuditLogger>,
+    semantic_capture_cache: Arc<Mutex<SemanticCaptureCache>>,
     vault: Arc<dyn SessionVault>,
 }
 
@@ -211,6 +219,7 @@ impl PageSession {
                 })?;
         }
         self.clear_stable_key_index();
+        self.clear_semantic_capture_cache();
         self.navigation_epoch.fetch_add(1, Ordering::Relaxed);
         self.clear_pending_policy_approval();
         Ok(())
@@ -318,7 +327,7 @@ impl PageSession {
                 // spec says: "The maximum depth at which children should be retrieved, defaults to 1. Use -1 for the entire subtree".
                 // We need full tree for SRE.
                 // Using 1000 as a large enough depth since -1 (full) is not supported by headless_chrome u32 type.
-                pierce: Some(true), // Traverse iframes? SPEC doesn't specify, but safer for full context.
+                pierce: Some(false), // Keep the hot path on the main document tree unless explicitly needed.
             })?;
         Ok(root.root)
     }
@@ -1193,7 +1202,12 @@ impl PageSession {
     }
 
     fn capture_state(&self, profile: LoadProfile) -> Result<SemanticState> {
-        self.capture_state_with_refinement(profile, &[], None, None)
+        let cache = self.semantic_capture_cache_snapshot(profile)?;
+        let state = Arc::new(self.capture_state_with_refinement(profile, &[], None, None)?);
+        self.record_state_update(cache.last_state.clone(), Arc::clone(&state))?;
+        self.replace_semantic_capture_cache(profile, Arc::clone(&state))?;
+
+        Ok(state.as_ref().clone())
     }
 
     fn capture_state_with_refinement(
@@ -1223,15 +1237,12 @@ impl PageSession {
         } else {
             normalize_dom(profile, &root)?
         };
-        self.replace_stable_key_index(&sem_root);
-        let state = SemanticState::new(sem_root, profile);
-        self.audit_logger.log(AuditEvent::StateSnapshot {
-            state_hash: state.state_hash().to_string(),
-            page_instance_id: state.page_instance_id().to_string(),
-            timestamp: epoch_millis_u64(),
-            payload: serde_json::to_value(state.root()).unwrap_or(serde_json::Value::Null),
-        });
-        Ok(state)
+        if profile == LoadProfile::Interactive {
+            self.replace_stable_key_index(&sem_root);
+        } else {
+            self.clear_stable_key_index();
+        }
+        Ok(SemanticState::new(sem_root, profile))
     }
 
     fn replace_stable_key_index(&self, root: &SemanticNode) {
@@ -1245,6 +1256,52 @@ impl PageSession {
         if let Ok(mut index) = self.stable_key_index.lock() {
             index.clear();
         }
+    }
+
+    fn semantic_capture_cache_snapshot(
+        &self,
+        profile: LoadProfile,
+    ) -> Result<SemanticCaptureCache> {
+        let cache = self
+            .semantic_capture_cache
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock semantic capture cache"))?
+            .clone();
+
+        if cache.profile == Some(profile) {
+            Ok(cache)
+        } else {
+            Ok(SemanticCaptureCache::default())
+        }
+    }
+
+    fn replace_semantic_capture_cache(
+        &self,
+        profile: LoadProfile,
+        state: Arc<SemanticState>,
+    ) -> Result<()> {
+        let mut cache = self
+            .semantic_capture_cache
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock semantic capture cache"))?;
+        cache.profile = Some(profile);
+        cache.last_state = Some(state);
+        Ok(())
+    }
+
+    fn clear_semantic_capture_cache(&self) {
+        if let Ok(mut cache) = self.semantic_capture_cache.lock() {
+            *cache = SemanticCaptureCache::default();
+        }
+    }
+
+    fn record_state_update(
+        &self,
+        previous: Option<Arc<SemanticState>>,
+        current: Arc<SemanticState>,
+    ) -> Result<()> {
+        self.audit_logger.log_state_update(previous, current);
+        Ok(())
     }
 
     fn capture_som(&self, trigger: SomTrigger) -> Result<VisualCapture> {
@@ -1498,6 +1555,13 @@ impl<'a> SreEventSubscriber<'a> {
             &dirty_paths,
             self.last_state.as_ref().map(SemanticState::root),
             Some(&self.cached_path_index),
+        )?;
+        let shared_state = Arc::new(state.clone());
+        self.session.record_state_update(
+            self.last_state
+                .as_ref()
+                .map(|state| Arc::new(state.clone())),
+            Arc::clone(&shared_state),
         )?;
 
         let is_unchanged_hash = self
