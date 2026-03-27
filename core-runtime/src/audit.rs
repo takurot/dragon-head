@@ -86,6 +86,7 @@ impl AuditLogger {
 
         thread::spawn(move || {
             while let Ok(message) = receiver.recv() {
+                let should_buffer_event = !matches!(message, AuditMessage::Event(_));
                 let event = match message {
                     AuditMessage::Event(event) => Some(event),
                     AuditMessage::StateUpdate { previous, current } => {
@@ -107,11 +108,12 @@ impl AuditLogger {
                 };
 
                 let sanitized = sanitize_audit_event(event);
-                if let Ok(mut guard) = recent_events_for_worker.lock() {
-                    guard.push_back(sanitized.clone());
-                    while guard.len() > MAX_RECENT_EVENTS {
-                        guard.pop_front();
-                    }
+                if should_buffer_event {
+                    push_recent_event(
+                        &recent_events_for_worker,
+                        sanitized.clone(),
+                        MAX_RECENT_EVENTS,
+                    );
                 }
 
                 if !stdout_enabled {
@@ -130,7 +132,12 @@ impl AuditLogger {
     }
 
     pub fn log(&self, event: AuditEvent) {
-        if let Err(e) = self.sender.send(AuditMessage::Event(event)) {
+        const MAX_RECENT_EVENTS: usize = 512;
+
+        let sanitized = sanitize_audit_event(event);
+        push_recent_event(&self.recent_events, sanitized.clone(), MAX_RECENT_EVENTS);
+
+        if let Err(e) = self.sender.send(AuditMessage::Event(sanitized)) {
             eprintln!("[AUDIT][ERROR] Failed to send audit event: {}", e);
         }
     }
@@ -161,6 +168,19 @@ impl AuditLogger {
     pub fn clear_recent_events(&self) {
         if let Ok(mut guard) = self.recent_events.lock() {
             guard.clear();
+        }
+    }
+}
+
+fn push_recent_event(
+    recent_events: &Arc<Mutex<VecDeque<AuditEvent>>>,
+    event: AuditEvent,
+    max_recent_events: usize,
+) {
+    if let Ok(mut guard) = recent_events.lock() {
+        guard.push_back(event);
+        while guard.len() > max_recent_events {
+            guard.pop_front();
         }
     }
 }
@@ -316,7 +336,8 @@ fn redact_sensitive_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::redact_sensitive_text;
+    use super::{redact_sensitive_text, AuditEvent, AuditLogger};
+    use serde_json::json;
 
     #[test]
     fn redact_sensitive_text_masks_card_numbers_up_to_nineteen_digits() {
@@ -338,5 +359,28 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(redact_sensitive_text(input), expected);
         }
+    }
+
+    #[test]
+    fn log_buffers_direct_events_before_worker_drain() {
+        let logger = AuditLogger::new();
+        logger.clear_recent_events();
+
+        logger.log(AuditEvent::ToolCall {
+            tool_name: "act".to_string(),
+            args: json!({ "value": "sensitive@example.com" }),
+            timestamp: 1,
+        });
+
+        let events = logger.recent_events();
+        assert_eq!(
+            events.len(),
+            1,
+            "direct audit events must be buffered eagerly"
+        );
+        assert!(matches!(
+            &events[0],
+            AuditEvent::ToolCall { tool_name, .. } if tool_name == "act"
+        ));
     }
 }

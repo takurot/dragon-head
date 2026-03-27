@@ -1237,11 +1237,7 @@ impl PageSession {
         } else {
             normalize_dom(profile, &root)?
         };
-        if profile == LoadProfile::Interactive {
-            self.replace_stable_key_index(&sem_root);
-        } else {
-            self.clear_stable_key_index();
-        }
+        self.replace_stable_key_index(&sem_root);
         Ok(SemanticState::new(sem_root, profile))
     }
 
