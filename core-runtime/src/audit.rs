@@ -1,10 +1,13 @@
+use crate::sre::SemanticState;
 use crossbeam_channel::{unbounded, Sender};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
+    env,
     sync::{Arc, Mutex, OnceLock},
     thread,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -54,8 +57,16 @@ pub enum AuditEvent {
 
 #[derive(Clone)]
 pub struct AuditLogger {
-    sender: Sender<AuditEvent>,
+    sender: Sender<AuditMessage>,
     recent_events: Arc<Mutex<VecDeque<AuditEvent>>>,
+}
+
+enum AuditMessage {
+    Event(AuditEvent),
+    StateUpdate {
+        previous: Option<Arc<SemanticState>>,
+        current: Arc<SemanticState>,
+    },
 }
 
 impl Default for AuditLogger {
@@ -66,13 +77,49 @@ impl Default for AuditLogger {
 
 impl AuditLogger {
     pub fn new() -> Self {
-        let (sender, receiver) = unbounded::<AuditEvent>();
+        const MAX_RECENT_EVENTS: usize = 512;
+
+        let (sender, receiver) = unbounded::<AuditMessage>();
         let recent_events = Arc::new(Mutex::new(VecDeque::new()));
+        let stdout_enabled = env::var("AUDIT_LOG_STDOUT").is_ok();
+        let recent_events_for_worker = Arc::clone(&recent_events);
 
         thread::spawn(move || {
-            while let Ok(event) = receiver.recv() {
-                if let Ok(json) = serde_json::to_string(&event) {
-                    // For now, write audit events to stdout prefixed with [AUDIT]
+            while let Ok(message) = receiver.recv() {
+                let should_buffer_event = !matches!(message, AuditMessage::Event(_));
+                let event = match message {
+                    AuditMessage::Event(event) => Some(event),
+                    AuditMessage::StateUpdate { previous, current } => {
+                        match build_state_update_event(previous.as_deref(), current.as_ref()) {
+                            Ok(event) => event,
+                            Err(error) => {
+                                eprintln!(
+                                    "[AUDIT][ERROR] Failed to build state update event: {}",
+                                    error
+                                );
+                                None
+                            }
+                        }
+                    }
+                };
+
+                let Some(event) = event else {
+                    continue;
+                };
+
+                let sanitized = sanitize_audit_event(event);
+                if should_buffer_event {
+                    push_recent_event(
+                        &recent_events_for_worker,
+                        sanitized.clone(),
+                        MAX_RECENT_EVENTS,
+                    );
+                }
+
+                if !stdout_enabled {
+                    continue;
+                }
+                if let Ok(json) = serde_json::to_string(&sanitized) {
                     println!("[AUDIT] {}", json);
                 }
             }
@@ -88,15 +135,26 @@ impl AuditLogger {
         const MAX_RECENT_EVENTS: usize = 512;
 
         let sanitized = sanitize_audit_event(event);
-        if let Ok(mut guard) = self.recent_events.lock() {
-            guard.push_back(sanitized.clone());
-            while guard.len() > MAX_RECENT_EVENTS {
-                guard.pop_front();
-            }
-        }
+        push_recent_event(&self.recent_events, sanitized.clone(), MAX_RECENT_EVENTS);
 
-        if let Err(e) = self.sender.send(sanitized) {
+        if let Err(e) = self.sender.send(AuditMessage::Event(sanitized)) {
             eprintln!("[AUDIT][ERROR] Failed to send audit event: {}", e);
+        }
+    }
+
+    pub fn log_state_update(
+        &self,
+        previous: Option<Arc<SemanticState>>,
+        current: Arc<SemanticState>,
+    ) {
+        if let Err(error) = self
+            .sender
+            .send(AuditMessage::StateUpdate { previous, current })
+        {
+            eprintln!(
+                "[AUDIT][ERROR] Failed to send state update event: {}",
+                error
+            );
         }
     }
 
@@ -110,6 +168,19 @@ impl AuditLogger {
     pub fn clear_recent_events(&self) {
         if let Ok(mut guard) = self.recent_events.lock() {
             guard.clear();
+        }
+    }
+}
+
+fn push_recent_event(
+    recent_events: &Arc<Mutex<VecDeque<AuditEvent>>>,
+    event: AuditEvent,
+    max_recent_events: usize,
+) {
+    if let Ok(mut guard) = recent_events.lock() {
+        guard.push_back(event);
+        while guard.len() > max_recent_events {
+            guard.pop_front();
         }
     }
 }
@@ -136,8 +207,53 @@ fn sanitize_audit_event(event: AuditEvent) -> AuditEvent {
             timestamp,
             payload: redact_json_value(&payload, None, false),
         },
+        AuditEvent::StatePatch {
+            state_hash,
+            page_instance_id,
+            timestamp,
+            patch,
+        } => AuditEvent::StatePatch {
+            state_hash,
+            page_instance_id,
+            timestamp,
+            patch: redact_json_value(&patch, None, false),
+        },
         other => other,
     }
+}
+
+fn build_state_update_event(
+    previous: Option<&SemanticState>,
+    current: &SemanticState,
+) -> anyhow::Result<Option<AuditEvent>> {
+    let timestamp = epoch_millis_u64();
+
+    let Some(previous) = previous else {
+        return Ok(Some(AuditEvent::StateSnapshot {
+            state_hash: current.state_hash().to_string(),
+            page_instance_id: current.page_instance_id().to_string(),
+            timestamp,
+            payload: serde_json::to_value(current.root())?,
+        }));
+    };
+
+    let Some(delta) = current.build_delta(previous)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(AuditEvent::StatePatch {
+        state_hash: current.state_hash().to_string(),
+        page_instance_id: current.page_instance_id().to_string(),
+        timestamp,
+        patch: serde_json::to_value(&delta.patch)?,
+    }))
+}
+
+fn epoch_millis_u64() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn redact_json_value(
@@ -220,7 +336,8 @@ fn redact_sensitive_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::redact_sensitive_text;
+    use super::{redact_sensitive_text, AuditEvent, AuditLogger};
+    use serde_json::json;
 
     #[test]
     fn redact_sensitive_text_masks_card_numbers_up_to_nineteen_digits() {
@@ -242,5 +359,28 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(redact_sensitive_text(input), expected);
         }
+    }
+
+    #[test]
+    fn log_buffers_direct_events_before_worker_drain() {
+        let logger = AuditLogger::new();
+        logger.clear_recent_events();
+
+        logger.log(AuditEvent::ToolCall {
+            tool_name: "act".to_string(),
+            args: json!({ "value": "sensitive@example.com" }),
+            timestamp: 1,
+        });
+
+        let events = logger.recent_events();
+        assert_eq!(
+            events.len(),
+            1,
+            "direct audit events must be buffered eagerly"
+        );
+        assert!(matches!(
+            &events[0],
+            AuditEvent::ToolCall { tool_name, .. } if tool_name == "act"
+        ));
     }
 }

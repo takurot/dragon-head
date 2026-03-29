@@ -237,6 +237,52 @@ fn test_stable_key_index_is_cleared_on_navigation() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_minimal_capture_keeps_stable_key_lookup_available() -> anyhow::Result<()> {
+    if should_skip() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"
+        <html>
+            <body>
+                <button aria-label="Purchase now">Buy</button>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let state = page.capture_semantic_state(LoadProfile::Minimal)?;
+    let button = state
+        .generate_fast_state()
+        .interactive_elements
+        .into_iter()
+        .find(|node| node.role == "button")
+        .expect("button must exist in minimal capture");
+    let stable_key = button
+        .stable_key
+        .clone()
+        .expect("button stable_key must exist");
+    let alias = button.alias.clone().expect("button alias must exist");
+
+    assert_eq!(
+        page.lookup_backend_node_id_by_stable_key(&stable_key),
+        Some(button.backend_node_id),
+        "minimal capture must keep the stable_key lookup index populated"
+    );
+    assert_eq!(
+        page.lookup_alias_by_stable_key(&stable_key),
+        Some(alias),
+        "minimal capture must keep alias lookup aligned with the stable_key index"
+    );
+
+    Ok(())
+}
+
 fn capture_state(page: &core_runtime::PageSession) -> anyhow::Result<SemanticState> {
     let node = page.get_document_node()?;
     let root = normalize_dom(LoadProfile::Minimal, &node)?;

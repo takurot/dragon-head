@@ -249,23 +249,55 @@ impl SemanticState {
     /// Excludes page_instance_id, timestamp, and load_profile — only the
     /// semantic tree contributes to the hash.
     fn compute_hash(root: &SemanticNode) -> String {
-        // Clone and strip volatile fields (backend_node_id) to ensure deterministic hash.
-        // backend_node_id changes across sessions, but state_hash must be stable for same content.
-        let mut clean_root = root.clone();
-        Self::strip_volatile_fields(&mut clean_root);
-
-        // BTreeMap ensures deterministic map iteration order for serialization
-        let json_content = serde_json::to_string(&clean_root).unwrap_or_default();
         let mut hasher = Sha256::new();
-        hasher.update(json_content);
+        Self::hash_node(&mut hasher, root);
         hex::encode(hasher.finalize())
     }
 
-    fn strip_volatile_fields(node: &mut SemanticNode) {
-        node.backend_node_id = 0;
-        for child in &mut node.children {
-            Self::strip_volatile_fields(child);
+    fn hash_node(hasher: &mut Sha256, node: &SemanticNode) {
+        hasher.update(b"role\0");
+        hasher.update(node.role.as_bytes());
+        hasher.update(b"\0");
+
+        Self::hash_optional_string(hasher, b"label\0", node.label.as_deref());
+
+        hasher.update(b"attributes\0");
+        if let Some(attributes) = node.attributes.as_ref() {
+            for (key, value) in attributes {
+                hasher.update(key.as_bytes());
+                hasher.update(b"\0");
+                hasher.update(value.as_bytes());
+                hasher.update(b"\0");
+            }
         }
+        hasher.update(b"\x1e");
+
+        Self::hash_optional_string(hasher, b"stable_key\0", node.stable_key.as_deref());
+
+        hasher.update(b"ambiguous\0");
+        hasher.update([u8::from(node.ambiguous)]);
+        hasher.update(b"\0");
+
+        Self::hash_optional_string(hasher, b"alias\0", node.alias.as_deref());
+
+        hasher.update(b"children\0");
+        hasher.update((node.children.len() as u64).to_le_bytes());
+        for child in &node.children {
+            Self::hash_node(hasher, child);
+        }
+        hasher.update(b"\x1f");
+    }
+
+    fn hash_optional_string(hasher: &mut Sha256, label: &[u8], value: Option<&str>) {
+        hasher.update(label);
+        match value {
+            Some(value) => {
+                hasher.update([1]);
+                hasher.update(value.as_bytes());
+            }
+            None => hasher.update([0]),
+        }
+        hasher.update(b"\0");
     }
 
     fn generate_fast_state_with_trace(

@@ -34,6 +34,8 @@ The CI pipeline is defined in `.github/workflows/`.
 - **`e2e.yml`**: Runs E2E tests against a headless browser.
 - **Performance Gate (PR Short)**: `ci.yml` runs a short NFR suite (`ttft`, `nfr_latency`, `nfr_bandwidth`, `nfr_capacity`) and generates `core-runtime/target/nfr-dashboard.md`.
 - **Performance Gate (Nightly Full)**: `e2e.yml` runs the full NFR suite (including long TTFT and full capacity targets) and publishes the same dashboard format for regression tracking.
+- **NFR Fidelity**: the workspace `test` profile keeps `incremental = false` and uses a modest optimization level so latency-oriented tests measure runtime behavior rather than debug-build artifacts.
+- **Latency Scope**: `nfr_latency` measures the SRE update path after obtaining the current DOM snapshot, matching the spec's focus on semantic state regeneration under subtree refinement.
 - **Threshold Enforcement**: `scripts/nfr_dashboard.py` evaluates metric thresholds from JSON outputs and fails CI on regressions.
 - **Comprehensive Evaluation Bench**: `just evaluation-bench-smoke` runs crate-spanning feature evaluation suites and emits JSON reports plus `target/evaluation-dashboard.md`. Nightly/full runs use the same format with `DRAGON_HEAD_EVAL_MODE=full`.
 
