@@ -149,11 +149,29 @@ impl BrowserClient {
         Self::new_with_vault(vault)
     }
 
+    pub fn new_with_chrome_path(chrome_path: Option<String>) -> Result<Self> {
+        use rand::RngCore;
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
+        let vault = Arc::new(LocalSessionVault::new(kms));
+        Self::new_with_vault_and_path(vault, chrome_path)
+    }
+
     pub fn new_with_vault(vault: Arc<dyn SessionVault>) -> Result<Self> {
-        let options = LaunchOptions::default_builder()
-            .headless(true)
-            .build()
-            .context("Failed to build launch options")?;
+        Self::new_with_vault_and_path(vault, None)
+    }
+
+    fn new_with_vault_and_path(
+        vault: Arc<dyn SessionVault>,
+        chrome_path: Option<String>,
+    ) -> Result<Self> {
+        let mut builder = LaunchOptions::default_builder();
+        builder.headless(true);
+        if let Some(path) = chrome_path {
+            builder.path(Some(path.into()));
+        }
+        let options = builder.build().context("Failed to build launch options")?;
 
         let browser = Browser::new(options).context("Failed to launch browser")?;
         Ok(Self {

@@ -1,0 +1,41 @@
+use core_runtime::BrowserClient;
+use mcp_server::{CoreRuntimeBackend, McpServer};
+use std::io::{self, BufRead, Write};
+
+fn main() -> anyhow::Result<()> {
+    let chrome_path = std::env::var("CHROME_PATH").ok();
+
+    eprintln!("dragon-head-mcp: starting...");
+    let client = BrowserClient::new_with_chrome_path(chrome_path)?;
+    let page = client.new_page()?;
+    let backend = CoreRuntimeBackend::new(page);
+    let mut server = McpServer::new(backend);
+    eprintln!("dragon-head-mcp: ready, listening on stdio");
+
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut stdout_handle = stdout.lock();
+
+    for line in stdin.lock().lines() {
+        let request = match line {
+            Ok(line) => {
+                let trimmed = line.trim().to_string();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                trimmed
+            }
+            Err(err) => {
+                eprintln!("dragon-head-mcp: stdin read error: {err}");
+                break;
+            }
+        };
+
+        let response = server.handle_jsonrpc(&request);
+        writeln!(stdout_handle, "{response}")?;
+        stdout_handle.flush()?;
+    }
+
+    eprintln!("dragon-head-mcp: shutting down");
+    Ok(())
+}
