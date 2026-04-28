@@ -765,6 +765,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "escargot"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11c3aea32bc97b500c9ca6a72b768a26e558264303d101d3409cf6d57a9ed0cf"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1528,6 +1539,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "core-runtime",
+ "escargot",
  "hex",
  "jsonschema",
  "serde",

@@ -313,21 +313,35 @@ impl<B: McpBackend> McpServer<B> {
         result
     }
 
-    pub fn handle_jsonrpc(&mut self, request: &str) -> String {
+    pub fn handle_jsonrpc(&mut self, request: &str) -> Option<String> {
         let parsed = serde_json::from_str::<JsonRpcRequest>(request);
         let req = match parsed {
             Ok(req) => req,
             Err(err) => {
-                return serialize_response(JsonRpcResponse::error(
+                return Some(serialize_response(JsonRpcResponse::error(
                     Value::Null,
                     -32700,
                     format!("parse error: {err}"),
-                ));
+                )));
             }
         };
 
-        let id = req.id.clone();
+        let is_notification = req.id == Value::Null;
+
         let result: Result<Value, (i64, String)> = match req.method.as_str() {
+            "initialize" => Ok(json!({
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "dragon-head-mcp",
+                    "version": "0.1.0"
+                }
+            })),
+            "notifications/initialized" => {
+                return None;
+            }
             "tools/list" => Ok(json!({ "tools": self.tools() })),
             "tools/call" => {
                 let name = req.params.get("name").and_then(Value::as_str);
@@ -360,10 +374,15 @@ impl<B: McpBackend> McpServer<B> {
             other => Err((-32601, format!("unsupported method: {other}"))),
         };
 
-        match result {
+        if is_notification {
+            return None;
+        }
+
+        let id = req.id;
+        Some(match result {
             Ok(result) => serialize_response(JsonRpcResponse::success(id, result)),
             Err((code, message)) => serialize_response(JsonRpcResponse::error(id, code, message)),
-        }
+        })
     }
 
     pub fn backend_mut(&mut self) -> &mut B {
@@ -484,6 +503,7 @@ impl<B: McpBackend> McpServer<B> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JsonRpcRequest {
     pub jsonrpc: String,
+    #[serde(default)]
     pub id: Value,
     pub method: String,
     #[serde(default)]

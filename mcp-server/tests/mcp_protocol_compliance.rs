@@ -41,12 +41,61 @@ fn test_jsonrpc_tools_list_compliance() {
         "params": {}
     });
 
-    let response_raw = server.handle_jsonrpc(&request.to_string());
+    let response_raw = server
+        .handle_jsonrpc(&request.to_string())
+        .expect("response");
     let response: Value = serde_json::from_str(&response_raw).expect("response json");
 
     assert_eq!(response["jsonrpc"], json!("2.0"));
     assert_eq!(response["id"], json!(1));
     assert!(response["result"]["tools"].is_array());
+}
+
+#[test]
+fn test_jsonrpc_tools_list_notification_is_noop() {
+    let mut server = McpServer::new(MockBackend);
+    let request = json!({
+        "jsonrpc": "2.0",
+        "method": "tools/list",
+        "params": {}
+    });
+    assert!(server.handle_jsonrpc(&request.to_string()).is_none());
+}
+
+#[test]
+fn test_jsonrpc_initialize_and_initialized_notification() {
+    let mut server = McpServer::new(MockBackend);
+
+    let initialize_req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "test", "version": "1.0" }
+        }
+    });
+    let response_raw = server
+        .handle_jsonrpc(&initialize_req.to_string())
+        .expect("response");
+    let response: Value = serde_json::from_str(&response_raw).expect("response json");
+    assert_eq!(response["jsonrpc"], json!("2.0"));
+    assert_eq!(response["id"], json!(1));
+    assert_eq!(response["result"]["protocolVersion"], json!("2025-11-25"));
+    assert!(response["result"]["capabilities"]["tools"].is_object());
+    assert_eq!(
+        response["result"]["serverInfo"]["name"],
+        json!("dragon-head-mcp")
+    );
+
+    let initialized_notif = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    });
+    assert!(server
+        .handle_jsonrpc(&initialized_notif.to_string())
+        .is_none());
 }
 
 #[test]
@@ -65,7 +114,9 @@ fn test_jsonrpc_tools_call_compliance() {
         }
     });
 
-    let response_raw = server.handle_jsonrpc(&request.to_string());
+    let response_raw = server
+        .handle_jsonrpc(&request.to_string())
+        .expect("response");
     let response: Value = serde_json::from_str(&response_raw).expect("response json");
 
     assert_eq!(response["jsonrpc"], json!("2.0"));

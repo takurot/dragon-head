@@ -13,7 +13,12 @@ thiserror = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
 
+[[bin]]
+name = "dragon-head-mcp"
+path = "src/main.rs"
+
 [dev-dependencies]
+escargot = "0.5"
 jsonschema = "0.37"
 tokio = { workspace = true }
 urlencoding = "2.1"
