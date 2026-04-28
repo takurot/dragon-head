@@ -31,9 +31,10 @@ fn main() -> anyhow::Result<()> {
             }
         };
 
-        let response = server.handle_jsonrpc(&request);
-        writeln!(stdout_handle, "{response}")?;
-        stdout_handle.flush()?;
+        if let Some(response) = server.handle_jsonrpc(&request) {
+            writeln!(stdout_handle, "{response}")?;
+            stdout_handle.flush()?;
+        }
     }
 
     eprintln!("dragon-head-mcp: shutting down");

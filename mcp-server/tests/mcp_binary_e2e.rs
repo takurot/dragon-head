@@ -36,8 +36,45 @@ fn should_skip() -> bool {
     !chrome_available()
 }
 
+fn mcp_handshake(
+    stdin: &mut impl Write,
+    reader: &mut BufReader<impl std::io::Read>,
+) -> anyhow::Result<()> {
+    // Step 1: initialize
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "mcp_binary_e2e", "version": "1.0.0" }
+        }
+    });
+    writeln!(stdin, "{}", serde_json::to_string(&initialize)?)?;
+    stdin.flush()?;
+
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let resp: serde_json::Value = serde_json::from_str(&line)?;
+    assert_eq!(resp["id"], 1);
+    assert_eq!(resp["result"]["protocolVersion"], "2025-11-25");
+    assert!(resp["result"]["capabilities"]["tools"].is_object());
+    assert_eq!(resp["result"]["serverInfo"]["name"], "dragon-head-mcp");
+
+    // Step 2: notifications/initialized (no response expected)
+    let initialized = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    });
+    writeln!(stdin, "{}", serde_json::to_string(&initialized)?)?;
+    stdin.flush()?;
+
+    Ok(())
+}
+
 #[test]
-fn test_mcp_binary_tools_list() -> anyhow::Result<()> {
+fn test_mcp_binary_full_handshake_and_tools_list() -> anyhow::Result<()> {
     if should_skip() {
         eprintln!("SKIP: Chrome not available");
         return Ok(());
@@ -60,9 +97,12 @@ fn test_mcp_binary_tools_list() -> anyhow::Result<()> {
     let stdout = child.stdout.take().expect("failed to open stdout");
     let mut reader = BufReader::new(stdout);
 
+    mcp_handshake(&mut stdin, &mut reader)?;
+
+    // Step 3: tools/list after handshake
     let request = serde_json::json!({
         "jsonrpc": "2.0",
-        "id": 1,
+        "id": 2,
         "method": "tools/list",
         "params": {}
     });
@@ -73,7 +113,7 @@ fn test_mcp_binary_tools_list() -> anyhow::Result<()> {
     reader.read_line(&mut response_line)?;
     let response: serde_json::Value = serde_json::from_str(&response_line)?;
 
-    assert_eq!(response["id"], 1);
+    assert_eq!(response["id"], 2);
     assert!(response["result"]["tools"].is_array());
     let tools = response["result"]["tools"]
         .as_array()
@@ -95,7 +135,7 @@ fn test_mcp_binary_tools_list() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_mcp_binary_tools_call_get_usage_report() -> anyhow::Result<()> {
+fn test_mcp_binary_full_handshake_and_tools_call() -> anyhow::Result<()> {
     if should_skip() {
         eprintln!("SKIP: Chrome not available");
         return Ok(());
@@ -118,9 +158,12 @@ fn test_mcp_binary_tools_call_get_usage_report() -> anyhow::Result<()> {
     let stdout = child.stdout.take().expect("failed to open stdout");
     let mut reader = BufReader::new(stdout);
 
+    mcp_handshake(&mut stdin, &mut reader)?;
+
+    // Step 3: tools/call after handshake
     let request = serde_json::json!({
         "jsonrpc": "2.0",
-        "id": 2,
+        "id": 3,
         "method": "tools/call",
         "params": {
             "name": "get_usage_report",
@@ -134,7 +177,7 @@ fn test_mcp_binary_tools_call_get_usage_report() -> anyhow::Result<()> {
     reader.read_line(&mut response_line)?;
     let response: serde_json::Value = serde_json::from_str(&response_line)?;
 
-    assert_eq!(response["id"], 2);
+    assert_eq!(response["id"], 3);
     let content = &response["result"]["content"][0];
     assert_eq!(content["type"], "json");
     let json_content = &content["json"];
