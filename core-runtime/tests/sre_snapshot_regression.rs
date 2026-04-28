@@ -5,13 +5,10 @@ use core_runtime::{
 };
 use serde_json::Value;
 use std::{fs, path::PathBuf};
+use core_runtime::should_skip_browser_tests;
 
 const SNAPSHOT_REL_PATH: &str = "tests/fixtures/sre/minimal_regression_snapshot.json";
 const UPDATE_ENV: &str = "UPDATE_SRE_SNAPSHOTS";
-
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
 
 fn snapshot_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SNAPSHOT_REL_PATH)
@@ -58,7 +55,7 @@ fn build_snapshot() -> Result<Value> {
 
 #[test]
 fn test_sre_minimal_snapshot_regression() -> Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 

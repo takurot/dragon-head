@@ -2,14 +2,11 @@ use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState},
     BrowserClient,
 };
-
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
+use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_action_execution_basic() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -55,7 +52,7 @@ fn test_action_execution_basic() -> anyhow::Result<()> {
 
 #[test]
 fn test_action_execution_fallback() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -139,7 +136,7 @@ fn find_button_info(node: &core_runtime::sre::state::SemanticNode) -> Option<(i6
 
 #[test]
 fn test_action_execution_verify_required() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 

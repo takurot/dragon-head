@@ -1,5 +1,6 @@
 use core_runtime::BrowserClient;
 use std::{thread, time::Duration};
+use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_browser_launch_and_navigate() -> anyhow::Result<()> {
@@ -8,7 +9,7 @@ fn test_browser_launch_and_navigate() -> anyhow::Result<()> {
     // For local dev, we assume chrome is present.
 
     // Check if we are in a CI environment without chrome
-    if std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err() {
+    if should_skip_browser_tests() {
         println!("Skipping CDP test in CI without CHROME_INSTALLED env");
         return Ok(());
     }

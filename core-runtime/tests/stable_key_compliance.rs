@@ -1,13 +1,10 @@
 use core_runtime::sre::{normalize_dom, LoadProfile, SemanticState};
 use core_runtime::BrowserClient;
-
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
+use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_stable_key_format_compliance() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -35,7 +32,7 @@ fn test_stable_key_format_compliance() -> anyhow::Result<()> {
 
 #[test]
 fn test_ambiguous_flag_on_collision() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 

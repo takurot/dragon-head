@@ -8,16 +8,13 @@ use anyhow::{Context, Result};
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 
 use core_runtime::BrowserClient;
+use core_runtime::should_skip_browser_tests;
 
 const DIFF_THRESHOLD: f64 = 0.06;
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 #[test]
 fn test_som_visual_regression_threshold() -> Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 

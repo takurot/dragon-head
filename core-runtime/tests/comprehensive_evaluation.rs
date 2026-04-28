@@ -12,14 +12,11 @@ use core_runtime::{
 };
 use serde_json::{json, Value};
 use test_bench_support::{EvaluationBench, EvaluationMode};
-
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
+use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_core_runtime_comprehensive_evaluation_suite() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 

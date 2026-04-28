@@ -1,13 +1,10 @@
 use core_runtime::sre::{normalize_dom, LoadProfile, SemanticNode, SemanticState};
 use core_runtime::BrowserClient;
-
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
+use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_stable_key_tracks_quadrant_not_dom_order() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -66,7 +63,7 @@ fn test_stable_key_tracks_quadrant_not_dom_order() -> anyhow::Result<()> {
 
 #[test]
 fn test_stable_key_tracks_quadrant_from_style_pixels() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -125,7 +122,7 @@ fn test_stable_key_tracks_quadrant_from_style_pixels() -> anyhow::Result<()> {
 
 #[test]
 fn test_alias_output_and_stable_key_index_consistency() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -185,7 +182,7 @@ fn test_alias_output_and_stable_key_index_consistency() -> anyhow::Result<()> {
 
 #[test]
 fn test_stable_key_index_is_cleared_on_navigation() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -239,7 +236,7 @@ fn test_stable_key_index_is_cleared_on_navigation() -> anyhow::Result<()> {
 
 #[test]
 fn test_minimal_capture_keeps_stable_key_lookup_available() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 

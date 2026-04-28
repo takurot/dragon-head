@@ -1,13 +1,10 @@
 use core_runtime::{sre::LoadProfile, BrowserClient};
 use serde_json::json;
 use std::time::Instant;
+use core_runtime::should_skip_browser_tests;
 
 #[path = "support/nfr_metrics.rs"]
 mod nfr_metrics;
-
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
 
 #[derive(Debug)]
 struct CapacityStats {
@@ -81,7 +78,7 @@ fn run_capacity_trials(
 
 #[test]
 fn test_nfr_capacity_targets_by_profile() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 

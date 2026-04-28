@@ -2,10 +2,7 @@ use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState, StateGenerationPhase},
     BrowserClient,
 };
-
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
+use core_runtime::should_skip_browser_tests;
 
 fn build_state(html: &str) -> anyhow::Result<SemanticState> {
     let client = BrowserClient::new()?;
@@ -20,7 +17,7 @@ fn build_state(html: &str) -> anyhow::Result<SemanticState> {
 
 #[test]
 fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -145,7 +142,7 @@ fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
 
 #[test]
 fn test_fast_state_generated_before_full_state() -> anyhow::Result<()> {
-    if should_skip() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 

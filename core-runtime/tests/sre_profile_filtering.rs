@@ -3,6 +3,7 @@
 
 use core_runtime::sre::{normalize_dom, LoadProfile, SemanticState};
 use core_runtime::BrowserClient;
+use core_runtime::should_skip_browser_tests;
 
 fn make_test_html() -> String {
     r#"
@@ -49,7 +50,7 @@ fn get_all_roles(state: &core_runtime::sre::SemanticState) -> Vec<String> {
 
 #[test]
 fn test_minimal_blocks_all_media_and_js() -> anyhow::Result<()> {
-    if std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -108,7 +109,7 @@ fn test_minimal_blocks_all_media_and_js() -> anyhow::Result<()> {
 
 #[test]
 fn test_visual_allows_images_blocks_js() -> anyhow::Result<()> {
-    if std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -161,7 +162,7 @@ fn test_visual_allows_images_blocks_js() -> anyhow::Result<()> {
 
 #[test]
 fn test_interactive_allows_js_and_images() -> anyhow::Result<()> {
-    if std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err() {
+    if should_skip_browser_tests() {
         return Ok(());
     }
 
