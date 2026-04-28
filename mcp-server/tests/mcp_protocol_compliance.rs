@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use mcp_server::{McpBackend, McpServer};
 use serde_json::{json, Value};
 
@@ -127,4 +127,99 @@ fn test_jsonrpc_tools_call_compliance() {
         response["result"]["content"][0]["json"]["matched"],
         json!(true)
     );
+}
+
+struct ErrorBackend {
+    error_kind: &'static str,
+}
+
+impl McpBackend for ErrorBackend {
+    fn get_state(&mut self, _arguments: Value) -> Result<Value> {
+        Err(anyhow!("simulated {}", self.error_kind))
+    }
+    fn act(&mut self, _arguments: Value) -> Result<Value> {
+        Err(anyhow!("simulated {}", self.error_kind))
+    }
+    fn verify(&mut self, _arguments: Value) -> Result<Value> {
+        Err(anyhow!("simulated {}", self.error_kind))
+    }
+    fn get_visual(&mut self, _arguments: Value) -> Result<Value> {
+        Err(anyhow!("simulated {}", self.error_kind))
+    }
+    fn ask_human(&mut self, _arguments: Value) -> Result<Value> {
+        Err(anyhow!("simulated {}", self.error_kind))
+    }
+    fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
+        Err(anyhow!("simulated {}", self.error_kind))
+    }
+}
+
+#[test]
+fn test_tool_call_error_with_invalid_returns_32602() {
+    let mut server = McpServer::new(ErrorBackend {
+        error_kind: "invalid argument",
+    });
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "get_state", "arguments": {} }
+    });
+    let response_raw = server
+        .handle_jsonrpc(&request.to_string())
+        .expect("response");
+    let response: Value = serde_json::from_str(&response_raw).expect("response json");
+    assert_eq!(response["error"]["code"], json!(-32602));
+}
+
+#[test]
+fn test_tool_call_server_error_returns_32000() {
+    let mut server = McpServer::new(ErrorBackend {
+        error_kind: "internal server failure",
+    });
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "get_state", "arguments": {} }
+    });
+    let response_raw = server
+        .handle_jsonrpc(&request.to_string())
+        .expect("response");
+    let response: Value = serde_json::from_str(&response_raw).expect("response json");
+    assert_eq!(response["error"]["code"], json!(-32000));
+}
+
+#[test]
+fn test_tool_call_missing_required_error_returns_32602() {
+    let mut server = McpServer::new(ErrorBackend {
+        error_kind: "required parameter missing",
+    });
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "get_state", "arguments": {} }
+    });
+    let response_raw = server
+        .handle_jsonrpc(&request.to_string())
+        .expect("response");
+    let response: Value = serde_json::from_str(&response_raw).expect("response json");
+    assert_eq!(response["error"]["code"], json!(-32602));
+}
+
+#[test]
+fn test_tool_call_unknown_tool_returns_32602() {
+    let mut server = McpServer::new(MockBackend);
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "nonexistent_tool", "arguments": {} }
+    });
+    let response_raw = server
+        .handle_jsonrpc(&request.to_string())
+        .expect("response");
+    let response: Value = serde_json::from_str(&response_raw).expect("response json");
+    assert_eq!(response["error"]["code"], json!(-32602));
 }

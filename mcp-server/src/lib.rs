@@ -216,6 +216,21 @@ pub fn estimate_usage_cost(
     }
 }
 
+fn classify_tool_error(msg: &str) -> i64 {
+    let lower = msg.to_lowercase();
+    if lower.contains("invalid")
+        || lower.contains("missing")
+        || lower.contains("required")
+        || lower.contains("must be")
+        || lower.contains("unknown mcp tool")
+        || lower.contains("params")
+    {
+        -32602
+    } else {
+        -32000
+    }
+}
+
 pub trait McpBackend {
     fn get_state(&mut self, arguments: Value) -> Result<Value>;
     fn act(&mut self, arguments: Value) -> Result<Value>;
@@ -363,7 +378,11 @@ impl<B: McpBackend> McpServer<B> {
                                     }]
                                 })
                             })
-                            .map_err(|err| (-32000, err.to_string()))
+                            .map_err(|err| {
+                                let msg = err.to_string();
+                                let code = classify_tool_error(&msg);
+                                (code, msg)
+                            })
                     }
                     None => Err((
                         -32602,
