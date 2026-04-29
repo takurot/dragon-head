@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState},
     BrowserClient, SemanticTarget, SemanticWaitOptions, SemanticWaitState, WaitError,
 };
-use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_wait_for_semantic_enabled_on_delayed_button() -> anyhow::Result<()> {

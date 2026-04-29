@@ -1,6 +1,6 @@
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{sre::LoadProfile, BrowserClient};
 use serde_json::json;
-use core_runtime::should_skip_browser_tests;
 
 #[path = "support/nfr_metrics.rs"]
 mod nfr_metrics;

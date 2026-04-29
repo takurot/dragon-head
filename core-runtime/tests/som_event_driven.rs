@@ -1,10 +1,10 @@
 use std::{fs, path::PathBuf};
 
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticNode, SemanticState},
     BrowserClient, SomTrigger, VerifyError,
 };
-use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_som_not_generated_without_trigger() -> anyhow::Result<()> {

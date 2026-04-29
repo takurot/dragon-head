@@ -1,7 +1,7 @@
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{ApprovalScope, BrowserClient, PolicyAction, PolicyRule};
 use mcp_server::{CoreRuntimeBackend, McpServer};
 use serde_json::json;
-use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_ask_human_hitl_flow_with_policy_gate() -> anyhow::Result<()> {

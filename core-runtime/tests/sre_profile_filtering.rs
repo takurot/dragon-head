@@ -1,9 +1,9 @@
 //! Tests for per-profile resource control (block/allow).
 //! PLAN.md PR-02 テストタスク: Profile別のリソース制御（ブロック/許可）テスト
 
+use core_runtime::should_skip_browser_tests;
 use core_runtime::sre::{normalize_dom, LoadProfile, SemanticState};
 use core_runtime::BrowserClient;
-use core_runtime::should_skip_browser_tests;
 
 fn make_test_html() -> String {
     r#"

@@ -1,3 +1,4 @@
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     sre::{
         normalize_dom, normalize_dom_with_refinement, LoadProfile, SemanticNode, SemanticState,
@@ -10,7 +11,6 @@ use std::{
     collections::{HashMap, HashSet},
     time::Instant,
 };
-use core_runtime::should_skip_browser_tests;
 
 #[path = "support/nfr_metrics.rs"]
 mod nfr_metrics;

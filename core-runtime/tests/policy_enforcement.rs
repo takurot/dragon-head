@@ -1,12 +1,12 @@
 use anyhow::Context as _;
 use std::{thread, time::Duration};
 
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     policy::{ApprovalScope, PolicyAction, PolicyRule},
     sre::{normalize_dom, LoadProfile, SemanticState},
     ActionError, BrowserClient,
 };
-use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_block_rule_prevents_action_execution() -> anyhow::Result<()> {
@@ -346,8 +346,8 @@ fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<
         return Ok(());
     }
 
+    use core_runtime::should_skip_browser_tests;
     use std::fs;
-use core_runtime::should_skip_browser_tests;
 
     // Use unique names based on uuid to avoid test collisions.
     let tmp = std::env::temp_dir();

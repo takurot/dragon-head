@@ -1,6 +1,6 @@
+use core_runtime::should_skip_browser_tests;
 use core_runtime::BrowserClient;
 use std::{thread, time::Duration};
-use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_browser_launch_and_navigate() -> anyhow::Result<()> {

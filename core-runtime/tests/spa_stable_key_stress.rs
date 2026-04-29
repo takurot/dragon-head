@@ -1,8 +1,8 @@
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState},
     BrowserClient,
 };
-use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_stable_key_self_heals_across_spa_rerenders() -> anyhow::Result<()> {

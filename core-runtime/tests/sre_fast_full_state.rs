@@ -1,8 +1,8 @@
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState, StateGenerationPhase},
     BrowserClient,
 };
-use core_runtime::should_skip_browser_tests;
 
 fn build_state(html: &str) -> anyhow::Result<SemanticState> {
     let client = BrowserClient::new()?;

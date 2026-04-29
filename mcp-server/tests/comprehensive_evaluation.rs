@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{ApprovalScope, BrowserClient, PolicyAction, PolicyRule};
 use mcp_server::{AuditRetentionSnapshot, CoreRuntimeBackend, McpBackend, McpServer, PlanTier};
 use serde_json::{json, Value};
 use test_bench_support::{EvaluationBench, EvaluationMode};
-use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_mcp_server_comprehensive_evaluation_suite() -> Result<()> {

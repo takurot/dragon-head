@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
-use core_runtime::{BrowserClient, KmsAdapter, LocalSessionVault, SessionVault, SoftwareKms};
 use core_runtime::should_skip_browser_tests;
+use core_runtime::{BrowserClient, KmsAdapter, LocalSessionVault, SessionVault, SoftwareKms};
 
 #[tokio::test]
 async fn test_session_management_cross_domain_save_restore() -> anyhow::Result<()> {

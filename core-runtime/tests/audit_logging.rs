@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     audit::AuditEvent,
     sre::{normalize_dom, LoadProfile, SemanticState},
     BrowserClient,
 };
-use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {

@@ -1,11 +1,11 @@
 use anyhow::{ensure, Context, Result};
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticNode, SemanticState},
     BrowserClient,
 };
 use serde_json::Value;
 use std::{fs, path::PathBuf};
-use core_runtime::should_skip_browser_tests;
 
 const SNAPSHOT_REL_PATH: &str = "tests/fixtures/sre/minimal_regression_snapshot.json";
 const UPDATE_ENV: &str = "UPDATE_SRE_SNAPSHOTS";

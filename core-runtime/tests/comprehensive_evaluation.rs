@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::Context;
+use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     audit::AuditEvent,
     sre::{normalize_dom, LoadProfile, SemanticState},
@@ -12,7 +13,6 @@ use core_runtime::{
 };
 use serde_json::{json, Value};
 use test_bench_support::{EvaluationBench, EvaluationMode};
-use core_runtime::should_skip_browser_tests;
 
 #[test]
 fn test_core_runtime_comprehensive_evaluation_suite() -> anyhow::Result<()> {
