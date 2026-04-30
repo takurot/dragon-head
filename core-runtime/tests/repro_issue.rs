@@ -1,13 +1,9 @@
 use core_runtime::sre::{normalize_dom, LoadProfile, SemanticState};
 use core_runtime::BrowserClient;
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 #[test]
 fn test_repro_unstable_keys_on_sibling_insertion() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

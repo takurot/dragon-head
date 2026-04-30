@@ -1,16 +1,13 @@
 use anyhow::{Context, Result};
+
 use core_runtime::{ApprovalScope, BrowserClient, PolicyAction, PolicyRule};
 use mcp_server::{AuditRetentionSnapshot, CoreRuntimeBackend, McpBackend, McpServer, PlanTier};
 use serde_json::{json, Value};
 use test_bench_support::{EvaluationBench, EvaluationMode};
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 #[test]
 fn test_mcp_server_comprehensive_evaluation_suite() -> Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

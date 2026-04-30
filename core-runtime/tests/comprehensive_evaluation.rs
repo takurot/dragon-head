@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::Context;
+
 use core_runtime::{
     audit::AuditEvent,
     sre::{normalize_dom, LoadProfile, SemanticState},
@@ -13,13 +14,9 @@ use core_runtime::{
 use serde_json::{json, Value};
 use test_bench_support::{EvaluationBench, EvaluationMode};
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 #[test]
 fn test_core_runtime_comprehensive_evaluation_suite() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

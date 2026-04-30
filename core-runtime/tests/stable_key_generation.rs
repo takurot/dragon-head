@@ -1,13 +1,9 @@
 use core_runtime::sre::{normalize_dom, LoadProfile, SemanticState};
 use core_runtime::BrowserClient;
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 #[test]
 fn test_stable_key_determinism() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -59,7 +55,7 @@ fn test_stable_key_determinism() -> anyhow::Result<()> {
 
 #[test]
 fn test_stable_key_collision_handling() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

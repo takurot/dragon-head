@@ -2256,7 +2256,7 @@ mod browser_tests {
 
     #[tokio::test]
     async fn test_session_vault_save_load() -> Result<()> {
-        if std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err() {
+        if !crate::chrome_available() {
             return Ok(());
         }
 

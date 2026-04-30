@@ -8,8 +8,8 @@ fn test_browser_launch_and_navigate() -> anyhow::Result<()> {
     // For local dev, we assume chrome is present.
 
     // Check if we are in a CI environment without chrome
-    if std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err() {
-        println!("Skipping CDP test in CI without CHROME_INSTALLED env");
+    if !core_runtime::chrome_available() {
+        println!("Skipping CDP test: Chrome not available");
         return Ok(());
     }
 

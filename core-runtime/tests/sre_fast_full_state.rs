@@ -3,10 +3,6 @@ use core_runtime::{
     BrowserClient,
 };
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 fn build_state(html: &str) -> anyhow::Result<SemanticState> {
     let client = BrowserClient::new()?;
     let page = client.new_page()?;
@@ -20,7 +16,7 @@ fn build_state(html: &str) -> anyhow::Result<SemanticState> {
 
 #[test]
 fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -145,7 +141,7 @@ fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
 
 #[test]
 fn test_fast_state_generated_before_full_state() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

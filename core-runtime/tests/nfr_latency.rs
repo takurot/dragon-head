@@ -14,13 +14,9 @@ use std::{
 #[path = "support/nfr_metrics.rs"]
 mod nfr_metrics;
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 #[test]
 fn test_nfr_state_update_latency_under_100ms() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

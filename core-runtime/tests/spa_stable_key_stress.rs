@@ -3,13 +3,9 @@ use core_runtime::{
     BrowserClient,
 };
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 #[test]
 fn test_stable_key_self_heals_across_spa_rerenders() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

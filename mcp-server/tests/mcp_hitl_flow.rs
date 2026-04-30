@@ -2,13 +2,9 @@ use core_runtime::{ApprovalScope, BrowserClient, PolicyAction, PolicyRule};
 use mcp_server::{CoreRuntimeBackend, McpServer};
 use serde_json::json;
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 #[test]
 fn test_ask_human_hitl_flow_with_policy_gate() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

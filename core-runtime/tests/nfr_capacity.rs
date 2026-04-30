@@ -5,10 +5,6 @@ use std::time::Instant;
 #[path = "support/nfr_metrics.rs"]
 mod nfr_metrics;
 
-fn should_skip() -> bool {
-    std::env::var("CI").is_ok() && std::env::var("CHROME_INSTALLED").is_err()
-}
-
 #[derive(Debug)]
 struct CapacityStats {
     trials: usize,
@@ -81,7 +77,7 @@ fn run_capacity_trials(
 
 #[test]
 fn test_nfr_capacity_targets_by_profile() -> anyhow::Result<()> {
-    if should_skip() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
