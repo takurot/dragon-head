@@ -1,4 +1,3 @@
-
 use core_runtime::{sre::LoadProfile, BrowserClient};
 use serde_json::json;
 use std::time::Instant;

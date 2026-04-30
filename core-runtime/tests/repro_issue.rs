@@ -1,4 +1,3 @@
-
 use core_runtime::sre::{normalize_dom, LoadProfile, SemanticState};
 use core_runtime::BrowserClient;
 

@@ -1,4 +1,3 @@
-
 use core_runtime::{ApprovalScope, BrowserClient, PolicyAction, PolicyRule};
 use mcp_server::{CoreRuntimeBackend, McpServer};
 use serde_json::json;
