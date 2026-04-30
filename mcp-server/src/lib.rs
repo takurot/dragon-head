@@ -216,6 +216,19 @@ pub fn estimate_usage_cost(
     }
 }
 
+fn is_known_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "get_state"
+            | "act"
+            | "verify"
+            | "get_visual"
+            | "ask_human"
+            | "run_skill"
+            | "get_usage_report"
+    )
+}
+
 pub trait McpBackend {
     fn get_state(&mut self, arguments: Value) -> Result<Value>;
     fn act(&mut self, arguments: Value) -> Result<Value>;
@@ -347,7 +360,7 @@ impl<B: McpBackend> McpServer<B> {
                 let name = req.params.get("name").and_then(Value::as_str);
 
                 match name {
-                    Some(name) => {
+                    Some(name) if is_known_tool(name) => {
                         let arguments = req
                             .params
                             .get("arguments")
@@ -365,6 +378,7 @@ impl<B: McpBackend> McpServer<B> {
                             })
                             .map_err(|err| (-32000, err.to_string()))
                     }
+                    Some(unknown) => Err((-32601, format!("unknown tool: {unknown}"))),
                     None => Err((
                         -32602,
                         "tools/call params.name must be a string".to_string(),
