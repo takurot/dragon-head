@@ -1,10 +1,10 @@
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::sre::{normalize_dom, LoadProfile, SemanticState};
 use core_runtime::BrowserClient;
 
 #[test]
 fn test_stable_key_determinism() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -56,7 +56,7 @@ fn test_stable_key_determinism() -> anyhow::Result<()> {
 
 #[test]
 fn test_stable_key_collision_handling() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

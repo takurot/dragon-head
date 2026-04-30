@@ -1,6 +1,5 @@
 use std::time::{Duration, Instant};
 
-use core_runtime::should_skip_browser_tests;
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState},
     BrowserClient, SemanticTarget, SemanticWaitOptions, SemanticWaitState, WaitError,
@@ -8,7 +7,7 @@ use core_runtime::{
 
 #[test]
 fn test_wait_for_semantic_enabled_on_delayed_button() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -57,7 +56,7 @@ fn test_wait_for_semantic_enabled_on_delayed_button() -> anyhow::Result<()> {
 
 #[test]
 fn test_wait_for_intent_success() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -92,7 +91,7 @@ fn test_wait_for_intent_success() -> anyhow::Result<()> {
 
 #[test]
 fn test_wait_for_intent_timeout() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -130,7 +129,7 @@ fn test_wait_for_intent_timeout() -> anyhow::Result<()> {
 
 #[test]
 fn test_wait_for_intent_does_not_match_substring() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -167,7 +166,7 @@ fn test_wait_for_intent_does_not_match_substring() -> anyhow::Result<()> {
 
 #[test]
 fn test_wait_for_semantic_timeout_when_target_never_enabled() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -213,7 +212,7 @@ fn test_wait_for_semantic_timeout_when_target_never_enabled() -> anyhow::Result<
 
 #[test]
 fn test_wait_for_semantic_id_fallback_with_stable_key() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -268,7 +267,7 @@ fn test_wait_for_semantic_id_fallback_with_stable_key() -> anyhow::Result<()> {
 
 #[test]
 fn test_wait_for_semantic_is_not_blocked_by_large_poll_interval() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -317,7 +316,7 @@ fn test_wait_for_semantic_is_not_blocked_by_large_poll_interval() -> anyhow::Res
 
 #[test]
 fn test_wait_for_intent_is_not_blocked_by_large_poll_interval() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -360,7 +359,7 @@ fn test_wait_for_intent_is_not_blocked_by_large_poll_interval() -> anyhow::Resul
 
 #[test]
 fn test_wait_for_semantic_recovers_from_polluted_bridge_state() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

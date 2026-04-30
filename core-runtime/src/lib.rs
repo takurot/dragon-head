@@ -10,7 +10,7 @@ pub use browser::{
     SemanticWaitState, SomMark, SomTrigger, VisualCapture,
 };
 pub mod error;
-pub use chrome_detection::{chrome_available, should_skip_browser_tests};
+pub use chrome_detection::chrome_available;
 pub use error::{ActionError, VerifyError, WaitError};
 pub use policy::{
     ApprovalScope, PolicyAction, PolicyContext, PolicyDecision, PolicyEngine, PolicyRule,

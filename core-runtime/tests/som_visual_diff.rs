@@ -7,14 +7,13 @@ use std::{
 use anyhow::{Context, Result};
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 
-use core_runtime::should_skip_browser_tests;
 use core_runtime::BrowserClient;
 
 const DIFF_THRESHOLD: f64 = 0.06;
 
 #[test]
 fn test_som_visual_regression_threshold() -> Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

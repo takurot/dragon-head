@@ -1,4 +1,4 @@
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::{
     sre::{
         normalize_dom, normalize_dom_with_refinement, LoadProfile, SemanticNode, SemanticState,
@@ -17,7 +17,7 @@ mod nfr_metrics;
 
 #[test]
 fn test_nfr_state_update_latency_under_100ms() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

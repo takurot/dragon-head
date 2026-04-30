@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::{
     audit::AuditEvent,
     sre::{normalize_dom, LoadProfile, SemanticState},
@@ -10,7 +10,7 @@ use core_runtime::{
 
 #[test]
 fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -139,7 +139,7 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
 
 #[test]
 fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -209,7 +209,7 @@ fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
 
 #[test]
 fn test_repeated_state_capture_emits_state_patch_for_incremental_update() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

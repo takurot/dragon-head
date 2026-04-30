@@ -1,12 +1,12 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::{BrowserClient, KmsAdapter, LocalSessionVault, SessionVault, SoftwareKms};
 
 #[tokio::test]
 async fn test_session_management_cross_domain_save_restore() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -66,7 +66,7 @@ async fn test_session_management_cross_domain_save_restore() -> anyhow::Result<(
 
 #[tokio::test]
 async fn test_session_management_key_rotation_restore_roundtrip() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

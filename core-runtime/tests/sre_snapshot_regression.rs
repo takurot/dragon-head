@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticNode, SemanticState},
     BrowserClient,
@@ -55,7 +55,7 @@ fn build_snapshot() -> Result<Value> {
 
 #[test]
 fn test_sre_minimal_snapshot_regression() -> Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

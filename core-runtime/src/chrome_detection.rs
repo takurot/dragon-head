@@ -30,6 +30,11 @@ pub fn chrome_available() -> bool {
         return true;
     }
 
+    #[cfg(not(target_os = "windows"))]
+    let which_cmd = "which";
+    #[cfg(target_os = "windows")]
+    let which_cmd = "where";
+
     let command_names = &[
         "chromium",
         "chromium-browser",
@@ -37,14 +42,10 @@ pub fn chrome_available() -> bool {
         "google-chrome-stable",
     ];
     command_names.iter().any(|name| {
-        Command::new("which")
+        Command::new(which_cmd)
             .arg(name)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
     })
-}
-
-pub fn should_skip_browser_tests() -> bool {
-    !chrome_available()
 }

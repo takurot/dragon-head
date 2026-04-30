@@ -1,4 +1,4 @@
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState, StateGenerationPhase},
     BrowserClient,
@@ -17,7 +17,7 @@ fn build_state(html: &str) -> anyhow::Result<SemanticState> {
 
 #[test]
 fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -142,7 +142,7 @@ fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
 
 #[test]
 fn test_fast_state_generated_before_full_state() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

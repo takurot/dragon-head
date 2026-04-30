@@ -2256,7 +2256,7 @@ mod browser_tests {
 
     #[tokio::test]
     async fn test_session_vault_save_load() -> Result<()> {
-        if crate::should_skip_browser_tests() {
+        if !crate::chrome_available() {
             return Ok(());
         }
 

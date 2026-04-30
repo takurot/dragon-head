@@ -1,4 +1,4 @@
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::{sre::LoadProfile, BrowserClient};
 use serde_json::json;
 use std::time::Instant;
@@ -78,7 +78,7 @@ fn run_capacity_trials(
 
 #[test]
 fn test_nfr_capacity_targets_by_profile() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

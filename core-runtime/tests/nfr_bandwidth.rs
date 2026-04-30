@@ -1,4 +1,4 @@
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::{sre::LoadProfile, BrowserClient};
 use serde_json::json;
 
@@ -7,7 +7,7 @@ mod nfr_metrics;
 
 #[test]
 fn test_nfr_bandwidth_95_percent_reduction() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

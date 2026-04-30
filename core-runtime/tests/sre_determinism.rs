@@ -1,14 +1,12 @@
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState},
     BrowserClient,
 };
 
-/// Skip test if Chrome is not available in CI
-
 #[test]
 fn test_sre_determinism_same_input() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -67,7 +65,7 @@ fn test_sre_determinism_same_input() -> anyhow::Result<()> {
 /// This is the core determinism requirement of SPEC SRE-01.
 #[test]
 fn test_sre_determinism_dynamic_class_variance() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

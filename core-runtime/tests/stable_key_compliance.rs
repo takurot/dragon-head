@@ -1,10 +1,10 @@
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::sre::{normalize_dom, LoadProfile, SemanticState};
 use core_runtime::BrowserClient;
 
 #[test]
 fn test_stable_key_format_compliance() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -32,7 +32,7 @@ fn test_stable_key_format_compliance() -> anyhow::Result<()> {
 
 #[test]
 fn test_ambiguous_flag_on_collision() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 

@@ -1,4 +1,4 @@
-use core_runtime::should_skip_browser_tests;
+
 use core_runtime::{
     sre::{normalize_dom, LoadProfile, SemanticState},
     BrowserClient,
@@ -6,7 +6,7 @@ use core_runtime::{
 
 #[test]
 fn test_action_execution_basic() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -52,7 +52,7 @@ fn test_action_execution_basic() -> anyhow::Result<()> {
 
 #[test]
 fn test_action_execution_fallback() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
@@ -136,7 +136,7 @@ fn find_button_info(node: &core_runtime::sre::state::SemanticNode) -> Option<(i6
 
 #[test]
 fn test_action_execution_verify_required() -> anyhow::Result<()> {
-    if should_skip_browser_tests() {
+    if !core_runtime::chrome_available() {
         return Ok(());
     }
 
