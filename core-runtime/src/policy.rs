@@ -97,7 +97,18 @@ impl CompiledPolicyRule {
         }
 
         if let Some(path_prefix) = self.raw.path_prefix.as_deref() {
-            if !context.path.starts_with(path_prefix.trim()) {
+            let prefix = path_prefix.trim();
+            if !context.path.starts_with(prefix) {
+                return false;
+            }
+            // Segment-aware matching: the prefix must end at a segment boundary.
+            // Accept if the path is exactly the prefix, or if the next character
+            // after the prefix is '/', or if the prefix itself ends with '/'.
+            let is_exact = context.path.len() == prefix.len();
+            let next_is_separator =
+                context.path.as_bytes().get(prefix.len()).copied() == Some(b'/');
+            let prefix_has_separator = prefix.ends_with('/');
+            if !is_exact && !next_is_separator && !prefix_has_separator {
                 return false;
             }
         }

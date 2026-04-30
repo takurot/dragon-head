@@ -134,3 +134,136 @@ fn test_invalid_rules_return_error_not_empty_engine() {
         "Invalid rules must return Err, not a silent allow-all engine"
     );
 }
+
+/// A rule with path_prefix "/login" must match the exact path "/login".
+#[test]
+fn test_path_prefix_matches_exact_path() {
+    let engine = PolicyEngine::try_new(vec![PolicyRule {
+        id: "login-rule".to_string(),
+        domain: None,
+        path_prefix: Some("/login".to_string()),
+        role: None,
+        text_regex: None,
+        context_regex: None,
+        action: PolicyAction::Block,
+        scope: None,
+    }])
+    .unwrap();
+
+    let decision = engine.evaluate(&PolicyContext {
+        url: "https://example.com/login".to_string(),
+        action: "click".to_string(),
+        target_role: None,
+        target_text: None,
+        surrounding_text: None,
+    });
+    assert_eq!(decision.action, PolicyAction::Block);
+}
+
+/// A rule with path_prefix "/login" must match child path "/login/step".
+#[test]
+fn test_path_prefix_matches_child_path() {
+    let engine = PolicyEngine::try_new(vec![PolicyRule {
+        id: "login-rule".to_string(),
+        domain: None,
+        path_prefix: Some("/login".to_string()),
+        role: None,
+        text_regex: None,
+        context_regex: None,
+        action: PolicyAction::Block,
+        scope: None,
+    }])
+    .unwrap();
+
+    let decision = engine.evaluate(&PolicyContext {
+        url: "https://example.com/login/step".to_string(),
+        action: "click".to_string(),
+        target_role: None,
+        target_text: None,
+        surrounding_text: None,
+    });
+    assert_eq!(decision.action, PolicyAction::Block);
+}
+
+/// A rule with path_prefix "/login" must NOT match sibling path "/logina".
+#[test]
+fn test_path_prefix_rejects_sibling_path() {
+    let engine = PolicyEngine::try_new(vec![PolicyRule {
+        id: "login-rule".to_string(),
+        domain: None,
+        path_prefix: Some("/login".to_string()),
+        role: None,
+        text_regex: None,
+        context_regex: None,
+        action: PolicyAction::Block,
+        scope: None,
+    }])
+    .unwrap();
+
+    let decision = engine.evaluate(&PolicyContext {
+        url: "https://example.com/logina".to_string(),
+        action: "click".to_string(),
+        target_role: None,
+        target_text: None,
+        surrounding_text: None,
+    });
+    assert_eq!(
+        decision.action,
+        PolicyAction::Allow,
+        "/login prefix must NOT match /logina"
+    );
+}
+
+/// A rule with trailing slash path_prefix "/login/" must match child "/login/step".
+#[test]
+fn test_path_prefix_trailing_slash_matches_child() {
+    let engine = PolicyEngine::try_new(vec![PolicyRule {
+        id: "login-rule".to_string(),
+        domain: None,
+        path_prefix: Some("/login/".to_string()),
+        role: None,
+        text_regex: None,
+        context_regex: None,
+        action: PolicyAction::Block,
+        scope: None,
+    }])
+    .unwrap();
+
+    let decision = engine.evaluate(&PolicyContext {
+        url: "https://example.com/login/step".to_string(),
+        action: "click".to_string(),
+        target_role: None,
+        target_text: None,
+        surrounding_text: None,
+    });
+    assert_eq!(decision.action, PolicyAction::Block);
+}
+
+/// A rule with path_prefix "/foo" must NOT match unrelated sibling "/foobar".
+#[test]
+fn test_path_prefix_rejects_unrelated_sibling() {
+    let engine = PolicyEngine::try_new(vec![PolicyRule {
+        id: "foo-rule".to_string(),
+        domain: None,
+        path_prefix: Some("/foo".to_string()),
+        role: None,
+        text_regex: None,
+        context_regex: None,
+        action: PolicyAction::Block,
+        scope: None,
+    }])
+    .unwrap();
+
+    let decision = engine.evaluate(&PolicyContext {
+        url: "https://example.com/foobar".to_string(),
+        action: "click".to_string(),
+        target_role: None,
+        target_text: None,
+        surrounding_text: None,
+    });
+    assert_eq!(
+        decision.action,
+        PolicyAction::Allow,
+        "/foo prefix must NOT match /foobar"
+    );
+}
