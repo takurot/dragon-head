@@ -216,19 +216,17 @@ pub fn estimate_usage_cost(
     }
 }
 
-fn classify_tool_error(msg: &str) -> i64 {
-    let lower = msg.to_lowercase();
-    if lower.contains("invalid")
-        || lower.contains("missing")
-        || lower.contains("required")
-        || lower.contains("must be")
-        || lower.contains("unknown mcp tool")
-        || lower.contains("params")
-    {
-        -32602
-    } else {
-        -32000
-    }
+fn is_known_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "get_state"
+            | "act"
+            | "verify"
+            | "get_visual"
+            | "ask_human"
+            | "run_skill"
+            | "get_usage_report"
+    )
 }
 
 pub trait McpBackend {
@@ -362,7 +360,7 @@ impl<B: McpBackend> McpServer<B> {
                 let name = req.params.get("name").and_then(Value::as_str);
 
                 match name {
-                    Some(name) => {
+                    Some(name) if is_known_tool(name) => {
                         let arguments = req
                             .params
                             .get("arguments")
@@ -378,12 +376,9 @@ impl<B: McpBackend> McpServer<B> {
                                     }]
                                 })
                             })
-                            .map_err(|err| {
-                                let msg = err.to_string();
-                                let code = classify_tool_error(&msg);
-                                (code, msg)
-                            })
+                            .map_err(|err| (-32000, err.to_string()))
                     }
+                    Some(unknown) => Err((-32601, format!("unknown tool: {unknown}"))),
                     None => Err((
                         -32602,
                         "tools/call params.name must be a string".to_string(),
