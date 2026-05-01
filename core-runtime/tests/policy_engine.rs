@@ -267,3 +267,53 @@ fn test_path_prefix_rejects_unrelated_sibling() {
         "/foo prefix must NOT match /foobar"
     );
 }
+
+/// A rule with path_prefix "/login/" must match exact path "/login/".
+#[test]
+fn test_path_prefix_trailing_slash_exact_match() {
+    let engine = PolicyEngine::try_new(vec![PolicyRule {
+        id: "login-rule".to_string(),
+        domain: None,
+        path_prefix: Some("/login/".to_string()),
+        role: None,
+        text_regex: None,
+        context_regex: None,
+        action: PolicyAction::Block,
+        scope: None,
+    }])
+    .unwrap();
+
+    let decision = engine.evaluate(&PolicyContext {
+        url: "https://example.com/login/".to_string(),
+        action: "click".to_string(),
+        target_role: None,
+        target_text: None,
+        surrounding_text: None,
+    });
+    assert_eq!(decision.action, PolicyAction::Block);
+}
+
+/// A rule with path_prefix "/" (root) must match any path.
+#[test]
+fn test_path_prefix_root_matches_any_path() {
+    let engine = PolicyEngine::try_new(vec![PolicyRule {
+        id: "root-rule".to_string(),
+        domain: None,
+        path_prefix: Some("/".to_string()),
+        role: None,
+        text_regex: None,
+        context_regex: None,
+        action: PolicyAction::Block,
+        scope: None,
+    }])
+    .unwrap();
+
+    let decision = engine.evaluate(&PolicyContext {
+        url: "https://example.com/anything/here".to_string(),
+        action: "click".to_string(),
+        target_role: None,
+        target_text: None,
+        surrounding_text: None,
+    });
+    assert_eq!(decision.action, PolicyAction::Block);
+}
