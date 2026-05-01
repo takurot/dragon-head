@@ -23,10 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install chromium
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run tests
       env:
         CHROME_INSTALLED: "true"
@@ -56,10 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run semantic wait smoke test
       env:
         CHROME_INSTALLED: "true"
@@ -72,10 +68,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install chromium
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run CDP smoke test
       # Retry to detect flakiness
       run: |
@@ -86,10 +80,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install chromium
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run SRE determinism test
       env:
         CHROME_INSTALLED: "true"
@@ -121,10 +113,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install chromium
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run policy engine and enforcement regression suite
       env:
         CHROME_INSTALLED: "true"
@@ -143,10 +133,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install chromium
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run SoM event-driven tests
       env:
         CHROME_INSTALLED: "true"
@@ -248,10 +236,8 @@ jobs:
       NFR_CAPACITY_MIN_SUCCESS_RATE_PERCENT: "100"
     steps:
     - uses: actions/checkout@v4
-    - name: Install chromium
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run TTFT short benchmark
       run: cargo test -p core-runtime --test async_pipeline test_async_pipeline_ttft_benchmark_short_gate
     - name: Run NFR Latency Benchmark
@@ -283,10 +269,8 @@ jobs:
       DRAGON_HEAD_EVAL_DASHBOARD_PATH: "${{ github.workspace }}/target/evaluation-dashboard.md"
     steps:
     - uses: actions/checkout@v4
-    - name: Install chromium
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run core-runtime evaluation bench
       run: cargo test -p core-runtime --test comprehensive_evaluation -- --nocapture
     - name: Run mcp-server evaluation bench
