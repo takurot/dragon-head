@@ -28,6 +28,12 @@ pub struct PolicyRule {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Path prefix to match against the URL path.
+    ///
+    /// Matching is segment-aware: `/login` matches `/login` and `/login/step`,
+    /// but not `/logina`. Comparison is performed against the raw (percent-encoded)
+    /// path returned by the URL parser — decoded forms (e.g. `/lo%67in`) will not
+    /// match a rule for `/login`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_prefix: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,7 +103,18 @@ impl CompiledPolicyRule {
         }
 
         if let Some(path_prefix) = self.raw.path_prefix.as_deref() {
-            if !context.path.starts_with(path_prefix.trim()) {
+            let prefix = path_prefix.trim();
+            if !context.path.starts_with(prefix) {
+                return false;
+            }
+            // Segment-aware matching: the prefix must end at a segment boundary.
+            // Accept if the path is exactly the prefix, or if the next character
+            // after the prefix is '/', or if the prefix itself ends with '/'.
+            let is_exact = context.path == prefix;
+            let next_is_separator =
+                context.path.as_bytes().get(prefix.len()).copied() == Some(b'/');
+            let prefix_has_separator = prefix.ends_with('/');
+            if !is_exact && !next_is_separator && !prefix_has_separator {
                 return false;
             }
         }
