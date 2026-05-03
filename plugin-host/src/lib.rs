@@ -2,6 +2,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
 use wasmtime::{Engine, Instance, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 
@@ -175,7 +176,7 @@ impl KeyRegistry {
 
 #[derive(Debug, Clone)]
 pub struct PluginHost {
-    engine: Engine,
+    engine: Arc<Engine>,
     key_registry: KeyRegistry,
 }
 
@@ -187,8 +188,11 @@ impl Default for PluginHost {
 
 impl PluginHost {
     pub fn new(key_registry: KeyRegistry) -> Self {
+        let mut config = wasmtime::Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config).expect("failed to create wasmtime engine");
         Self {
-            engine: Engine::default(),
+            engine: Arc::new(engine),
             key_registry,
         }
     }
@@ -214,6 +218,8 @@ impl PluginHost {
 
         Ok(LoadedPlugin {
             manifest: package.manifest.clone(),
+            wasm_bytes: package.wasm_module.clone(),
+            engine: Arc::clone(&self.engine),
         })
     }
 
@@ -252,11 +258,23 @@ impl PluginHost {
 #[derive(Debug, Clone)]
 pub struct LoadedPlugin {
     manifest: PluginManifest,
+    /// Verified Wasm bytes — tied to the signature that was verified at load time.
+    wasm_bytes: Vec<u8>,
+    /// Shared engine from the PluginHost that verified this plugin.
+    engine: Arc<Engine>,
 }
 
 impl LoadedPlugin {
     pub fn manifest(&self) -> &PluginManifest {
         &self.manifest
+    }
+
+    /// Create a `PluginRuntime` from this verified plugin.
+    ///
+    /// Uses the same Wasm bytes that were verified against the manifest signature,
+    /// preventing signature bypass via a separate `wasm_bytes` argument.
+    pub fn create_runtime(&self) -> Result<PluginRuntime, PluginError> {
+        PluginRuntime::from_verified(self)
     }
 
     pub fn authorize_extension(&self, extension: ExtensionPoint) -> Result<(), PluginError> {
@@ -312,17 +330,16 @@ pub struct PluginRuntime {
 }
 
 impl PluginRuntime {
-    /// Create a `PluginRuntime` from a verified [`LoadedPlugin`] and the raw Wasm bytes.
+    /// Create a `PluginRuntime` from a verified [`LoadedPlugin`].
     ///
-    /// Returns [`PluginError::WasmValidation`] if the bytes cannot be compiled, or
-    /// [`PluginError::ExecutionFailed`] if instantiation fails.
-    pub fn new(plugin: &LoadedPlugin, wasm_bytes: &[u8]) -> Result<Self, PluginError> {
-        let mut config = wasmtime::Config::new();
-        config.consume_fuel(true);
+    /// Prefer [`LoadedPlugin::create_runtime`] over calling this directly.
+    /// Uses the Wasm bytes that were verified against the manifest signature.
+    fn from_verified(plugin: &LoadedPlugin) -> Result<Self, PluginError> {
+        Self::new_inner(plugin, &plugin.wasm_bytes)
+    }
 
-        let engine = Engine::new(&config).map_err(|err| PluginError::WasmValidation {
-            message: err.to_string(),
-        })?;
+    fn new_inner(plugin: &LoadedPlugin, wasm_bytes: &[u8]) -> Result<Self, PluginError> {
+        let engine = Arc::clone(&plugin.engine);
 
         let module =
             Module::new(&engine, wasm_bytes).map_err(|err| PluginError::WasmValidation {
@@ -357,29 +374,43 @@ impl PluginRuntime {
 
     /// Execute the `on_state` extension point with the given JSON state.
     ///
-    /// Fails closed: returns [`PluginError::CapabilityViolation`] if the plugin
-    /// does not declare the [`Capability::ReadState`] capability.
+    /// Fails closed: returns [`PluginError::MissingExport`] if `on_state` is not declared,
+    /// or [`PluginError::CapabilityViolation`] if the plugin lacks [`Capability::ReadState`].
     pub fn on_state(&mut self, state_json: &str) -> Result<String, PluginError> {
-        self.check_capability_for_extension(ExtensionPoint::OnState)?;
+        self.authorize(ExtensionPoint::OnState)?;
         self.call_json_fn("on_state", state_json)
     }
 
     /// Execute the `before_act` extension point with the given intent JSON.
     ///
+    /// Fails closed: returns [`PluginError::MissingExport`] if `before_act` is not declared.
     /// Returns a policy-decision JSON string such as `{"allow":true}`.
     pub fn before_act(&mut self, intent_json: &str) -> Result<String, PluginError> {
+        self.authorize(ExtensionPoint::BeforeAct)?;
         self.call_json_fn("before_act", intent_json)
+    }
+
+    /// Execute the `connector` extension point with the given request JSON.
+    ///
+    /// Fails closed: returns [`PluginError::MissingExport`] if `connector` is not declared,
+    /// or [`PluginError::CapabilityViolation`] if the plugin lacks [`Capability::NetworkOut`].
+    pub fn connector(&mut self, request_json: &str) -> Result<String, PluginError> {
+        self.authorize(ExtensionPoint::Connector)?;
+        self.call_json_fn("connector", request_json)
     }
 
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------
 
-    fn check_capability_for_extension(&self, extension: ExtensionPoint) -> Result<(), PluginError> {
-        if let Some(required) = extension.required_capability()
-            && !self.manifest.capabilities.contains(&required)
-        {
-            return Err(PluginError::CapabilityViolation { required });
+    fn authorize(&self, extension: ExtensionPoint) -> Result<(), PluginError> {
+        if !self.manifest.entry_points.contains(&extension) {
+            return Err(PluginError::MissingExport { extension });
+        }
+        if let Some(required) = extension.required_capability() {
+            if !self.manifest.capabilities.contains(&required) {
+                return Err(PluginError::CapabilityViolation { required });
+            }
         }
         Ok(())
     }
@@ -450,19 +481,32 @@ impl PluginRuntime {
 
             let data = memory.data(&self.store);
 
-            let out_len = {
-                let lo = OUTPUT_LEN_OFFSET as usize;
-                i32::from_le_bytes(data[lo..lo + 4].try_into().unwrap()) as usize
-            };
+            // Validate the memory is large enough to hold the length field.
+            let len_slot_start = OUTPUT_LEN_OFFSET as usize;
+            let len_slot_end = len_slot_start
+                .checked_add(4)
+                .filter(|&e| e <= data.len())
+                .ok_or_else(|| PluginError::InvalidOutput {
+                    message: "wasm memory too small to contain output length field".to_string(),
+                })?;
 
-            let out_start = OUTPUT_OFFSET as usize;
-            let out_end = out_start + out_len;
+            // Read length as u32 to reject negative values.
+            let out_len =
+                u32::from_le_bytes(data[len_slot_start..len_slot_end].try_into().unwrap())
+                    as usize;
 
-            if out_end > data.len() {
+            if out_len > MAX_OUTPUT_SIZE {
                 return Err(PluginError::InvalidOutput {
-                    message: "output length exceeds memory bounds".to_string(),
+                    message: format!(
+                        "output length {out_len} exceeds MAX_OUTPUT_SIZE {MAX_OUTPUT_SIZE}"
+                    ),
                 });
             }
+
+            let out_start = OUTPUT_OFFSET as usize;
+            let out_end = out_start.checked_add(out_len).filter(|&e| e <= data.len()).ok_or_else(|| PluginError::InvalidOutput {
+                message: "output region extends beyond wasm memory bounds".to_string(),
+            })?;
 
             data[out_start..out_end].to_vec()
         };

@@ -1,7 +1,7 @@
 use ed25519_dalek::{Signer, SigningKey};
 use plugin_host::{
     Capability, ExtensionPoint, KeyRegistry, PluginError, PluginHost, PluginManifest,
-    PluginPackage, PluginRuntime, SbomComponent, SbomDocument, SignatureBlock, signature_payload,
+    PluginPackage, SbomComponent, SbomDocument, SignatureBlock, signature_payload,
 };
 
 // ---------------------------------------------------------------------------
@@ -93,6 +93,72 @@ fn before_act_only_wasm() -> Vec<u8> {
         )"#,
     )
     .expect("failed to build before_act_only wasm fixture")
+}
+
+/// Wasm that exports `on_state`, `before_act`, and `connector`.
+/// `connector` echoes the input JSON back to the caller (same as `on_state`).
+fn connector_wasm() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+            (memory (export "memory") 1)
+
+            ;; on_state: echo input
+            (func (export "on_state")
+                  (param $in_ptr i32) (param $in_len i32)
+                  (param $out_ptr i32) (param $out_len_ptr i32)
+                (local $i i32)
+                (local.set $i (i32.const 0))
+                (block $break
+                    (loop $loop
+                        (br_if $break (i32.ge_u (local.get $i) (local.get $in_len)))
+                        (i32.store8
+                            (i32.add (local.get $out_ptr) (local.get $i))
+                            (i32.load8_u (i32.add (local.get $in_ptr) (local.get $i))))
+                        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                        (br $loop)))
+                (i32.store (local.get $out_len_ptr) (local.get $in_len))
+            )
+
+            ;; before_act: always returns {"allow":true}
+            (func (export "before_act")
+                  (param $in_ptr i32) (param $in_len i32)
+                  (param $out_ptr i32) (param $out_len_ptr i32)
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 0))  (i32.const 123))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 1))  (i32.const 34))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 2))  (i32.const 97))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 3))  (i32.const 108))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 4))  (i32.const 108))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 5))  (i32.const 111))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 6))  (i32.const 119))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 7))  (i32.const 34))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 8))  (i32.const 58))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 9))  (i32.const 116))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 10)) (i32.const 114))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 11)) (i32.const 117))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 12)) (i32.const 101))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 13)) (i32.const 125))
+                (i32.store (local.get $out_len_ptr) (i32.const 14))
+            )
+
+            ;; connector: echo input (same loop as on_state)
+            (func (export "connector")
+                  (param $in_ptr i32) (param $in_len i32)
+                  (param $out_ptr i32) (param $out_len_ptr i32)
+                (local $i i32)
+                (local.set $i (i32.const 0))
+                (block $break
+                    (loop $loop
+                        (br_if $break (i32.ge_u (local.get $i) (local.get $in_len)))
+                        (i32.store8
+                            (i32.add (local.get $out_ptr) (local.get $i))
+                            (i32.load8_u (i32.add (local.get $in_ptr) (local.get $i))))
+                        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                        (br $loop)))
+                (i32.store (local.get $out_len_ptr) (local.get $in_len))
+            )
+        )"#,
+    )
+    .expect("failed to build connector wasm fixture")
 }
 
 /// Wasm whose `before_act` writes non-UTF8 / non-JSON garbage.
@@ -190,7 +256,7 @@ fn test_on_state_echoes_input() {
     let host = PluginHost::new(registry);
     let loaded = host.load_plugin(&package).expect("plugin must load");
 
-    let mut runtime = PluginRuntime::new(&loaded, &wasm).expect("runtime must be created");
+    let mut runtime = loaded.create_runtime().expect("runtime must be created");
 
     let input = r#"{"dragon":"head"}"#;
     let output = runtime.on_state(input).expect("on_state must succeed");
@@ -217,7 +283,7 @@ fn test_before_act_returns_allow_true() {
     let host = PluginHost::new(registry);
     let loaded = host.load_plugin(&package).expect("plugin must load");
 
-    let mut runtime = PluginRuntime::new(&loaded, &wasm).expect("runtime must be created");
+    let mut runtime = loaded.create_runtime().expect("runtime must be created");
 
     let output = runtime
         .before_act(r#"{"action":"speak"}"#)
@@ -246,7 +312,7 @@ fn test_on_state_blocked_without_read_state_capability() {
     // load_plugin checks the export exists, not capabilities at load time
     let loaded = host.load_plugin(&package).expect("plugin must load");
 
-    let mut runtime = PluginRuntime::new(&loaded, &wasm).expect("runtime must be created");
+    let mut runtime = loaded.create_runtime().expect("runtime must be created");
 
     let err = runtime
         .on_state(r#"{"x":1}"#)
@@ -307,7 +373,7 @@ fn test_before_act_malformed_output_returns_invalid_output() {
     let host = PluginHost::new(registry);
     let loaded = host.load_plugin(&package).expect("plugin must load");
 
-    let mut runtime = PluginRuntime::new(&loaded, &wasm).expect("runtime must be created");
+    let mut runtime = loaded.create_runtime().expect("runtime must be created");
 
     let err = runtime
         .before_act(r#"{"action":"speak"}"#)
@@ -347,5 +413,66 @@ fn test_missing_on_state_export_fails_at_load() {
             }
         ),
         "expected MissingExport(OnState), got {err:?}"
+    );
+}
+
+/// 7. connector extension point echoes request JSON when NetworkOut capability is granted
+#[test]
+fn test_connector_echoes_request() {
+    let (registry, signing_key, key_id) = make_registry_and_key();
+    let wasm = connector_wasm();
+    let package = build_and_sign_package(
+        vec![
+            ExtensionPoint::OnState,
+            ExtensionPoint::BeforeAct,
+            ExtensionPoint::Connector,
+        ],
+        vec![Capability::ReadState, Capability::NetworkOut],
+        wasm,
+        &signing_key,
+        &key_id,
+    );
+
+    let host = PluginHost::new(registry);
+    let loaded = host.load_plugin(&package).expect("plugin must load");
+    let mut runtime = loaded.create_runtime().expect("runtime must be created");
+
+    let request = r#"{"url":"https://example.com"}"#;
+    let output = runtime.connector(request).expect("connector must succeed");
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("output must be valid JSON");
+    assert_eq!(parsed["url"], "https://example.com");
+}
+
+/// 8. connector is blocked when NetworkOut capability is missing
+#[test]
+fn test_connector_blocked_without_network_out() {
+    let (registry, signing_key, key_id) = make_registry_and_key();
+    let wasm = connector_wasm();
+    let package = build_and_sign_package(
+        vec![ExtensionPoint::Connector],
+        vec![], // NetworkOut intentionally omitted
+        wasm,
+        &signing_key,
+        &key_id,
+    );
+
+    let host = PluginHost::new(registry);
+    let loaded = host.load_plugin(&package).expect("plugin must load");
+    let mut runtime = loaded.create_runtime().expect("runtime must be created");
+
+    let err = runtime
+        .connector(r#"{"url":"https://example.com"}"#)
+        .expect_err("connector without NetworkOut must be rejected");
+
+    assert!(
+        matches!(
+            err,
+            PluginError::CapabilityViolation {
+                required: Capability::NetworkOut
+            }
+        ),
+        "expected CapabilityViolation(NetworkOut), got {err:?}"
     );
 }
