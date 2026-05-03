@@ -3,6 +3,7 @@ use core_runtime::{
     sre::{LoadProfile, SemanticNode},
     ActionError, ApprovalScope, PageSession, VerifyError,
 };
+use json_patch::diff;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -245,6 +246,8 @@ pub struct McpServer<B> {
     backend: B,
     plan_tier: PlanTier,
     usage_meters: UsageMeters,
+    /// Cached previous state JSON for computing RFC 6902 deltas.
+    previous_state: Option<Value>,
 }
 
 impl<B: McpBackend> McpServer<B> {
@@ -257,6 +260,7 @@ impl<B: McpBackend> McpServer<B> {
             backend,
             plan_tier,
             usage_meters: UsageMeters::default(),
+            previous_state: None,
         }
     }
 
@@ -310,7 +314,14 @@ impl<B: McpBackend> McpServer<B> {
         }
 
         let result = match name {
-            "get_state" => self.backend.get_state(arguments.clone()),
+            "get_state" => {
+                let args = parse_get_state_arguments(&arguments);
+                if args.delivery == StateDelivery::Delta {
+                    self.get_state_delta(args.force_refresh)
+                } else {
+                    self.backend.get_state(arguments.clone())
+                }
+            }
             "act" => self.backend.act(arguments.clone()),
             "verify" => self.backend.verify(arguments.clone()),
             "get_visual" => self.backend.get_visual(arguments.clone()),
@@ -324,6 +335,54 @@ impl<B: McpBackend> McpServer<B> {
         }
 
         result
+    }
+
+    /// Compute and return an RFC 6902 JSON Patch delta relative to the last known state.
+    ///
+    /// Response shapes:
+    /// - `{ "type": "full", "hash": "...", "state": {...} }` — no previous state exists.
+    /// - `{ "type": "no_change", "hash": "..." }` — state is identical to previous.
+    /// - `{ "type": "delta", "base_hash": "...", "next_hash": "...", "patch": [...] }` — changes.
+    fn get_state_delta(&mut self, force_refresh: bool) -> Result<Value> {
+        // Fetch current full state from backend using a full-delivery arguments value.
+        let backend_args = json!({ "force_refresh": force_refresh });
+        let current_state = self.backend.get_state(backend_args)?;
+        let next_hash = sha256_of_json(&current_state);
+
+        let response = match self.previous_state.take() {
+            None => {
+                // No previous state — return full state with a hint.
+                self.previous_state = Some(current_state.clone());
+                json!({
+                    "type": "full",
+                    "hash": next_hash,
+                    "state": current_state
+                })
+            }
+            Some(prev) => {
+                let base_hash = sha256_of_json(&prev);
+                if base_hash == next_hash {
+                    // Identical state.
+                    self.previous_state = Some(current_state);
+                    json!({
+                        "type": "no_change",
+                        "hash": next_hash
+                    })
+                } else {
+                    // Compute RFC 6902 patch.
+                    let patch = diff(&prev, &current_state);
+                    self.previous_state = Some(current_state);
+                    json!({
+                        "type": "delta",
+                        "base_hash": base_hash,
+                        "next_hash": next_hash,
+                        "patch": patch
+                    })
+                }
+            }
+        };
+
+        Ok(response)
     }
 
     pub fn handle_jsonrpc(&mut self, request: &str) -> Option<String> {
@@ -1168,6 +1227,14 @@ fn render_state_markdown(payload: &ExternalSemanticState) -> String {
     }
 
     lines.join("\n")
+}
+
+/// Compute the SHA-256 hex digest of the canonical (sorted-key) JSON representation of `value`.
+fn sha256_of_json(value: &Value) -> String {
+    let canonical = serde_json::to_string(value).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 fn load_profile_name(profile: LoadProfile) -> &'static str {

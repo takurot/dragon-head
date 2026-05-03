@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 core-runtime = { path = "../core-runtime" }
+json-patch = "4.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 skills-engine = { path = "../skills-engine" }
