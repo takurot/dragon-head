@@ -53,6 +53,20 @@ pub enum AuditEvent {
         marks_count: usize,
         timestamp: u64,
     },
+    #[serde(rename = "PLUGIN_STATE_TRANSFORM")]
+    PluginStateTransform {
+        plugin_id: String,
+        success: bool,
+        error_message: Option<String>,
+        timestamp: u64,
+    },
+    #[serde(rename = "PLUGIN_POLICY_DECISION")]
+    PluginPolicyDecision {
+        plugin_id: String,
+        allowed: bool,
+        reason: Option<String>,
+        timestamp: u64,
+    },
 }
 
 #[derive(Clone)]
@@ -218,6 +232,9 @@ fn sanitize_audit_event(event: AuditEvent) -> AuditEvent {
             timestamp,
             patch: redact_json_value(&patch, None, false),
         },
+        // Plugin audit events do not contain PII by design.
+        other @ AuditEvent::PluginStateTransform { .. }
+        | other @ AuditEvent::PluginPolicyDecision { .. } => other,
         other => other,
     }
 }
