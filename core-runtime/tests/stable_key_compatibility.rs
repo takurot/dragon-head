@@ -1,8 +1,10 @@
 use core_runtime::sre::StableKeyGenerator;
 use core_runtime::sre::{
-    normalize_dom, normalize_dom_with_viewport, LoadProfile, ViewportDimensions,
+    normalize_dom, normalize_dom_with_viewport, normalize_dom_with_viewport_and_refinement,
+    LoadProfile, SubtreeRefinementConfig, ViewportDimensions,
 };
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Helper builders (mirror normalization.rs test helpers)
@@ -293,5 +295,105 @@ fn test_top_left_quadrant_for_small_coordinate() {
     assert_eq!(
         key_explicit, key_default,
         "top-left coordinate with explicit 800×600 must match default behavior"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #65: viewport change must invalidate refinement-cached subtrees
+// ---------------------------------------------------------------------------
+
+/// Helper: build a cached path index for the positioned document returned by
+/// `build_positioned_document`.  The tree is:
+///   #document > html > body > div (with style) > #text
+/// Unique paths are all of them (no duplicate roles at any level).
+fn build_positioned_path_index(
+    root: &core_runtime::sre::SemanticNode,
+) -> HashMap<String, Vec<usize>> {
+    // Manually encode the index for the four-node chain.
+    // root/#document          -> []
+    // root/#document/html     -> [0]
+    // root/#document/html/body-> [0,0]
+    // root/#document/html/body/div -> [0,0,0]
+    // (text nodes are not indexed in the semantic path index)
+    let _ = root; // suppress unused warning; index is structure-driven
+    HashMap::from([
+        ("root/#document".to_string(), vec![]),
+        ("root/#document/html".to_string(), vec![0]),
+        ("root/#document/html/body".to_string(), vec![0, 0]),
+        ("root/#document/html/body/div".to_string(), vec![0, 0, 0]),
+    ])
+}
+
+/// Regression test for PR #65: when viewport changes between captures, the
+/// refinement path must recompute stable keys for ALL nodes — not just dirty
+/// ones — because quadrant calculation depends on viewport dimensions.
+///
+/// Scenario:
+///   1. First capture at default 800×600 viewport.
+///   2. Viewport changes to 375×812 (mobile emulation).
+///   3. A second capture uses the refinement path with an EMPTY dirty-path set
+///      (i.e., no DOM mutations were observed).
+///   4. The stable key for the positioned div must equal a fresh full capture
+///      at 375×812 — NOT the cached key from the 800×600 pass.
+#[test]
+fn test_refinement_cache_invalidated_on_viewport_change() {
+    // Element at (450, 100): top-right in 800×600 but also top-right in 375×812
+    // with different x-ratio (450 > 187.5 → right).  Use an element that
+    // straddles the midpoint differently so the stable key actually differs.
+    //
+    // Use (450, 350): bottom-right in 800×600 (x>400, y>300) but top-right in
+    // 1920×1080 (x<960, y<540).  The stable key must reflect the new viewport.
+    let dom = build_positioned_document(450, 350);
+
+    // --- step 1: initial capture at default 800×600 ---
+    let initial_800 =
+        normalize_dom_with_viewport(LoadProfile::Minimal, &dom, ViewportDimensions::default())
+            .unwrap();
+    let cached_path_index = build_positioned_path_index(&initial_800);
+
+    // --- step 2: second capture via refinement path, non-default viewport ---
+    let new_viewport = ViewportDimensions {
+        width: 1920.0,
+        height: 1080.0,
+    };
+    // No dirty paths: if caching were used, ALL nodes would be served from cache.
+    let empty_dirty: HashSet<String> = HashSet::new();
+
+    let refined = normalize_dom_with_viewport_and_refinement(
+        LoadProfile::Minimal,
+        &dom,
+        new_viewport,
+        SubtreeRefinementConfig {
+            dirty_paths: &empty_dirty,
+            cached_paths: &cached_path_index,
+            cached_root: &initial_800,
+        },
+    )
+    .unwrap();
+
+    // --- step 3: expected result — full fresh capture at new viewport ---
+    let expected = normalize_dom_with_viewport(LoadProfile::Minimal, &dom, new_viewport).unwrap();
+
+    // The div is at children[0].children[0].children[0]
+    let refined_key = refined.children[0].children[0].children[0]
+        .stable_key
+        .clone()
+        .unwrap();
+    let expected_key = expected.children[0].children[0].children[0]
+        .stable_key
+        .clone()
+        .unwrap();
+    let cached_key = initial_800.children[0].children[0].children[0]
+        .stable_key
+        .clone()
+        .unwrap();
+
+    assert_eq!(
+        refined_key, expected_key,
+        "refinement path with non-default viewport must produce the same key as a fresh full capture"
+    );
+    assert_ne!(
+        refined_key, cached_key,
+        "refinement path must NOT reuse the cached key from the old viewport"
     );
 }

@@ -68,12 +68,24 @@ pub fn normalize_dom_with_refinement(
 }
 
 /// Normalize DOM with both explicit viewport dimensions and subtree refinement.
+///
+/// When `viewport` differs from the default (800×600), cached subtrees are **not**
+/// reused even for nodes that are not marked dirty.  Cached stable keys were
+/// computed against the old viewport, so reusing them after a resize (or mobile
+/// emulation) would produce stale quadrant values.  Bypassing the cache in that
+/// case is a safe conservative fix: a full re-parse is triggered whenever the
+/// viewport is non-default.
 pub fn normalize_dom_with_viewport_and_refinement(
     profile: LoadProfile,
     node: &Node,
     viewport: ViewportDimensions,
     refinement: SubtreeRefinementConfig<'_>,
 ) -> Result<SemanticNode> {
+    if viewport != ViewportDimensions::default() {
+        // Viewport-sensitive path: skip the refinement cache entirely so that
+        // all stable keys are recomputed with the current viewport dimensions.
+        return normalize_dom_internal(profile, node, viewport, None);
+    }
     normalize_dom_internal(profile, node, viewport, Some(&refinement))
 }
 
