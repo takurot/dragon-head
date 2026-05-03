@@ -407,10 +407,10 @@ impl PluginRuntime {
         if !self.manifest.entry_points.contains(&extension) {
             return Err(PluginError::MissingExport { extension });
         }
-        if let Some(required) = extension.required_capability() {
-            if !self.manifest.capabilities.contains(&required) {
-                return Err(PluginError::CapabilityViolation { required });
-            }
+        if let Some(required) = extension.required_capability()
+            && !self.manifest.capabilities.contains(&required)
+        {
+            return Err(PluginError::CapabilityViolation { required });
         }
         Ok(())
     }
