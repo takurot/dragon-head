@@ -492,8 +492,7 @@ impl PluginRuntime {
 
             // Read length as u32 to reject negative values.
             let out_len =
-                u32::from_le_bytes(data[len_slot_start..len_slot_end].try_into().unwrap())
-                    as usize;
+                u32::from_le_bytes(data[len_slot_start..len_slot_end].try_into().unwrap()) as usize;
 
             if out_len > MAX_OUTPUT_SIZE {
                 return Err(PluginError::InvalidOutput {
@@ -504,9 +503,12 @@ impl PluginRuntime {
             }
 
             let out_start = OUTPUT_OFFSET as usize;
-            let out_end = out_start.checked_add(out_len).filter(|&e| e <= data.len()).ok_or_else(|| PluginError::InvalidOutput {
-                message: "output region extends beyond wasm memory bounds".to_string(),
-            })?;
+            let out_end = out_start
+                .checked_add(out_len)
+                .filter(|&e| e <= data.len())
+                .ok_or_else(|| PluginError::InvalidOutput {
+                    message: "output region extends beyond wasm memory bounds".to_string(),
+                })?;
 
             data[out_start..out_end].to_vec()
         };
