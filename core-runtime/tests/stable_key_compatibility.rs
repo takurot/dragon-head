@@ -1,4 +1,83 @@
 use core_runtime::sre::StableKeyGenerator;
+use core_runtime::sre::{
+    normalize_dom, normalize_dom_with_viewport, LoadProfile, ViewportDimensions,
+};
+use serde_json::json;
+
+// ---------------------------------------------------------------------------
+// Helper builders (mirror normalization.rs test helpers)
+// ---------------------------------------------------------------------------
+
+fn make_document_node(
+    node_id: u32,
+    children: Vec<headless_chrome::protocol::cdp::DOM::Node>,
+) -> headless_chrome::protocol::cdp::DOM::Node {
+    serde_json::from_value(json!({
+        "nodeId": node_id,
+        "backendNodeId": node_id,
+        "nodeType": 9,
+        "nodeName": "#document",
+        "localName": "",
+        "nodeValue": "",
+        "childNodeCount": children.len(),
+        "children": children
+    }))
+    .unwrap()
+}
+
+fn make_element_node(
+    node_id: u32,
+    tag: &str,
+    attributes: Vec<(&str, &str)>,
+    children: Vec<headless_chrome::protocol::cdp::DOM::Node>,
+) -> headless_chrome::protocol::cdp::DOM::Node {
+    let mut flat_attrs: Vec<String> = Vec::with_capacity(attributes.len() * 2);
+    for (key, value) in attributes {
+        flat_attrs.push(key.to_string());
+        flat_attrs.push(value.to_string());
+    }
+    serde_json::from_value(json!({
+        "nodeId": node_id,
+        "backendNodeId": node_id,
+        "nodeType": 1,
+        "nodeName": tag.to_uppercase(),
+        "localName": tag,
+        "nodeValue": "",
+        "attributes": flat_attrs,
+        "childNodeCount": children.len(),
+        "children": children
+    }))
+    .unwrap()
+}
+
+fn make_text_node(node_id: u32, text: &str) -> headless_chrome::protocol::cdp::DOM::Node {
+    serde_json::from_value(json!({
+        "nodeId": node_id,
+        "backendNodeId": node_id,
+        "nodeType": 3,
+        "nodeName": "#text",
+        "localName": "",
+        "nodeValue": text
+    }))
+    .unwrap()
+}
+
+/// Build a minimal document with one div at a given pixel position via inline style.
+fn build_positioned_document(
+    left_px: u32,
+    top_px: u32,
+) -> headless_chrome::protocol::cdp::DOM::Node {
+    let style = format!("position:absolute;left:{}px;top:{}px", left_px, top_px);
+    let div = make_element_node(
+        104,
+        "div",
+        vec![("style", &style)],
+        vec![make_text_node(105, "Hello")],
+    );
+    let body = make_element_node(103, "body", vec![], vec![div]);
+    let html = make_element_node(102, "html", vec![], vec![body]);
+    make_document_node(101, vec![html])
+}
 
 #[test]
 fn test_stable_key_hash_compatibility_vectors() {
@@ -73,4 +152,146 @@ fn test_stable_key_hash_compatibility_non_ascii_label_vector() {
         "c64f7d577b24a91e8879f60c3a2e4b88e1b3c1fbbdac8dbc09ee6757af252286"
     );
     assert!(!ambiguous);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #49: viewport-aware quadrant tests
+// ---------------------------------------------------------------------------
+
+/// Normalization without explicit viewport must produce identical output to the
+/// pre-existing default (800×600) behavior.
+#[test]
+fn test_normalize_dom_default_viewport_unchanged() {
+    let dom = build_positioned_document(100, 100); // top-left quadrant in 800×600
+    let default_result = normalize_dom(LoadProfile::Minimal, &dom).unwrap();
+    let explicit_default = normalize_dom_with_viewport(
+        LoadProfile::Minimal,
+        &dom,
+        ViewportDimensions {
+            width: 800.0,
+            height: 600.0,
+        },
+    )
+    .unwrap();
+
+    // The stable_key must be identical because the viewport matches the default constants.
+    let body = &default_result.children[0].children[0];
+    let body_explicit = &explicit_default.children[0].children[0];
+    assert_eq!(
+        body.children[0].stable_key, body_explicit.children[0].stable_key,
+        "explicit 800×600 viewport must produce the same stable_key as the default"
+    );
+}
+
+/// An element at (450, 350) lands in bottom-right for 800×600 (x=450>400, y=350>300),
+/// but top-right in 1920×1080 (x=450<960, y=350<540).
+#[test]
+fn test_explicit_viewport_used_for_quadrant_calculation() {
+    let dom = build_positioned_document(450, 350);
+
+    let result_desktop = normalize_dom_with_viewport(
+        LoadProfile::Minimal,
+        &dom,
+        ViewportDimensions {
+            width: 800.0,
+            height: 600.0,
+        },
+    )
+    .unwrap();
+
+    let result_wide = normalize_dom_with_viewport(
+        LoadProfile::Minimal,
+        &dom,
+        ViewportDimensions {
+            width: 1920.0,
+            height: 1080.0,
+        },
+    )
+    .unwrap();
+
+    let key_desktop = result_desktop.children[0].children[0].children[0]
+        .stable_key
+        .clone()
+        .unwrap();
+    let key_wide = result_wide.children[0].children[0].children[0]
+        .stable_key
+        .clone()
+        .unwrap();
+
+    assert_ne!(
+        key_desktop, key_wide,
+        "different viewports should yield different quadrant → different stable_key"
+    );
+}
+
+/// Desktop (1920×1080) vs mobile (375×812): element at (450, 100).
+/// Desktop: x=450 < 960 → left, y=100 < 540 → top ⇒ top_left
+/// Mobile:  x=450 > 187.5 → right, y=100 < 406 → top ⇒ top_right
+#[test]
+fn test_desktop_vs_mobile_viewport_different_quadrant() {
+    let dom = build_positioned_document(450, 100);
+
+    let result_desktop = normalize_dom_with_viewport(
+        LoadProfile::Minimal,
+        &dom,
+        ViewportDimensions {
+            width: 1920.0,
+            height: 1080.0,
+        },
+    )
+    .unwrap();
+
+    let result_mobile = normalize_dom_with_viewport(
+        LoadProfile::Minimal,
+        &dom,
+        ViewportDimensions {
+            width: 375.0,
+            height: 812.0,
+        },
+    )
+    .unwrap();
+
+    let key_desktop = result_desktop.children[0].children[0].children[0]
+        .stable_key
+        .clone()
+        .unwrap();
+    let key_mobile = result_mobile.children[0].children[0].children[0]
+        .stable_key
+        .clone()
+        .unwrap();
+
+    assert_ne!(
+        key_desktop, key_mobile,
+        "desktop 1920×1080 and mobile 375×812 should yield different stable_keys for a straddling coordinate"
+    );
+}
+
+/// An element at (100, 100) is in the top-left quadrant of 800×600.
+/// The stable_key from explicit 800×600 viewport must match the default.
+#[test]
+fn test_top_left_quadrant_for_small_coordinate() {
+    let dom = build_positioned_document(100, 100);
+    let result = normalize_dom_with_viewport(
+        LoadProfile::Minimal,
+        &dom,
+        ViewportDimensions {
+            width: 800.0,
+            height: 600.0,
+        },
+    )
+    .unwrap();
+
+    let default_result = normalize_dom(LoadProfile::Minimal, &dom).unwrap();
+    let key_explicit = result.children[0].children[0].children[0]
+        .stable_key
+        .clone()
+        .unwrap();
+    let key_default = default_result.children[0].children[0].children[0]
+        .stable_key
+        .clone()
+        .unwrap();
+    assert_eq!(
+        key_explicit, key_default,
+        "top-left coordinate with explicit 800×600 must match default behavior"
+    );
 }

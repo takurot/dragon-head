@@ -18,8 +18,8 @@ use crate::{
     policy::{ApprovalScope, PolicyAction, PolicyContext, PolicyEngine, PolicyRule},
     session_vault::{CookieData, LocalSessionVault, SessionData, SessionVault, SoftwareKms},
     sre::{
-        normalize_dom, normalize_dom_with_refinement, LoadProfile, SemanticNode, SemanticState,
-        SubtreeRefinementConfig,
+        normalize_dom_with_viewport, normalize_dom_with_viewport_and_refinement, LoadProfile,
+        SemanticNode, SemanticState, SubtreeRefinementConfig, ViewportDimensions,
     },
 };
 
@@ -1348,6 +1348,38 @@ impl PageSession {
         }
     }
 
+    /// Retrieve the actual browser viewport dimensions via JavaScript.
+    ///
+    /// Falls back to the default 800×600 constants if the CDP call fails, so that
+    /// captures remain functional even when the browser context is unavailable.
+    fn get_viewport_dimensions(&self) -> ViewportDimensions {
+        let script = "JSON.stringify({width: window.innerWidth, height: window.innerHeight})";
+        let Ok(value) = self.evaluate_script_value(script, false) else {
+            return ViewportDimensions::default();
+        };
+        let Some(json_str) = value.as_str() else {
+            return ViewportDimensions::default();
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) else {
+            return ViewportDimensions::default();
+        };
+        let width = parsed
+            .get("width")
+            .and_then(|v| v.as_f64())
+            .filter(|&w| w > 0.0);
+        let height = parsed
+            .get("height")
+            .and_then(|v| v.as_f64())
+            .filter(|&h| h > 0.0);
+        match (width, height) {
+            (Some(w), Some(h)) => ViewportDimensions {
+                width: w,
+                height: h,
+            },
+            _ => ViewportDimensions::default(),
+        }
+    }
+
     fn capture_state_with_refinement(
         &self,
         profile: LoadProfile,
@@ -1356,13 +1388,15 @@ impl PageSession {
         cached_paths: Option<&HashMap<String, Vec<usize>>>,
     ) -> Result<SemanticState> {
         let root = self.get_document_node()?;
+        let viewport = self.get_viewport_dimensions();
         let normalized_dirty_paths = normalize_dirty_paths(dirty_paths);
         let sem_root = if let (Some(cached_root), Some(cached_paths)) = (cached_root, cached_paths)
         {
             if !normalized_dirty_paths.is_empty() && !cached_paths.is_empty() {
-                normalize_dom_with_refinement(
+                normalize_dom_with_viewport_and_refinement(
                     profile,
                     &root,
+                    viewport,
                     SubtreeRefinementConfig {
                         dirty_paths: &normalized_dirty_paths,
                         cached_paths,
@@ -1370,10 +1404,10 @@ impl PageSession {
                     },
                 )?
             } else {
-                normalize_dom(profile, &root)?
+                normalize_dom_with_viewport(profile, &root, viewport)?
             }
         } else {
-            normalize_dom(profile, &root)?
+            normalize_dom_with_viewport(profile, &root, viewport)?
         };
         self.replace_stable_key_index(&sem_root);
         Ok(SemanticState::new(sem_root, profile))
@@ -1440,7 +1474,8 @@ impl PageSession {
 
     fn capture_som(&self, trigger: SomTrigger) -> Result<VisualCapture> {
         let root = self.get_document_node()?;
-        let semantic_root = normalize_dom(LoadProfile::Visual, &root)?;
+        let viewport = self.get_viewport_dimensions();
+        let semantic_root = normalize_dom_with_viewport(LoadProfile::Visual, &root, viewport)?;
 
         let mut marks = Vec::new();
         self.collect_som_marks(&semantic_root, &mut marks);

@@ -13,8 +13,39 @@ use std::{
 const DEFAULT_VIEWPORT_WIDTH_PX: f64 = 800.0;
 const DEFAULT_VIEWPORT_HEIGHT_PX: f64 = 600.0;
 
+/// Explicit viewport dimensions used for quadrant calculation.
+/// When provided to `normalize_dom_with_viewport`, the actual browser dimensions
+/// are used instead of the default 800×600 fallback constants.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewportDimensions {
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Default for ViewportDimensions {
+    fn default() -> Self {
+        Self {
+            width: DEFAULT_VIEWPORT_WIDTH_PX,
+            height: DEFAULT_VIEWPORT_HEIGHT_PX,
+        }
+    }
+}
+
 pub fn normalize_dom(profile: LoadProfile, node: &Node) -> Result<SemanticNode> {
-    normalize_dom_internal(profile, node, None)
+    normalize_dom_internal(profile, node, ViewportDimensions::default(), None)
+}
+
+/// Normalize DOM using explicit viewport dimensions for accurate quadrant calculation.
+///
+/// When the real browser viewport is known (e.g. retrieved via CDP), pass it here so
+/// that `stable_key` quadrant values reflect actual on-screen positions rather than
+/// the 800×600 default fallback.
+pub fn normalize_dom_with_viewport(
+    profile: LoadProfile,
+    node: &Node,
+    viewport: ViewportDimensions,
+) -> Result<SemanticNode> {
+    normalize_dom_internal(profile, node, viewport, None)
 }
 
 pub struct SubtreeRefinementConfig<'a> {
@@ -28,17 +59,40 @@ pub fn normalize_dom_with_refinement(
     node: &Node,
     refinement: SubtreeRefinementConfig<'_>,
 ) -> Result<SemanticNode> {
-    normalize_dom_internal(profile, node, Some(&refinement))
+    normalize_dom_internal(
+        profile,
+        node,
+        ViewportDimensions::default(),
+        Some(&refinement),
+    )
+}
+
+/// Normalize DOM with both explicit viewport dimensions and subtree refinement.
+pub fn normalize_dom_with_viewport_and_refinement(
+    profile: LoadProfile,
+    node: &Node,
+    viewport: ViewportDimensions,
+    refinement: SubtreeRefinementConfig<'_>,
+) -> Result<SemanticNode> {
+    normalize_dom_internal(profile, node, viewport, Some(&refinement))
 }
 
 fn normalize_dom_internal(
     profile: LoadProfile,
     node: &Node,
+    viewport: ViewportDimensions,
     refinement: Option<&SubtreeRefinementConfig<'_>>,
 ) -> Result<SemanticNode> {
     let mut key_generator = StableKeyGenerator::new();
     // Start traversal with root path
-    let internal_node = traverse_node(profile, node, &mut key_generator, "root", refinement)?;
+    let internal_node = traverse_node(
+        profile,
+        node,
+        &mut key_generator,
+        "root",
+        viewport,
+        refinement,
+    )?;
     Ok(internal_node.unwrap_or_default())
 }
 
@@ -83,6 +137,7 @@ fn traverse_node(
     node: &Node,
     key_gen: &mut StableKeyGenerator,
     parent_path: &str,
+    viewport: ViewportDimensions,
     refinement: Option<&SubtreeRefinementConfig<'_>>,
 ) -> Result<Option<SemanticNode>> {
     // Basic filtering based on node type
@@ -187,7 +242,7 @@ fn traverse_node(
         // For now, let's use the loop index.
         for child in child_nodes {
             if let Some(normalized_child) =
-                traverse_node(profile, child, key_gen, &current_path, refinement)?
+                traverse_node(profile, child, key_gen, &current_path, viewport, refinement)?
             {
                 children.push(normalized_child);
             }
@@ -207,7 +262,7 @@ fn traverse_node(
         .or_else(|| attributes.get("id").map(|s| s.as_str()))
         .or(text_hint.as_deref());
 
-    let quadrant = resolve_quadrant(&attributes, &node_name, label_hint, parent_path);
+    let quadrant = resolve_quadrant(&attributes, &node_name, label_hint, parent_path, viewport);
     let alias = build_alias(&node_name, label_hint, &attributes);
 
     let (stable_key, ambiguous) =
@@ -308,6 +363,7 @@ fn resolve_quadrant(
     role: &str,
     label_hint: Option<&str>,
     dom_signature: &str,
+    viewport: ViewportDimensions,
 ) -> String {
     if let Some(raw) = attributes.get("data-quadrant") {
         if let Some(normalized) = normalize_quadrant_token(raw) {
@@ -315,7 +371,7 @@ fn resolve_quadrant(
         }
     }
 
-    if let Some(quadrant) = resolve_quadrant_from_coordinates(attributes) {
+    if let Some(quadrant) = resolve_quadrant_from_coordinates(attributes, viewport) {
         return quadrant;
     }
 
@@ -333,44 +389,47 @@ fn normalize_quadrant_token(raw: &str) -> Option<String> {
     }
 }
 
-fn resolve_quadrant_from_coordinates(attributes: &BTreeMap<String, String>) -> Option<String> {
-    let x_ratio = extract_x_ratio(attributes)?;
-    let y_ratio = extract_y_ratio(attributes)?;
+fn resolve_quadrant_from_coordinates(
+    attributes: &BTreeMap<String, String>,
+    viewport: ViewportDimensions,
+) -> Option<String> {
+    let x_ratio = extract_x_ratio(attributes, viewport.width)?;
+    let y_ratio = extract_y_ratio(attributes, viewport.height)?;
     Some(quadrant_from_ratios(x_ratio, y_ratio))
 }
 
-fn extract_x_ratio(attributes: &BTreeMap<String, String>) -> Option<f64> {
+fn extract_x_ratio(attributes: &BTreeMap<String, String>, viewport_width: f64) -> Option<f64> {
     if let Some(style) = attributes.get("style") {
         if let Some(left) =
-            extract_css_numeric(style, "left").and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_WIDTH_PX))
+            extract_css_numeric(style, "left").and_then(|v| v.to_ratio(viewport_width))
         {
             return Some(left);
         }
         if let Some(right) =
-            extract_css_numeric(style, "right").and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_WIDTH_PX))
+            extract_css_numeric(style, "right").and_then(|v| v.to_ratio(viewport_width))
         {
             return Some((1.0 - right).clamp(0.0, 1.0));
         }
     }
 
-    extract_coordinate_attribute(attributes, &["data-x", "x"], DEFAULT_VIEWPORT_WIDTH_PX)
+    extract_coordinate_attribute(attributes, &["data-x", "x"], viewport_width)
 }
 
-fn extract_y_ratio(attributes: &BTreeMap<String, String>) -> Option<f64> {
+fn extract_y_ratio(attributes: &BTreeMap<String, String>, viewport_height: f64) -> Option<f64> {
     if let Some(style) = attributes.get("style") {
         if let Some(top) =
-            extract_css_numeric(style, "top").and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_HEIGHT_PX))
+            extract_css_numeric(style, "top").and_then(|v| v.to_ratio(viewport_height))
         {
             return Some(top);
         }
-        if let Some(bottom) = extract_css_numeric(style, "bottom")
-            .and_then(|v| v.to_ratio(DEFAULT_VIEWPORT_HEIGHT_PX))
+        if let Some(bottom) =
+            extract_css_numeric(style, "bottom").and_then(|v| v.to_ratio(viewport_height))
         {
             return Some((1.0 - bottom).clamp(0.0, 1.0));
         }
     }
 
-    extract_coordinate_attribute(attributes, &["data-y", "y"], DEFAULT_VIEWPORT_HEIGHT_PX)
+    extract_coordinate_attribute(attributes, &["data-y", "y"], viewport_height)
 }
 
 fn extract_coordinate_attribute(
