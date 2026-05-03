@@ -319,7 +319,11 @@ impl<B: McpBackend> McpServer<B> {
                 if args.delivery == StateDelivery::Delta {
                     self.get_state_delta(args.force_refresh)
                 } else {
-                    self.backend.get_state(arguments.clone())
+                    let result = self.backend.get_state(arguments.clone());
+                    if let Ok(ref state) = result {
+                        self.previous_state = Some(state.clone());
+                    }
+                    result
                 }
             }
             "act" => self.backend.act(arguments.clone()),
@@ -347,7 +351,11 @@ impl<B: McpBackend> McpServer<B> {
         // Fetch current full state from backend using a full-delivery arguments value.
         let backend_args = json!({ "force_refresh": force_refresh });
         let current_state = self.backend.get_state(backend_args)?;
-        let next_hash = sha256_of_json(&current_state);
+        // Prefer the pre-computed hash from the state metadata to avoid re-serializing.
+        let next_hash = current_state["metadata"]["state_hash"]
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| sha256_of_json(&current_state));
 
         let response = match self.previous_state.take() {
             None => {
@@ -360,7 +368,10 @@ impl<B: McpBackend> McpServer<B> {
                 })
             }
             Some(prev) => {
-                let base_hash = sha256_of_json(&prev);
+                let base_hash = prev["metadata"]["state_hash"]
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| sha256_of_json(&prev));
                 if base_hash == next_hash {
                     // Identical state.
                     self.previous_state = Some(current_state);

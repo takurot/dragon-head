@@ -125,11 +125,13 @@ fn test_mcp_contract_all_tools_are_callable() {
 // ── Delta delivery tests ──────────────────────────────────────────────────────
 
 fn make_full_state(url: &str) -> Value {
+    // state_hash encodes the URL so different pages have distinct hashes
+    let state_hash = format!("hash-{}", url.replace("://", "-").replace('/', "-"));
     json!({
         "metadata": {
             "url": url,
             "page_instance_id": "pid-1",
-            "state_hash": "hash-abc",
+            "state_hash": state_hash,
             "load_profile": "interactive",
             "timestamp": 1_000_000u64
         },
@@ -323,6 +325,61 @@ fn test_full_delivery_unaffected_by_delta_state() -> Result<()> {
     assert!(
         result["interactive_elements"].is_array(),
         "full delivery must return interactive_elements"
+    );
+
+    Ok(())
+}
+
+/// full delivery followed by delta delivery must produce no_change (not a spurious patch).
+/// This verifies the fix for the previous_state update timing bug: full delivery must update
+/// previous_state so the next delta request compares against the most recent state.
+#[test]
+fn test_full_delivery_seeds_previous_state_for_subsequent_delta() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let state = make_full_state("https://example.com");
+    // Both calls return the identical state
+    let backend = SemanticMockBackend::with_states(vec![state.clone(), state.clone()]);
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Pro);
+
+    // Seed previous_state via full delivery
+    server.call_tool("get_state", json!({"delivery": "full"}))?;
+
+    // Delta call should see no change relative to the state seeded by full delivery
+    let result = server.call_tool("get_state", json!({"delivery": "delta"}))?;
+    assert_eq!(
+        result["type"],
+        json!("no_change"),
+        "delta after full delivery of same state must return no_change, not full"
+    );
+
+    Ok(())
+}
+
+/// full delivery followed by delta delivery with a changed state must return a proper patch.
+#[test]
+fn test_full_then_delta_with_changed_state_returns_patch() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let state_v1 = make_full_state("https://example.com/page1");
+    let state_v2 = make_full_state("https://example.com/page2");
+    // First call (full) → state_v1; second call (delta) → state_v2
+    let backend = SemanticMockBackend::with_states(vec![state_v1, state_v2]);
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Pro);
+
+    // Seed previous_state via full delivery
+    server.call_tool("get_state", json!({"delivery": "full"}))?;
+
+    // Delta call should detect the change and return a patch
+    let result = server.call_tool("get_state", json!({"delivery": "delta"}))?;
+    assert_eq!(
+        result["type"],
+        json!("delta"),
+        "delta after full delivery of different state must return type=delta"
+    );
+    assert!(
+        result["patch"].is_array(),
+        "delta response must include patch array"
     );
 
     Ok(())
