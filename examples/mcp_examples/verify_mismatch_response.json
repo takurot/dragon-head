@@ -1,0 +1,17 @@
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "result": {
+    "content": [
+      {
+        "type": "json",
+        "json": {
+          "matched": false,
+          "target_id": 42,
+          "expected": "Purchase",
+          "actual": "Add to Cart"
+        }
+      }
+    ]
+  }
+}

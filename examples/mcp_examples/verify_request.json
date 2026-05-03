@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "tools/call",
+  "params": {
+    "name": "verify",
+    "arguments": {
+      "target_id": 42,
+      "expected": {
+        "text": "Purchase"
+      }
+    }
+  }
+}
