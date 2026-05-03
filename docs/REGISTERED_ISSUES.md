@@ -63,3 +63,62 @@ Evidence of compilation failure in `mcp-server/tests/comprehensive_evaluation.rs
 ### Task
 - [ ] Implement `PluginRuntime` or similar to handle `wasmtime` instantiation and call exports.
 - [ ] Integrate plugin execution into the `core-runtime` pipeline.
+
+---
+
+## [ISSUE-06] `McpServer` usage metering gaps
+
+### Description
+The `McpServer` only records usage for `get_state`, `get_visual`, and `act`. Calls to `ask_human` and the internal operations performed during `run_skill` (e.g., `act` or `get_visual` calls within a skill workflow) are not being metered.
+
+### Impact
+- Inaccurate billing and usage reporting.
+- Under-counting of value-based events (Section 7.1).
+
+### Task
+- [ ] Update `McpServer::record_usage` to handle `ask_human` tool calls.
+- [ ] Implement a mechanism for `PageSkillRuntime` to report metered operations back to `McpServer` during `run_skill` execution.
+
+---
+
+## [ISSUE-07] `SkillsEngine` integration NO-OPs and limitations
+
+### Description
+The `PageSkillRuntime` (the bridge between Skills Engine and Core Runtime) has placeholder or limited implementations for several steps. `locate` is a NO-OP (always returns `Success`), and `wait` only supports `intent:` prefixed conditions.
+
+### Impact
+- Skills relying on element location verification or complex wait conditions (e.g., waiting for an element to be enabled without a specific intent marker) may succeed prematurely or fail to detect errors.
+
+### Task
+- [ ] Implement `PageSkillRuntime::locate` to verify element existence in the current DOM/SRE.
+- [ ] Expand `PageSkillRuntime::wait` to support semantic state wait (e.g., `id:123:enabled`) by calling `page.wait_for_semantic`.
+
+---
+
+## [ISSUE-08] Inconsistent PII masking between SRE and Audit Logs
+
+### Description
+`core-runtime/src/sre/normalization.rs` only masks credit card numbers in text nodes, whereas `core-runtime/src/audit.rs` masks both credit cards and email addresses.
+
+### Impact
+- Potential PII leakage in the `SemanticState` JSON if email addresses are present in text nodes.
+- Inconsistency in security posture across different system layers.
+
+### Task
+- [ ] Standardize PII masking regexes and logic into a shared utility within `core-runtime`.
+- [ ] Apply consistent masking to both SRE text extraction and Audit Log sanitization.
+
+---
+
+## [ISSUE-09] `AuditLogger` lacks persistent storage implementation
+
+### Description
+The current `AuditLogger` in `core-runtime/src/audit.rs` only maintains an in-memory buffer (512 recent events) and optionally prints to stdout. There is no implementation for persistent file storage or SIEM integration.
+
+### Impact
+- Loss of audit trail on process restart or buffer overflow.
+- Failure to meet enterprise compliance requirements for long-term audit retention.
+
+### Task
+- [ ] Implement a persistent sink for `AuditLogger` (e.g., rolling file logs).
+- [ ] Ensure that `audit_retention_snapshot` in `McpServer` can reflect persistent storage metrics.
