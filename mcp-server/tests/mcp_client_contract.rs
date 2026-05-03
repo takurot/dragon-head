@@ -31,6 +31,49 @@ impl McpBackend for MockBackend {
     }
 }
 
+/// A backend that returns controlled semantic state payloads for delta testing.
+struct SemanticMockBackend {
+    states: Vec<Value>,
+    call_count: usize,
+}
+
+impl SemanticMockBackend {
+    fn with_states(states: Vec<Value>) -> Self {
+        Self {
+            states,
+            call_count: 0,
+        }
+    }
+}
+
+impl McpBackend for SemanticMockBackend {
+    fn get_state(&mut self, _arguments: Value) -> Result<Value> {
+        let idx = self.call_count.min(self.states.len().saturating_sub(1));
+        self.call_count += 1;
+        Ok(self.states[idx].clone())
+    }
+
+    fn act(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"status": "ok"}))
+    }
+
+    fn verify(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"matched": true}))
+    }
+
+    fn get_visual(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"image_sha256": "abc"}))
+    }
+
+    fn ask_human(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"approved": true}))
+    }
+
+    fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"status": "completed"}))
+    }
+}
+
 #[test]
 fn test_mcp_contract_exposes_required_tools() {
     let server = McpServer::new(MockBackend);
@@ -77,4 +120,267 @@ fn test_mcp_contract_all_tools_are_callable() {
         .call_tool("get_usage_report", json!({}))
         .expect("usage report tool call failed");
     assert_eq!(usage_report["plan_tier"], json!("enterprise"));
+}
+
+// ── Delta delivery tests ──────────────────────────────────────────────────────
+
+fn make_full_state(url: &str) -> Value {
+    // state_hash encodes the URL so different pages have distinct hashes
+    let state_hash = format!("hash-{}", url.replace("://", "-").replace('/', "-"));
+    json!({
+        "metadata": {
+            "url": url,
+            "page_instance_id": "pid-1",
+            "state_hash": state_hash,
+            "load_profile": "interactive",
+            "timestamp": 1_000_000u64
+        },
+        "interactive_elements": [
+            {
+                "id": 1,
+                "stable_key": "btn-submit",
+                "alias": "btn_1",
+                "role": "button",
+                "name": "Submit",
+                "attributes": {},
+                "bbox": [0.0, 0.0, 100.0, 50.0],
+                "policy_flags": []
+            }
+        ]
+    })
+}
+
+/// First call with delta delivery when no previous state exists returns full state
+/// with a `no_previous_state` hint.
+#[test]
+fn test_delta_first_call_returns_full_state_with_hint() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let backend = SemanticMockBackend::with_states(vec![make_full_state("https://example.com")]);
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Pro);
+
+    let result = server.call_tool("get_state", json!({"delivery": "delta"}))?;
+
+    // Should return full state tagged as "full" with a hint
+    assert_eq!(
+        result["type"],
+        json!("full"),
+        "first delta call must return type=full"
+    );
+    assert!(
+        result["hash"].is_string(),
+        "first delta call must include hash"
+    );
+    assert!(
+        result["state"].is_object(),
+        "first delta call must include state object"
+    );
+
+    Ok(())
+}
+
+/// Second call with same state returns no_change response.
+#[test]
+fn test_delta_no_change_returns_no_change() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let state = make_full_state("https://example.com");
+    let backend = SemanticMockBackend::with_states(vec![state.clone(), state.clone()]);
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Pro);
+
+    // Seed the previous state with a full call
+    server.call_tool("get_state", json!({"delivery": "delta"}))?;
+
+    // Second call with same state
+    let result = server.call_tool("get_state", json!({"delivery": "delta"}))?;
+
+    assert_eq!(
+        result["type"],
+        json!("no_change"),
+        "unchanged state must return type=no_change"
+    );
+    assert!(
+        result["hash"].is_string(),
+        "no_change response must include hash"
+    );
+
+    Ok(())
+}
+
+/// Second call with changed state returns proper RFC 6902 delta.
+#[test]
+fn test_delta_changed_state_returns_patch() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let state_v1 = make_full_state("https://example.com/page1");
+    let state_v2 = make_full_state("https://example.com/page2");
+    let backend = SemanticMockBackend::with_states(vec![state_v1, state_v2]);
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Pro);
+
+    // Seed previous state
+    server.call_tool("get_state", json!({"delivery": "delta"}))?;
+
+    // Delta call with changed state
+    let result = server.call_tool("get_state", json!({"delivery": "delta"}))?;
+
+    assert_eq!(
+        result["type"],
+        json!("delta"),
+        "changed state must return type=delta"
+    );
+    assert!(
+        result["base_hash"].is_string(),
+        "delta response must include base_hash"
+    );
+    assert!(
+        result["next_hash"].is_string(),
+        "delta response must include next_hash"
+    );
+    assert_ne!(
+        result["base_hash"], result["next_hash"],
+        "hashes must differ when state changed"
+    );
+    assert!(
+        result["patch"].is_array(),
+        "delta response must include patch array"
+    );
+
+    // The patch should have at least one operation (URL changed)
+    let patch = result["patch"].as_array().expect("patch must be array");
+    assert!(
+        !patch.is_empty(),
+        "patch must not be empty when state changed"
+    );
+
+    // Verify each patch operation has op and path fields
+    for op in patch {
+        assert!(op["op"].is_string(), "each patch op must have op field");
+        assert!(op["path"].is_string(), "each patch op must have path field");
+    }
+
+    Ok(())
+}
+
+/// Delta via JSON-RPC path also works correctly.
+#[test]
+fn test_delta_via_jsonrpc_returns_correct_shape() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let state_v1 = make_full_state("https://example.com/page1");
+    let state_v2 = make_full_state("https://example.com/page2");
+    let backend = SemanticMockBackend::with_states(vec![state_v1, state_v2]);
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Pro);
+
+    // Seed via JSON-RPC
+    let seed_req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_state",
+            "arguments": {"delivery": "delta"}
+        }
+    });
+    server.handle_jsonrpc(&serde_json::to_string(&seed_req).unwrap());
+
+    // Delta call via JSON-RPC
+    let delta_req = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "get_state",
+            "arguments": {"delivery": "delta"}
+        }
+    });
+    let response_str = server
+        .handle_jsonrpc(&serde_json::to_string(&delta_req).unwrap())
+        .expect("response must be present");
+    let response: Value = serde_json::from_str(&response_str).unwrap();
+
+    assert!(response["error"].is_null(), "no error expected");
+    let payload = &response["result"]["content"][0]["json"];
+    assert_eq!(payload["type"], json!("delta"));
+
+    Ok(())
+}
+
+/// Full delivery mode is unaffected by delta state tracking.
+#[test]
+fn test_full_delivery_unaffected_by_delta_state() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let state = make_full_state("https://example.com");
+    let backend = SemanticMockBackend::with_states(vec![state.clone(), state.clone()]);
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Enterprise);
+
+    // Full delivery should return the raw state (no type/hash envelope)
+    let result = server.call_tool("get_state", json!({"delivery": "full"}))?;
+
+    // Full mode should return raw state as-is (metadata + interactive_elements)
+    assert!(
+        result["metadata"].is_object(),
+        "full delivery must return metadata"
+    );
+    assert!(
+        result["interactive_elements"].is_array(),
+        "full delivery must return interactive_elements"
+    );
+
+    Ok(())
+}
+
+/// full delivery followed by delta delivery must produce no_change (not a spurious patch).
+/// This verifies the fix for the previous_state update timing bug: full delivery must update
+/// previous_state so the next delta request compares against the most recent state.
+#[test]
+fn test_full_delivery_seeds_previous_state_for_subsequent_delta() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let state = make_full_state("https://example.com");
+    // Both calls return the identical state
+    let backend = SemanticMockBackend::with_states(vec![state.clone(), state.clone()]);
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Pro);
+
+    // Seed previous_state via full delivery
+    server.call_tool("get_state", json!({"delivery": "full"}))?;
+
+    // Delta call should see no change relative to the state seeded by full delivery
+    let result = server.call_tool("get_state", json!({"delivery": "delta"}))?;
+    assert_eq!(
+        result["type"],
+        json!("no_change"),
+        "delta after full delivery of same state must return no_change, not full"
+    );
+
+    Ok(())
+}
+
+/// full delivery followed by delta delivery with a changed state must return a proper patch.
+#[test]
+fn test_full_then_delta_with_changed_state_returns_patch() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let state_v1 = make_full_state("https://example.com/page1");
+    let state_v2 = make_full_state("https://example.com/page2");
+    // First call (full) → state_v1; second call (delta) → state_v2
+    let backend = SemanticMockBackend::with_states(vec![state_v1, state_v2]);
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Pro);
+
+    // Seed previous_state via full delivery
+    server.call_tool("get_state", json!({"delivery": "full"}))?;
+
+    // Delta call should detect the change and return a patch
+    let result = server.call_tool("get_state", json!({"delivery": "delta"}))?;
+    assert_eq!(
+        result["type"],
+        json!("delta"),
+        "delta after full delivery of different state must return type=delta"
+    );
+    assert!(
+        result["patch"].is_array(),
+        "delta response must include patch array"
+    );
+
+    Ok(())
 }
