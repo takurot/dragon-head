@@ -1008,6 +1008,9 @@ impl PageSession {
                     &target_signature,
                     &url,
                 ) {
+                    // Human approval was granted — still run plugin policy hooks so
+                    // plugins have a chance to veto even pre-approved actions.
+                    self.enforce_plugin_policy(action, &url)?;
                     return Ok(());
                 }
 
@@ -1286,14 +1289,19 @@ impl PageSession {
 
     fn capture_state(&self, profile: LoadProfile) -> Result<SemanticState> {
         let cache = self.semantic_capture_cache_snapshot(profile)?;
-        let state = Arc::new(self.capture_state_with_refinement(profile, &[], None, None)?);
-        self.record_state_update(cache.last_state.clone(), Arc::clone(&state))?;
+        let raw_state = Arc::new(self.capture_state_with_refinement(profile, &[], None, None)?);
+        self.record_state_update(cache.last_state.clone(), Arc::clone(&raw_state))?;
 
-        // Apply state plugin hooks (non-fatal on failure).
-        let state = self.apply_state_hooks(state)?;
+        // Apply state plugin hooks for external delivery (non-fatal on failure).
+        // NOTE: The raw (unmodified) state is stored in the semantic capture cache so
+        // that policy enforcement in `enforce_policy()` always operates on the
+        // original SRE output, not on plugin-transformed data.  This preserves the
+        // trust boundary: plugins may only transform state for external consumers;
+        // they cannot influence internal policy decisions.
+        let transformed_state = self.apply_state_hooks(Arc::clone(&raw_state))?;
 
-        self.replace_semantic_capture_cache(profile, Arc::clone(&state))?;
-        Ok(state.as_ref().clone())
+        self.replace_semantic_capture_cache(profile, Arc::clone(&raw_state))?;
+        Ok(transformed_state.as_ref().clone())
     }
 
     /// Serialize the `SemanticState` root, run all state plugins, then
