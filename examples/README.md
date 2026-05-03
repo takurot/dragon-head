@@ -142,7 +142,9 @@ document every MCP tool call your LLM or integration layer will make.
 | File pair | Tool | Scenario |
 |-----------|------|----------|
 | `get_state_request.json` / `get_state_response.json` | `get_state` | Full semantic state delivery |
-| `get_state_delta_request.json` / `get_state_delta_response.json` | `get_state` | Delta delivery (RFC 6902 patch) — requires Pro plan |
+| `get_state_delta_request.json` / `get_state_delta_first_response.json` | `get_state` | Delta delivery — first call returns full state (`type: "full"`) |
+| `get_state_delta_request.json` / `get_state_delta_response.json` | `get_state` | Delta delivery — changed state (`type: "patch"`, RFC 6902) — requires Pro plan |
+| `get_state_delta_request.json` / `get_state_delta_no_change_response.json` | `get_state` | Delta delivery — hashes match, no state change (`type: "no_change"`) |
 | `act_request.json` / `act_response.json` | `act` | Successful click action |
 | `act_request.json` / `act_blocked_response.json` | `act` | Action blocked by policy (requires human approval) |
 | `verify_request.json` / `verify_response.json` | `verify` | Text precondition matched |
@@ -167,7 +169,7 @@ document every MCP tool call your LLM or integration layer will make.
   "metadata": {
     "url": "https://example.com/checkout",
     "state_hash": "a1b2c3d4...",
-    "load_profile": "minimal"
+    "load_profile": "interactive"
   },
   "interactive_elements": [
     {
@@ -184,17 +186,38 @@ document every MCP tool call your LLM or integration layer will make.
 
 ### `get_state` (delta delivery)
 
-When `delivery: "delta"` is set (Pro plan), the server returns an RFC 6902 JSON
-Patch instead of the full state, reducing token consumption by up to 95 %:
+When `delivery: "delta"` is set (Pro plan), the server returns one of three
+response shapes depending on the call context:
 
+**First call** — no prior hash on record; the server returns the full state:
 ```json
 {
-  "type": "delta",
+  "type": "full",
+  "state_hash": "a1b2c3d4...",
+  "metadata": { "..." },
+  "interactive_elements": [ "..." ]
+}
+```
+
+**Subsequent call — state changed** — the server returns an RFC 6902 JSON Patch,
+reducing token consumption by up to 95 %:
+```json
+{
+  "type": "patch",
   "base_hash": "a1b2c3d4...",
   "next_hash": "c3d4e5f6...",
   "patch": [
     { "op": "replace", "path": "/interactive_elements/0/attributes/disabled", "value": true }
   ]
+}
+```
+
+**Subsequent call — no change** — the client-side hash matches; the server
+returns a lightweight sentinel so the agent can skip re-processing:
+```json
+{
+  "type": "no_change",
+  "state_hash": "a1b2c3d4..."
 }
 ```
 

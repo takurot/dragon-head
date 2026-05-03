@@ -1,3 +1,6 @@
+// NOTE: This is a simplified educational example. The actual MCP server (mcp-server/src/lib.rs)
+// includes additional attribute normalization and policy_flags inference.
+
 //! Dragon Head — Developer Quickstart
 //!
 //! Demonstrates the core data model without a real browser:

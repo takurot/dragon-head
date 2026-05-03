@@ -21,6 +21,12 @@
       "value": "{{email}}"
     },
     {
+      "type": "verify",
+      "id": "check_purchase_button_enabled",
+      "target": "id:42",
+      "expected": "Purchase"
+    },
+    {
       "type": "act",
       "id": "click_purchase",
       "action": "click",
