@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, ensure};
-use skills_engine::{skill_definition_schema, validate_skill_json};
+use skills_engine::{skill_definition_schema, validate_skill_json, validate_skill_definition, SkillDefinition};
 use std::{fs, path::PathBuf};
 
 const SCHEMA_FIXTURE: &str = "tests/fixtures/skill/skill_definition.schema.json";
@@ -101,4 +101,34 @@ fn test_skill_schema_validates_examples() {
         validate_skill_json(&invalid).is_err(),
         "invalid skill json should fail schema validation"
     );
+}
+
+#[test]
+fn test_examples_sample_skill_json_is_schema_valid() -> Result<()> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("examples/sample_skill.json");
+    let text = fs::read_to_string(&path)
+        .with_context(|| format!("examples/sample_skill.json not found at {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .context("examples/sample_skill.json is not valid JSON")?;
+    validate_skill_json(&value)
+        .map_err(|e| anyhow::anyhow!("examples/sample_skill.json failed schema validation: {e}"))?;
+    Ok(())
+}
+
+#[test]
+fn test_examples_sample_skill_json_is_runtime_valid() -> Result<()> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("examples/sample_skill.json");
+    let text = fs::read_to_string(&path)
+        .with_context(|| format!("examples/sample_skill.json not found at {}", path.display()))?;
+    let skill: SkillDefinition = serde_json::from_str(&text)
+        .context("examples/sample_skill.json failed to deserialize as SkillDefinition")?;
+    validate_skill_definition(&skill)
+        .map_err(|e| anyhow::anyhow!("examples/sample_skill.json failed runtime validation: {e}"))?;
+    Ok(())
 }
