@@ -290,10 +290,26 @@ pub fn global() -> &'static PiiRedactor {
 
 /// Register a custom redactor as the global instance.
 ///
-/// Must be called before the first call to `global()`.  Returns `Ok(())` on
-/// success, or `Err(redactor)` if the global was already initialised.
+/// **Must be called before any pipeline is constructed** (i.e. before the first
+/// call to `AsyncPipeline::new` or `AuditLogger::log`). Both call `global()`
+/// on first use, locking in the default bare `PiiRedactor`; any registration
+/// attempt after that point is silently discarded.
+///
+/// Returns `Ok(())` on success or `Err(redactor)` if the global was already
+/// initialised (indicating a too-late call — log a warning and investigate the
+/// startup ordering).
 pub fn register_global_redactor(redactor: PiiRedactor) -> Result<(), PiiRedactor> {
-    GLOBAL_REDACTOR.set(redactor)
+    match GLOBAL_REDACTOR.set(redactor) {
+        Ok(()) => Ok(()),
+        Err(r) => {
+            eprintln!(
+                "[PRIVACY][WARN] register_global_redactor called after global() was already \
+                 initialised — domain-specific PII patterns will NOT take effect. \
+                 Call register_global_redactor before constructing AsyncPipeline or AuditLogger."
+            );
+            Err(r)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
