@@ -418,26 +418,31 @@ fn test_browser_backed_viewport_affects_stable_key() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // HTML fixture: a button whose style places it near the center
-    // of a 1280x720 desktop layout. On a 375x812
-    // mobile layout that same CSS position falls in a different horizontal half.
+    // HTML fixture: a button at left:300px, top:200px.
+    //
+    // Quadrant math (x_ratio = left_px / window.innerWidth):
+    //   desktop  1280×720 → 300/1280 = 0.234 < 0.5 → Left half  → Top_Left
+    //   mobile    375×812 → 300/ 375 = 0.800 ≥ 0.5 → Right half → Top_Right
+    //
+    // left:640px would be ambiguous: 640/1280 = 0.5 (boundary → Right) and
+    // 640/375 = 1.71 (also Right), so both viewports give the same quadrant.
     let fixture_html = r#"<!DOCTYPE html><html><body style="margin:0;padding:0;">
 <button id="cta"
-        style="position:absolute;left:640px;top:360px;width:120px;height:40px;">
+        style="position:absolute;left:300px;top:200px;width:120px;height:40px;">
   Buy now
 </button>
 </body></html>"#;
 
     let url = format!("data:text/html,{}", urlencoding::encode(fixture_html));
 
-    // --- desktop viewport (1280x720): button at 640px is on the center edge ---
+    // --- desktop viewport (1280×720): 300/1280 = 0.234 → Left half → Top_Left ---
     let desktop = BrowserClient::new_with_window_size(1280, 720)?;
     let desktop_page = desktop.new_page()?;
     desktop_page.navigate(&url)?;
     assert_eq!(evaluate_viewport(&desktop_page)?, (1280, 720));
     let desktop_state = desktop_page.capture_semantic_state(LoadProfile::Interactive)?;
 
-    // --- mobile viewport (375x812): same button at 640px is to the right of the viewport ---
+    // --- mobile viewport (375×812): 300/375 = 0.800 → Right half → Top_Right ---
     let mobile = BrowserClient::new_with_window_size(375, 812)?;
     let mobile_page = mobile.new_page()?;
     mobile_page.navigate(&url)?;
