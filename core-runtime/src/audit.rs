@@ -53,6 +53,20 @@ pub enum AuditEvent {
         marks_count: usize,
         timestamp: u64,
     },
+    #[serde(rename = "PLUGIN_STATE_TRANSFORM")]
+    PluginStateTransform {
+        plugin_id: String,
+        success: bool,
+        error_message: Option<String>,
+        timestamp: u64,
+    },
+    #[serde(rename = "PLUGIN_POLICY_DECISION")]
+    PluginPolicyDecision {
+        plugin_id: String,
+        allowed: bool,
+        reason: Option<String>,
+        timestamp: u64,
+    },
 }
 
 #[derive(Clone)]
@@ -218,7 +232,50 @@ fn sanitize_audit_event(event: AuditEvent) -> AuditEvent {
             timestamp,
             patch: redact_json_value(&patch, None, false),
         },
+        // Plugin-supplied strings (error_message, reason) may contain PII from
+        // page content (URLs with tokens, emails, etc.).  Truncate them to a safe
+        // maximum length and redact any recognised sensitive patterns.
+        AuditEvent::PluginStateTransform {
+            plugin_id,
+            success,
+            error_message,
+            timestamp,
+        } => AuditEvent::PluginStateTransform {
+            plugin_id,
+            success,
+            error_message: error_message
+                .as_deref()
+                .map(redact_sensitive_text)
+                .map(|s| truncate_plugin_string(&s)),
+            timestamp,
+        },
+        AuditEvent::PluginPolicyDecision {
+            plugin_id,
+            allowed,
+            reason,
+            timestamp,
+        } => AuditEvent::PluginPolicyDecision {
+            plugin_id,
+            allowed,
+            reason: reason
+                .as_deref()
+                .map(redact_sensitive_text)
+                .map(|s| truncate_plugin_string(&s)),
+            timestamp,
+        },
         other => other,
+    }
+}
+
+/// Truncate a plugin-supplied string to at most `MAX_PLUGIN_STRING_LEN` characters.
+/// Appends `" [truncated]"` when truncation occurs.
+const MAX_PLUGIN_STRING_LEN: usize = 200;
+
+fn truncate_plugin_string(s: &str) -> String {
+    if s.len() <= MAX_PLUGIN_STRING_LEN {
+        s.to_string()
+    } else {
+        format!("{} [truncated]", &s[..MAX_PLUGIN_STRING_LEN])
     }
 }
 
@@ -336,7 +393,10 @@ fn redact_sensitive_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_sensitive_text, AuditEvent, AuditLogger};
+    use super::{
+        redact_sensitive_text, sanitize_audit_event, truncate_plugin_string, AuditEvent,
+        AuditLogger, MAX_PLUGIN_STRING_LEN,
+    };
     use serde_json::json;
 
     #[test]
@@ -382,5 +442,131 @@ mod tests {
             &events[0],
             AuditEvent::ToolCall { tool_name, .. } if tool_name == "act"
         ));
+    }
+
+    #[test]
+    fn truncate_plugin_string_keeps_short_strings_unchanged() {
+        let short = "short error";
+        assert_eq!(truncate_plugin_string(short), short);
+    }
+
+    #[test]
+    fn truncate_plugin_string_truncates_long_strings() {
+        let long_str = "x".repeat(MAX_PLUGIN_STRING_LEN + 50);
+        let result = truncate_plugin_string(&long_str);
+        assert!(result.ends_with(" [truncated]"));
+        assert!(result.len() <= MAX_PLUGIN_STRING_LEN + " [truncated]".len());
+    }
+
+    #[test]
+    fn sanitize_plugin_state_transform_truncates_long_error_message() {
+        let long_msg = "e".repeat(300);
+        let event = AuditEvent::PluginStateTransform {
+            plugin_id: "test-plugin".to_string(),
+            success: false,
+            error_message: Some(long_msg),
+            timestamp: 0,
+        };
+        let sanitized = sanitize_audit_event(event);
+        if let AuditEvent::PluginStateTransform { error_message, .. } = sanitized {
+            let msg = error_message.expect("error_message should be present");
+            assert!(
+                msg.ends_with(" [truncated]"),
+                "long error_message must be truncated"
+            );
+            assert!(
+                msg.len() <= MAX_PLUGIN_STRING_LEN + " [truncated]".len(),
+                "truncated message must not exceed max length + suffix"
+            );
+        } else {
+            panic!("Expected PluginStateTransform event");
+        }
+    }
+
+    #[test]
+    fn sanitize_plugin_policy_decision_truncates_long_reason() {
+        let long_reason = "r".repeat(300);
+        let event = AuditEvent::PluginPolicyDecision {
+            plugin_id: "test-plugin".to_string(),
+            allowed: false,
+            reason: Some(long_reason),
+            timestamp: 0,
+        };
+        let sanitized = sanitize_audit_event(event);
+        if let AuditEvent::PluginPolicyDecision { reason, .. } = sanitized {
+            let r = reason.expect("reason should be present");
+            assert!(r.ends_with(" [truncated]"), "long reason must be truncated");
+            assert!(
+                r.len() <= MAX_PLUGIN_STRING_LEN + " [truncated]".len(),
+                "truncated reason must not exceed max length + suffix"
+            );
+        } else {
+            panic!("Expected PluginPolicyDecision event");
+        }
+    }
+
+    #[test]
+    fn sanitize_plugin_state_transform_redacts_email_in_error_message() {
+        let event = AuditEvent::PluginStateTransform {
+            plugin_id: "test-plugin".to_string(),
+            success: false,
+            error_message: Some("failed for user@example.com".to_string()),
+            timestamp: 0,
+        };
+        let sanitized = sanitize_audit_event(event);
+        if let AuditEvent::PluginStateTransform { error_message, .. } = sanitized {
+            let msg = error_message.expect("error_message should be present");
+            assert!(!msg.contains("user@example.com"), "email must be redacted");
+            assert!(msg.contains("***"), "email should be replaced with ***");
+        } else {
+            panic!("Expected PluginStateTransform event");
+        }
+    }
+
+    #[test]
+    fn sanitize_plugin_policy_decision_redacts_email_in_reason() {
+        let event = AuditEvent::PluginPolicyDecision {
+            plugin_id: "test-plugin".to_string(),
+            allowed: false,
+            reason: Some("blocked because of admin@corp.example.com".to_string()),
+            timestamp: 0,
+        };
+        let sanitized = sanitize_audit_event(event);
+        if let AuditEvent::PluginPolicyDecision { reason, .. } = sanitized {
+            let r = reason.expect("reason should be present");
+            assert!(
+                !r.contains("admin@corp.example.com"),
+                "email must be redacted"
+            );
+            assert!(r.contains("***"), "email should be replaced with ***");
+        } else {
+            panic!("Expected PluginPolicyDecision event");
+        }
+    }
+
+    #[test]
+    fn sanitize_plugin_events_preserve_none_fields() {
+        let state_event = AuditEvent::PluginStateTransform {
+            plugin_id: "p".to_string(),
+            success: true,
+            error_message: None,
+            timestamp: 0,
+        };
+        let policy_event = AuditEvent::PluginPolicyDecision {
+            plugin_id: "p".to_string(),
+            allowed: true,
+            reason: None,
+            timestamp: 0,
+        };
+
+        if let AuditEvent::PluginStateTransform { error_message, .. } =
+            sanitize_audit_event(state_event)
+        {
+            assert!(error_message.is_none());
+        }
+        if let AuditEvent::PluginPolicyDecision { reason, .. } = sanitize_audit_event(policy_event)
+        {
+            assert!(reason.is_none());
+        }
     }
 }

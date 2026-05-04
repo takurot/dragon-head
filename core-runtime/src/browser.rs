@@ -14,6 +14,7 @@ use std::{
 use crate::{
     audit::{AuditEvent, AuditLogger},
     error::{ActionError, VerifyError, WaitError},
+    plugin_hooks::{run_policy_hooks, run_state_hooks, PluginHookConfig, PolicyHookOutcome},
     policy::{ApprovalScope, PolicyAction, PolicyContext, PolicyEngine, PolicyRule},
     session_vault::{CookieData, LocalSessionVault, SessionData, SessionVault, SoftwareKms},
     sre::{
@@ -137,6 +138,7 @@ struct SemanticCaptureCache {
 pub struct BrowserClient {
     inner: Browser,
     vault: Arc<dyn SessionVault>,
+    plugin_hooks: Arc<PluginHookConfig>,
 }
 
 impl BrowserClient {
@@ -147,6 +149,21 @@ impl BrowserClient {
         let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
         let vault = Arc::new(LocalSessionVault::new(kms));
         Self::new_with_vault(vault)
+    }
+
+    /// Create a `BrowserClient` with plugin hook integration.
+    ///
+    /// The provided `PluginHookConfig` is shared across all `PageSession`
+    /// instances created from this client.  Use `PluginHookConfig::default()`
+    /// (or the `new()` constructor) to get backward-compatible behaviour with
+    /// no active plugins.
+    pub fn new_with_plugin_hooks(plugin_hooks: PluginHookConfig) -> Result<Self> {
+        use rand::RngCore;
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
+        let vault = Arc::new(LocalSessionVault::new(kms));
+        Self::new_with_vault_and_path_and_hooks(vault, None, plugin_hooks)
     }
 
     pub fn new_with_chrome_path(chrome_path: Option<String>) -> Result<Self> {
@@ -166,6 +183,14 @@ impl BrowserClient {
         vault: Arc<dyn SessionVault>,
         chrome_path: Option<String>,
     ) -> Result<Self> {
+        Self::new_with_vault_and_path_and_hooks(vault, chrome_path, PluginHookConfig::default())
+    }
+
+    fn new_with_vault_and_path_and_hooks(
+        vault: Arc<dyn SessionVault>,
+        chrome_path: Option<String>,
+        plugin_hooks: PluginHookConfig,
+    ) -> Result<Self> {
         let mut builder = LaunchOptions::default_builder();
         builder.headless(true);
         if let Some(path) = chrome_path {
@@ -177,6 +202,7 @@ impl BrowserClient {
         Ok(Self {
             inner: browser,
             vault,
+            plugin_hooks: Arc::new(plugin_hooks),
         })
     }
 
@@ -193,6 +219,7 @@ impl BrowserClient {
             audit_logger: Arc::new(AuditLogger::new()),
             semantic_capture_cache: Arc::new(Mutex::new(SemanticCaptureCache::default())),
             vault: Arc::clone(&self.vault),
+            plugin_hooks: Arc::clone(&self.plugin_hooks),
         })
     }
 }
@@ -208,6 +235,7 @@ pub struct PageSession {
     pub(crate) audit_logger: Arc<AuditLogger>,
     semantic_capture_cache: Arc<Mutex<SemanticCaptureCache>>,
     vault: Arc<dyn SessionVault>,
+    plugin_hooks: Arc<PluginHookConfig>,
 }
 
 impl PageSession {
@@ -956,7 +984,11 @@ impl PageSession {
         });
 
         match decision.action {
-            PolicyAction::Allow => Ok(()),
+            PolicyAction::Allow => {
+                // Built-in policy allows — now run plugin policy hooks.
+                self.enforce_plugin_policy(action, &url)?;
+                Ok(())
+            }
             PolicyAction::Block => Err(ActionError::Blocked {
                 rule_id: decision
                     .rule_id
@@ -976,6 +1008,9 @@ impl PageSession {
                     &target_signature,
                     &url,
                 ) {
+                    // Human approval was granted — still run plugin policy hooks so
+                    // plugins have a chance to veto even pre-approved actions.
+                    self.enforce_plugin_policy(action, &url)?;
                     return Ok(());
                 }
 
@@ -994,6 +1029,39 @@ impl PageSession {
                 });
 
                 Err(ActionError::HumanApprovalRequired { rule_id, scope }.into())
+            }
+        }
+    }
+
+    /// Run all policy plugin hooks for the given action and URL.
+    ///
+    /// If any plugin blocks (or fails), the action is rejected (fail-closed).
+    /// All plugin decisions are recorded in the audit log.
+    fn enforce_plugin_policy(&self, action: &str, url: &str) -> Result<()> {
+        let plugins = &self.plugin_hooks.policy_plugins;
+        if plugins.is_empty() {
+            return Ok(());
+        }
+
+        let intent_json = serde_json::json!({
+            "action": action,
+            "url": url,
+        })
+        .to_string();
+
+        let (outcome, events) = run_policy_hooks(&intent_json, plugins.iter().map(|p| p.as_ref()));
+
+        for event in events {
+            self.audit_logger.log(event);
+        }
+
+        match outcome {
+            PolicyHookOutcome::Allow => Ok(()),
+            PolicyHookOutcome::Block { plugin_id, reason } => {
+                let rule_id = format!("plugin:{plugin_id}");
+                let reason_str = reason.as_deref().unwrap_or("blocked by plugin");
+                eprintln!("[PLUGIN][POLICY] Action blocked by plugin {plugin_id}: {reason_str}");
+                Err(ActionError::Blocked { rule_id }.into())
             }
         }
     }
@@ -1221,11 +1289,63 @@ impl PageSession {
 
     fn capture_state(&self, profile: LoadProfile) -> Result<SemanticState> {
         let cache = self.semantic_capture_cache_snapshot(profile)?;
-        let state = Arc::new(self.capture_state_with_refinement(profile, &[], None, None)?);
-        self.record_state_update(cache.last_state.clone(), Arc::clone(&state))?;
-        self.replace_semantic_capture_cache(profile, Arc::clone(&state))?;
+        let raw_state = Arc::new(self.capture_state_with_refinement(profile, &[], None, None)?);
+        self.record_state_update(cache.last_state.clone(), Arc::clone(&raw_state))?;
 
-        Ok(state.as_ref().clone())
+        // Apply state plugin hooks for external delivery (non-fatal on failure).
+        // NOTE: The raw (unmodified) state is stored in the semantic capture cache so
+        // that policy enforcement in `enforce_policy()` always operates on the
+        // original SRE output, not on plugin-transformed data.  This preserves the
+        // trust boundary: plugins may only transform state for external consumers;
+        // they cannot influence internal policy decisions.
+        let transformed_state = self.apply_state_hooks(Arc::clone(&raw_state))?;
+
+        self.replace_semantic_capture_cache(profile, Arc::clone(&raw_state))?;
+        Ok(transformed_state.as_ref().clone())
+    }
+
+    /// Serialize the `SemanticState` root, run all state plugins, then
+    /// deserialize the result.  On any failure (serialization, plugin error,
+    /// deserialization), log to audit and return the original state unchanged.
+    fn apply_state_hooks(&self, state: Arc<SemanticState>) -> Result<Arc<SemanticState>> {
+        let plugins = &self.plugin_hooks.state_plugins;
+        if plugins.is_empty() {
+            return Ok(state);
+        }
+
+        let state_json = match serde_json::to_string(state.root()) {
+            Ok(json) => json,
+            Err(err) => {
+                eprintln!("[PLUGIN][WARN] Failed to serialize state for plugin hooks: {err}");
+                return Ok(state);
+            }
+        };
+
+        let (transformed_json, events) =
+            run_state_hooks(&state_json, plugins.iter().map(|p| p.as_ref()));
+
+        for event in events {
+            self.audit_logger.log(event);
+        }
+
+        if transformed_json == state_json {
+            // Nothing changed — reuse the existing Arc.
+            return Ok(state);
+        }
+
+        // Attempt to deserialize the transformed JSON back into a SemanticNode.
+        match serde_json::from_str::<SemanticNode>(&transformed_json) {
+            Ok(new_root) => {
+                let new_state = Arc::new(SemanticState::new(new_root, state.load_profile()));
+                Ok(new_state)
+            }
+            Err(err) => {
+                eprintln!(
+                    "[PLUGIN][WARN] State plugin produced invalid JSON, reverting to original: {err}"
+                );
+                Ok(state)
+            }
+        }
     }
 
     fn capture_state_with_refinement(
