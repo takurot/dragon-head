@@ -5,16 +5,17 @@
 /// * `RollingFileSink` — writes newline-delimited JSON (NDJSON) audit events
 ///   to rotating files; rotates when a file reaches `max_bytes_per_file`.
 ///
-/// * `WebhookSink` — POSTs each event as JSON to an HTTP/HTTPS endpoint for
-///   SIEM integration; retries transiently failing requests with exponential
-///   back-off.
+/// * `WebhookSink` — POSTs each event as JSON to an HTTP (`http://`) endpoint
+///   for SIEM integration; retries transiently failing requests with linear
+///   back-off on a background thread (non-blocking to the audit worker).
 use crate::audit::AuditEvent;
-use serde_json;
+use crossbeam_channel::{bounded, TrySendError};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write as IoWrite},
     path::{Path, PathBuf},
     sync::Mutex,
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -31,6 +32,8 @@ pub enum AuditSinkError {
     Serialization(#[from] serde_json::Error),
     #[error("Webhook POST failed after {attempts} attempt(s): {last_error}")]
     WebhookFailed { attempts: u32, last_error: String },
+    #[error("Invalid sink URL '{0}': only http:// is supported")]
+    InvalidUrl(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -155,106 +158,146 @@ impl AuditSink for RollingFileSink {
 // WebhookSink
 // ---------------------------------------------------------------------------
 
-/// POSTs audit events as JSON to an HTTP endpoint (SIEM integration).
+/// POSTs audit events as JSON to an HTTP (plaintext) endpoint for SIEM
+/// integration.
 ///
-/// Uses a blocking TCP connection with raw HTTP/1.1 to avoid pulling in an
-/// async HTTP client dependency.  Retries on transient errors with linear
-/// back-off.
+/// `write()` enqueues the serialized event into a bounded internal channel and
+/// returns immediately, so it never blocks the audit worker thread.  A
+/// dedicated background thread drains the queue and performs the actual HTTP
+/// POST with linear back-off retries.  If the queue is full (SIEM unreachable
+/// for an extended period) excess events are dropped with an `eprintln!`
+/// warning — SIEM delivery is best-effort.
+///
+/// **Note**: only `http://` URLs are supported.  Passing an `https://` URL
+/// returns an [`AuditSinkError::InvalidUrl`] at construction time.
+#[derive(Debug)]
 pub struct WebhookSink {
-    /// Full URL, e.g. `"http://siem.corp.example:8088/events"`.
-    url: String,
-    max_retries: u32,
-    retry_delay: Duration,
+    sender: crossbeam_channel::Sender<String>,
 }
 
 impl WebhookSink {
-    /// Create a new webhook sink.
+    /// Create a new webhook sink and spawn its background sender thread.
     ///
-    /// * `url` — target HTTP endpoint.
-    /// * `max_retries` — number of retry attempts after the first failure (0 = no retry).
+    /// * `url` — target HTTP endpoint (`http://` scheme only).
+    /// * `max_retries` — retry attempts after the first failure (0 = no retry).
     /// * `retry_delay` — pause between retries.
-    pub fn new(url: impl Into<String>, max_retries: u32, retry_delay: Duration) -> Self {
-        Self {
-            url: url.into(),
-            max_retries,
-            retry_delay,
+    /// * `queue_capacity` — max events queued while SIEM is unavailable; older
+    ///   events are dropped when the queue is full.
+    pub fn new(
+        url: impl Into<String>,
+        max_retries: u32,
+        retry_delay: Duration,
+        queue_capacity: usize,
+    ) -> Result<Self, AuditSinkError> {
+        let url = url.into();
+        if !url.starts_with("http://") {
+            return Err(AuditSinkError::InvalidUrl(url));
         }
-    }
 
-    fn post_once(&self, body: &str) -> Result<(), String> {
-        use std::io::Read;
-        use std::net::TcpStream;
+        let (sender, receiver) = bounded::<String>(queue_capacity.max(1));
+        let url_for_thread = url;
 
-        let url = self.url.trim_start_matches("http://");
-        // Split host:port from path.
-        let (host_port, path) = match url.find('/') {
-            Some(idx) => (&url[..idx], &url[idx..]),
-            None => (url, "/"),
-        };
+        thread::spawn(move || {
+            while let Ok(body) = receiver.recv() {
+                let mut last_error = String::new();
+                for attempt in 0..=max_retries {
+                    match post_once(&url_for_thread, &body) {
+                        Ok(()) => {
+                            last_error.clear();
+                            break;
+                        }
+                        Err(e) => {
+                            last_error = e;
+                            if attempt < max_retries {
+                                thread::sleep(retry_delay);
+                            }
+                        }
+                    }
+                }
+                if !last_error.is_empty() {
+                    eprintln!(
+                        "[AUDIT][ERROR] WebhookSink failed after {} attempt(s): {}",
+                        max_retries + 1,
+                        last_error
+                    );
+                }
+            }
+        });
 
-        let mut stream =
-            TcpStream::connect(host_port).map_err(|e| format!("connect to {host_port}: {e}"))?;
-        stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-
-        let request = format!(
-            "POST {path} HTTP/1.0\r\n\
-             Host: {host_port}\r\n\
-             Content-Type: application/json\r\n\
-             Content-Length: {len}\r\n\
-             Connection: close\r\n\
-             \r\n\
-             {body}",
-            len = body.len()
-        );
-
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|e| format!("write request: {e}"))?;
-
-        let mut response = String::new();
-        stream
-            .read_to_string(&mut response)
-            .map_err(|e| format!("read response: {e}"))?;
-
-        // Accept any 2xx status.
-        let status_line = response.lines().next().unwrap_or("");
-        let status: u32 = status_line
-            .split_whitespace()
-            .nth(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        if (200..300).contains(&status) {
-            Ok(())
-        } else {
-            Err(format!("HTTP {status}: {status_line}"))
-        }
+        Ok(Self { sender })
     }
 }
 
 impl AuditSink for WebhookSink {
+    /// Enqueues the event for delivery by the background thread.
+    ///
+    /// Always returns `Ok(())` — delivery errors are logged via `eprintln!`
+    /// on the background thread.  If the internal queue is full, the event is
+    /// dropped (SIEM is best-effort).
     fn write(&self, event: &AuditEvent) -> Result<(), AuditSinkError> {
         let body = serde_json::to_string(event)?;
-        let mut last_error = String::new();
-        for attempt in 0..=self.max_retries {
-            match self.post_once(&body) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    last_error = e;
-                    if attempt < self.max_retries {
-                        std::thread::sleep(self.retry_delay);
-                    }
-                }
+        match self.sender.try_send(body) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                eprintln!("[AUDIT][WARN] WebhookSink queue full — event dropped");
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                eprintln!("[AUDIT][ERROR] WebhookSink background thread exited unexpectedly");
             }
         }
-        Err(AuditSinkError::WebhookFailed {
-            attempts: self.max_retries + 1,
-            last_error,
-        })
+        Ok(())
     }
 
     fn name(&self) -> &str {
         "WebhookSink"
+    }
+}
+
+fn post_once(url: &str, body: &str) -> Result<(), String> {
+    use std::io::Read;
+    use std::net::TcpStream;
+
+    let without_scheme = url.trim_start_matches("http://");
+    let (host_port, path) = match without_scheme.find('/') {
+        Some(idx) => (&without_scheme[..idx], &without_scheme[idx..]),
+        None => (without_scheme, "/"),
+    };
+
+    let mut stream =
+        TcpStream::connect(host_port).map_err(|e| format!("connect to {host_port}: {e}"))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+
+    let request = format!(
+        "POST {path} HTTP/1.0\r\n\
+         Host: {host_port}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        len = body.len()
+    );
+
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("write request: {e}"))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|e| format!("read response: {e}"))?;
+
+    let status_line = response.lines().next().unwrap_or("");
+    let status: u32 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        Err(format!("HTTP {status}: {status_line}"))
     }
 }
 
@@ -441,17 +484,30 @@ mod tests {
         assert_eq!(sink.errors(), 0);
     }
 
-    // -- WebhookSink (error path only — no real server in unit tests) ---------
+    // -- WebhookSink ----------------------------------------------------------
 
     #[test]
-    fn webhook_sink_fails_gracefully_after_retries() {
-        let sink = WebhookSink::new("http://127.0.0.1:1", 2, Duration::from_millis(1));
-        let err = sink.write(&tool_call_event(1)).unwrap_err();
-        match err {
-            AuditSinkError::WebhookFailed { attempts, .. } => {
-                assert_eq!(attempts, 3, "1 initial + 2 retries");
-            }
-            other => panic!("unexpected error: {other}"),
-        }
+    fn webhook_sink_rejects_https_url_at_construction() {
+        let err =
+            WebhookSink::new("https://siem.example.com/events", 1, Duration::ZERO, 8).unwrap_err();
+        assert!(
+            matches!(err, AuditSinkError::InvalidUrl(_)),
+            "https:// must be rejected; got: {err}"
+        );
+    }
+
+    #[test]
+    fn webhook_sink_write_returns_ok_immediately_even_when_server_unreachable() {
+        // Port 1 is reserved/refused on all platforms — no server will answer.
+        let sink = WebhookSink::new("http://127.0.0.1:1", 0, Duration::ZERO, 8).unwrap();
+        // write() must return Ok(()) without blocking (background thread handles retries).
+        let result = sink.write(&tool_call_event(1));
+        assert!(result.is_ok(), "write() must be non-blocking and return Ok");
+    }
+
+    #[test]
+    fn webhook_sink_rejects_bare_url_without_scheme() {
+        let err = WebhookSink::new("siem.example.com/events", 0, Duration::ZERO, 8).unwrap_err();
+        assert!(matches!(err, AuditSinkError::InvalidUrl(_)));
     }
 }
