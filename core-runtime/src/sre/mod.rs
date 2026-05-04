@@ -4,7 +4,10 @@ pub mod profile;
 pub mod stable_key;
 pub mod state;
 
-pub use normalization::{normalize_dom, normalize_dom_with_refinement, SubtreeRefinementConfig};
+pub use normalization::{
+    normalize_dom, normalize_dom_with_refinement, normalize_dom_with_viewport,
+    normalize_dom_with_viewport_and_refinement, SubtreeRefinementConfig, ViewportDimensions,
+};
 pub use pipeline::{
     AsyncPipeline, AsyncPipelineConfig, AsyncPipelineMetrics, AuditEvent, AuditEventKind,
     LayeredStateHandle, PipelineReceiveError, PipelineSubmitError, QueueKind, SreStage,

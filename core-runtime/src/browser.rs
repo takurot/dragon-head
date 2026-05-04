@@ -18,8 +18,8 @@ use crate::{
     policy::{ApprovalScope, PolicyAction, PolicyContext, PolicyEngine, PolicyRule},
     session_vault::{CookieData, LocalSessionVault, SessionData, SessionVault, SoftwareKms},
     sre::{
-        normalize_dom, normalize_dom_with_refinement, LoadProfile, SemanticNode, SemanticState,
-        SubtreeRefinementConfig,
+        normalize_dom_with_viewport, normalize_dom_with_viewport_and_refinement, LoadProfile,
+        SemanticNode, SemanticState, SubtreeRefinementConfig, ViewportDimensions,
     },
 };
 
@@ -139,6 +139,7 @@ pub struct BrowserClient {
     inner: Browser,
     vault: Arc<dyn SessionVault>,
     plugin_hooks: Arc<PluginHookConfig>,
+    viewport_size: Option<(u32, u32)>,
 }
 
 impl BrowserClient {
@@ -175,6 +176,19 @@ impl BrowserClient {
         Self::new_with_vault_and_path(vault, chrome_path)
     }
 
+    /// Create a `BrowserClient` with an explicit window size.
+    ///
+    /// Used in tests to verify that different viewport dimensions produce
+    /// different stable_key quadrant assignments for the same element.
+    pub fn new_with_window_size(width: u32, height: u32) -> Result<Self> {
+        use rand::RngCore;
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
+        let vault = Arc::new(LocalSessionVault::new(kms));
+        Self::new_with_vault_and_size(vault, width, height)
+    }
+
     pub fn new_with_vault(vault: Arc<dyn SessionVault>) -> Result<Self> {
         Self::new_with_vault_and_path(vault, None)
     }
@@ -203,11 +217,33 @@ impl BrowserClient {
             inner: browser,
             vault,
             plugin_hooks: Arc::new(plugin_hooks),
+            viewport_size: None,
+        })
+    }
+
+    fn new_with_vault_and_size(
+        vault: Arc<dyn SessionVault>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let mut builder = LaunchOptions::default_builder();
+        builder.headless(true).window_size(Some((width, height)));
+        let options = builder.build().context("Failed to build launch options")?;
+
+        let browser = Browser::new(options).context("Failed to launch browser")?;
+        Ok(Self {
+            inner: browser,
+            vault,
+            plugin_hooks: Arc::new(PluginHookConfig::default()),
+            viewport_size: Some((width, height)),
         })
     }
 
     pub fn new_page(&self) -> Result<PageSession> {
         let tab = self.inner.new_tab().context("Failed to create new tab")?;
+        if let Some((width, height)) = self.viewport_size {
+            apply_viewport_size(&tab, width, height)?;
+        }
         Ok(PageSession {
             inner: tab,
             som_pipeline: Arc::new(Mutex::new(SomPipelineState::default())),
@@ -222,6 +258,29 @@ impl BrowserClient {
             plugin_hooks: Arc::clone(&self.plugin_hooks),
         })
     }
+}
+
+fn apply_viewport_size(tab: &headless_chrome::Tab, width: u32, height: u32) -> Result<()> {
+    use headless_chrome::protocol::cdp::Emulation::SetDeviceMetricsOverride;
+
+    tab.call_method(SetDeviceMetricsOverride {
+        width,
+        height,
+        device_scale_factor: 1.0,
+        mobile: false,
+        scale: None,
+        screen_width: Some(width),
+        screen_height: Some(height),
+        position_x: None,
+        position_y: None,
+        dont_set_visible_size: None,
+        screen_orientation: None,
+        viewport: None,
+        display_feature: None,
+        device_posture: None,
+    })
+    .context("Failed to set viewport dimensions")?;
+    Ok(())
 }
 
 pub struct PageSession {
@@ -1348,6 +1407,38 @@ impl PageSession {
         }
     }
 
+    /// Retrieve the actual browser viewport dimensions via JavaScript.
+    ///
+    /// Falls back to the default 800×600 constants if the CDP call fails, so that
+    /// captures remain functional even when the browser context is unavailable.
+    fn get_viewport_dimensions(&self) -> ViewportDimensions {
+        let script = "JSON.stringify({width: window.innerWidth, height: window.innerHeight})";
+        let Ok(value) = self.evaluate_script_value(script, false) else {
+            return ViewportDimensions::default();
+        };
+        let Some(json_str) = value.as_str() else {
+            return ViewportDimensions::default();
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) else {
+            return ViewportDimensions::default();
+        };
+        let width = parsed
+            .get("width")
+            .and_then(|v| v.as_f64())
+            .filter(|&w| w > 0.0);
+        let height = parsed
+            .get("height")
+            .and_then(|v| v.as_f64())
+            .filter(|&h| h > 0.0);
+        match (width, height) {
+            (Some(w), Some(h)) => ViewportDimensions {
+                width: w,
+                height: h,
+            },
+            _ => ViewportDimensions::default(),
+        }
+    }
+
     fn capture_state_with_refinement(
         &self,
         profile: LoadProfile,
@@ -1356,13 +1447,15 @@ impl PageSession {
         cached_paths: Option<&HashMap<String, Vec<usize>>>,
     ) -> Result<SemanticState> {
         let root = self.get_document_node()?;
+        let viewport = self.get_viewport_dimensions();
         let normalized_dirty_paths = normalize_dirty_paths(dirty_paths);
         let sem_root = if let (Some(cached_root), Some(cached_paths)) = (cached_root, cached_paths)
         {
             if !normalized_dirty_paths.is_empty() && !cached_paths.is_empty() {
-                normalize_dom_with_refinement(
+                normalize_dom_with_viewport_and_refinement(
                     profile,
                     &root,
+                    viewport,
                     SubtreeRefinementConfig {
                         dirty_paths: &normalized_dirty_paths,
                         cached_paths,
@@ -1370,10 +1463,10 @@ impl PageSession {
                     },
                 )?
             } else {
-                normalize_dom(profile, &root)?
+                normalize_dom_with_viewport(profile, &root, viewport)?
             }
         } else {
-            normalize_dom(profile, &root)?
+            normalize_dom_with_viewport(profile, &root, viewport)?
         };
         self.replace_stable_key_index(&sem_root);
         Ok(SemanticState::new(sem_root, profile))
@@ -1440,7 +1533,8 @@ impl PageSession {
 
     fn capture_som(&self, trigger: SomTrigger) -> Result<VisualCapture> {
         let root = self.get_document_node()?;
-        let semantic_root = normalize_dom(LoadProfile::Visual, &root)?;
+        let viewport = self.get_viewport_dimensions();
+        let semantic_root = normalize_dom_with_viewport(LoadProfile::Visual, &root, viewport)?;
 
         let mut marks = Vec::new();
         self.collect_som_marks(&semantic_root, &mut marks);
