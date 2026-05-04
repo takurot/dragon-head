@@ -36,4 +36,5 @@ path = "../examples/policy_cookbook.rs"
 urlencoding = "2.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 jsonschema = "0.37"
+tempfile = "3.10"
 test-bench-support = { path = "../test-bench-support" }

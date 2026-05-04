@@ -1,3 +1,4 @@
+use crate::audit_sink::AuditSink;
 use crate::privacy;
 use crate::sre::SemanticState;
 use crossbeam_channel::{unbounded, Sender};
@@ -91,6 +92,12 @@ impl Default for AuditLogger {
 
 impl AuditLogger {
     pub fn new() -> Self {
+        Self::with_sinks(Vec::new())
+    }
+
+    /// Create a logger that fans every sanitized event out to `sinks` in
+    /// addition to the in-memory buffer and optional stdout output.
+    pub fn with_sinks(sinks: Vec<Box<dyn AuditSink>>) -> Self {
         const MAX_RECENT_EVENTS: usize = 512;
 
         let (sender, receiver) = unbounded::<AuditMessage>();
@@ -130,11 +137,17 @@ impl AuditLogger {
                     );
                 }
 
-                if !stdout_enabled {
-                    continue;
+                // Fan out to persistent sinks (RollingFileSink, WebhookSink, …).
+                for sink in &sinks {
+                    if let Err(e) = sink.write(&sanitized) {
+                        eprintln!("[AUDIT][ERROR] Sink '{}' failed: {}", sink.name(), e);
+                    }
                 }
-                if let Ok(json) = serde_json::to_string(&sanitized) {
-                    println!("[AUDIT] {}", json);
+
+                if stdout_enabled {
+                    if let Ok(json) = serde_json::to_string(&sanitized) {
+                        println!("[AUDIT] {}", json);
+                    }
                 }
             }
         });

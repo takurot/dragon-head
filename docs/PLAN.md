@@ -96,16 +96,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [ ] アクション実行前に構造化された副作用データが提示される。
 
 ### PR-24: Persistent Audit Hardening (Rolling File & SIEM)
-- Status: `NOT_STARTED`
+- Status: `DONE`
 - Spec Ref: Section 3.4, ISSUE-09, ISSUE-14
 - Dependencies: PR-10
 - 実装タスク
-  - [ ] `RollingFileSink` と `WebhookSink` (SIEM) の実装。
-  - [ ] 非同期ログ書き込みの信頼性向上（Retry / Backpressure）。
+  - [x] `RollingFileSink` と `WebhookSink` (SIEM) の実装。
+  - [x] 非同期ログ書き込みの信頼性向上（Retry / Backpressure）。
 - テストタスク
-  - [ ] 高負荷バースト時のログ欠損ゼロ検証。
+  - [x] 高負荷バースト時のログ欠損ゼロ検証。
 - Exit Criteria
-  - [ ] 長期保存可能な監査トレースが外部システムと連携される。
+  - [x] 長期保存可能な監査トレースが外部システムと連携される。
 
 ### PR-25: Slack/Teams HITL Reference Implementation
 - Status: `NOT_STARTED`
