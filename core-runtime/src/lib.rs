@@ -19,6 +19,7 @@ pub use browser::{
     SemanticWaitState, SomMark, SomTrigger, VisualCapture,
 };
 pub mod error;
+pub use audit_sink::DurabilityMode;
 pub use chrome_detection::chrome_available;
 pub use error::{ActionError, VerifyError, WaitError};
 pub use plugin_hooks::PluginHookConfig;
