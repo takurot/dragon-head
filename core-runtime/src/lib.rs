@@ -3,6 +3,7 @@ pub mod browser;
 pub mod chrome_detection;
 pub mod plugin_hooks;
 pub mod policy;
+pub mod privacy;
 pub mod session_vault;
 pub mod sre;
 
