@@ -41,8 +41,118 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 7 | Marketplace | PR-17 | 1/1 | DONE |
 | 8 | Robustness & Verification | PR-18 | 1/1 | DONE |
 | 9 | Comprehensive Evaluation Bench | PR-19 | 1/1 | DONE |
+| 10 | Cathedral Edition (Commercialization) | PR-20〜28 | 0/9 | NOT_STARTED |
 
 ## 3. PRバックログ（進捗チェック付き）
+
+### PR-20: Speculative State Generation Pipeline
+- Status: `NOT_STARTED`
+- Spec Ref: Section 3.5, ISSUE-10
+- Dependencies: PR-08, PR-14
+- 実装タスク
+  - [ ] `core-runtime/src/speculative/mod.rs` を新設し予測エンジンを実装。
+  - [ ] `flatbuffers` によるモデルのシリアライズ/デシリアライズを実装。
+  - [ ] 予測失敗時の `StateDelta::Mismatch` とリプレイ・デバッグ用のスナップショット保存を実装。
+- テストタスク
+  - [ ] 意図的な予測ミス（Drift Injection）によるバックトラッキングの検証。
+- Exit Criteria
+  - [ ] 予測的中時に TTFT < 10ms を達成。
+
+### PR-21: Self-Healing Context Recovery Layer
+- Status: `NOT_STARTED`
+- Spec Ref: Section 3.6, ISSUE-11
+- Dependencies: PR-03, PR-04
+- 実装タスク
+  - [ ] `DOMSignatureCache` による成功操作パターンの永続化。
+  - [ ] `stable_key` 喪失時のファジーマッチング修復ロジックの実装。
+  - [ ] 修復不能時の自動 `ask_human` フォールバック。
+- テストタスク
+  - [ ] 大幅な UI 変更 fixture に対する自動修復成功率の検証。
+- Exit Criteria
+  - [ ] 修復成功時に `verify` 要求なしでアクションが継続される。
+
+### PR-22: "Deep Lens" Zero-Code Extraction DSL
+- Status: `NOT_STARTED`
+- Spec Ref: Section 4.3, ISSUE-12
+- Dependencies: PR-12, PR-14
+- 実装タスク
+  - [ ] YAML/JSON ベースの抽出 DSL パーサーと `SchemaRegistry` の実装。
+  - [ ] Wasm Plugin Host 経由での型安全な抽出実行。
+- テストタスク
+  - [ ] `Golden Dataset` を用いた抽出精度（Accuracy 100%）の検証。
+- Exit Criteria
+  - [ ] スクリーンスクレイピング・コードなしでの構造化データ取得が可能。
+
+### PR-23: "Guardian Angel" & Outcome Projection
+- Status: `NOT_STARTED`
+- Spec Ref: Section 3.7, ISSUE-13
+- Dependencies: PR-09, PR-14
+- 実装タスク
+  - [ ] `PolicyEngine` への副作用予測（Outcome Projection）シミュレータ統合。
+  - [ ] 予測データに基づくプロアクティブな実行ブロックと HITL 通知。
+- テストタスク
+  - [ ] 高額決済等の閾値超過シナリオでの自動ブロックと通知内容の検証。
+- Exit Criteria
+  - [ ] アクション実行前に構造化された副作用データが提示される。
+
+### PR-24: Persistent Audit Hardening (Rolling File & SIEM)
+- Status: `NOT_STARTED`
+- Spec Ref: Section 3.4, ISSUE-09, ISSUE-14
+- Dependencies: PR-10
+- 実装タスク
+  - [ ] `RollingFileSink` と `WebhookSink` (SIEM) の実装。
+  - [ ] 非同期ログ書き込みの信頼性向上（Retry / Backpressure）。
+- テストタスク
+  - [ ] 高負荷バースト時のログ欠損ゼロ検証。
+- Exit Criteria
+  - [ ] 長期保存可能な監査トレースが外部システムと連携される。
+
+### PR-25: Slack/Teams HITL Reference Implementation
+- Status: `NOT_STARTED`
+- Spec Ref: Section 5.2, ISSUE-15
+- Dependencies: PR-14, PR-23
+- 実装タスク
+  - [ ] Slack App 連携リファレンス実装（画像 + 未来投影データ付き）。
+  - [ ] セッションレベルの二重承認防止ロック。
+- テストタスク
+  - [ ] 複数人による同時承認リクエストの競合回避検証。
+- Exit Criteria
+  - [ ] チャットツール経由で安全に HITL 判断を完走できる。
+
+### PR-26: Shared Wasm Engine & Performance Tuning
+- Status: `NOT_STARTED`
+- Spec Ref: Section 4.1, ISSUE-16
+- Dependencies: PR-12
+- 実装タスク
+  - [ ] `wasmtime` Engine のグローバル共有とコンパイル済みモジュールのキャッシュ。
+  - [ ] Epoch-based Interruption による暴走プラグインの強制遮断。
+- テストタスク
+  - [ ] 大量プラグインロード時のメモリ消費と起動レイテンシの計測。
+- Exit Criteria
+  - [ ] プラグイン起動時間が 1ms 以下に短縮。
+
+### PR-27: Unified PII Redactor Utility
+- Status: `DONE`
+- Spec Ref: Section 3.4, ISSUE-08, ISSUE-17
+- Dependencies: PR-02, PR-10
+- 実装タスク
+  - [x] `core-runtime/src/privacy.rs` へのマスクロジック集約と強制フック実装。
+- テストタスク
+  - [x] あらゆる経路（SRE/Audit/Deep Lens）でのマスク漏れゼロ検証。
+- Exit Criteria
+  - [x] 機密データが AI モデルやログに未加工で流れないことが保証される。
+
+### PR-28: Side-by-side ROI Comparison Tool
+- Status: `NOT_STARTED`
+- Spec Ref: Section 8.1, ISSUE-18
+- Dependencies: PR-14, PR-15
+- 実装タスク
+  - [ ] Playwright 比較ベンチマーク・ハーネスの実装。
+  - [ ] トークン・コスト削減効果の自動レポート生成。
+- テストタスク
+  - [ ] 代表的な EC/業務サイトでの削減率実測。
+- Exit Criteria
+  - [ ] 導入メリットを定量的に示す Markdown レポートが出力可能。
 
 ### PR-00: Test Strategy & CI Foundation
 - Status: `DONE` (Local)

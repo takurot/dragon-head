@@ -11,6 +11,7 @@ use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TryRecvErro
 use thiserror::Error;
 
 use super::{FastSemanticState, FullSemanticState, SemanticState};
+use crate::privacy;
 
 const SRE_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -329,16 +330,19 @@ fn spawn_sre_worker(
 }
 
 fn process_sre_task(task: SreTask, metrics: &PipelineMetricsInner, full_stage_delay: Duration) {
+    let redactor = privacy::global();
     match task {
         SreTask::Fast { state, tx } => {
-            let _ = tx.send(state.generate_fast_state());
+            let redacted = redactor.redact_fast_state(state.generate_fast_state());
+            let _ = tx.send(redacted);
             metrics.fast_completed.fetch_add(1, Ordering::Relaxed);
         }
         SreTask::Full { state, tx } => {
             if !full_stage_delay.is_zero() {
                 thread::sleep(full_stage_delay);
             }
-            let _ = tx.send(state.generate_full_state());
+            let redacted = redactor.redact_full_state(state.generate_full_state());
+            let _ = tx.send(redacted);
             metrics.full_completed.fetch_add(1, Ordering::Relaxed);
         }
     }
