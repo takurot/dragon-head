@@ -42,11 +42,56 @@ The system consists of a 3-layer structure and an asynchronous internal pipeline
 - **Structured Audit Log**: Records full state snapshots, deltas, tool calls, and policy decisions.
 - **Session Vault**: Securely persists authentication credentials (Cookie/Token) using AES-256.
 
+## Quick Start
+
+```bash
+git clone <repo-url>
+cd dragon-head
+cargo run --example quickstart
+```
+
+Expected output:
+
+```
+=== Dragon Head Quickstart ===
+
+[1] SemanticState constructed
+    page_instance_id : <uuid>
+    state_hash       : <sha256-hex>
+    load_profile     : Minimal
+
+[2] Fast State generated
+    interactive_elements : 2
+    messages             : 1
+      → role=input     alias=input_email      stable_key=b2c3d4e5...
+      → role=button    alias=btn_purchase     stable_key=a1b2c3d4...
+
+[3] PolicyEngine loaded with 1 rule(s)
+    safe.example.com               → Allow
+    blocked-domain.example.com     → Block
+
+[4] MCP get_state response (JSON):
+{ "metadata": { ... }, "interactive_elements": [ ... ] }
+
+=== Done — no credentials required ===
+```
+
+No Chrome instance or paid credentials needed. See [`examples/README.md`](examples/README.md) for a full guide including the policy cookbook, MCP JSON contract examples, and the sample skill definition.
+
 ## Developer Guide
 
 ### Prerequisites
 - Rust (latest stable)
-- Chromium installed
+- Chromium installed (only required for browser integration tests)
+
+### Running Examples
+```bash
+# Core concepts — no browser required
+cargo run --example quickstart
+
+# Policy rule cookbook — no browser required
+cargo run --example policy_cookbook
+```
 
 ### Running Tests
 ```bash

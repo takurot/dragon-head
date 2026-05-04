@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "checkout",
+  "steps": [
+    {
+      "type": "locate",
+      "id": "find_email_input",
+      "query": "input[type=email]"
+    },
+    {
+      "type": "verify",
+      "id": "check_email_field_present",
+      "target": "id:43",
+      "expected": "Email address"
+    },
+    {
+      "type": "act",
+      "id": "fill_email",
+      "action": "type",
+      "target": "id:43",
+      "value": "{{email}}"
+    },
+    {
+      "type": "verify",
+      "id": "check_purchase_button_enabled",
+      "target": "id:42",
+      "expected": "Purchase"
+    },
+    {
+      "type": "act",
+      "id": "click_purchase",
+      "action": "click",
+      "target": "id:42"
+    },
+    {
+      "type": "wait",
+      "id": "wait_for_confirmation",
+      "condition": "intent:checkout_complete",
+      "timeout_ms": 5000
+    },
+    {
+      "type": "extract",
+      "id": "extract_order_id",
+      "key": "order_id",
+      "selector": "#order-confirmation-number"
+    }
+  ]
+}

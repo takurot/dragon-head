@@ -24,6 +24,14 @@ pbkdf2 = "0.12"
 rand = "0.9"
 hmac = "0.12"
 
+[[example]]
+name = "quickstart"
+path = "../examples/quickstart.rs"
+
+[[example]]
+name = "policy_cookbook"
+path = "../examples/policy_cookbook.rs"
+
 [dev-dependencies]
 urlencoding = "2.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
