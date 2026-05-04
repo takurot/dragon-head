@@ -139,6 +139,7 @@ pub struct BrowserClient {
     inner: Browser,
     vault: Arc<dyn SessionVault>,
     plugin_hooks: Arc<PluginHookConfig>,
+    viewport_size: Option<(u32, u32)>,
 }
 
 impl BrowserClient {
@@ -175,6 +176,19 @@ impl BrowserClient {
         Self::new_with_vault_and_path(vault, chrome_path)
     }
 
+    /// Create a `BrowserClient` with an explicit window size.
+    ///
+    /// Used in tests to verify that different viewport dimensions produce
+    /// different stable_key quadrant assignments for the same element.
+    pub fn new_with_window_size(width: u32, height: u32) -> Result<Self> {
+        use rand::RngCore;
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
+        let vault = Arc::new(LocalSessionVault::new(kms));
+        Self::new_with_vault_and_size(vault, width, height)
+    }
+
     pub fn new_with_vault(vault: Arc<dyn SessionVault>) -> Result<Self> {
         Self::new_with_vault_and_path(vault, None)
     }
@@ -203,11 +217,33 @@ impl BrowserClient {
             inner: browser,
             vault,
             plugin_hooks: Arc::new(plugin_hooks),
+            viewport_size: None,
+        })
+    }
+
+    fn new_with_vault_and_size(
+        vault: Arc<dyn SessionVault>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let mut builder = LaunchOptions::default_builder();
+        builder.headless(true).window_size(Some((width, height)));
+        let options = builder.build().context("Failed to build launch options")?;
+
+        let browser = Browser::new(options).context("Failed to launch browser")?;
+        Ok(Self {
+            inner: browser,
+            vault,
+            plugin_hooks: Arc::new(PluginHookConfig::default()),
+            viewport_size: Some((width, height)),
         })
     }
 
     pub fn new_page(&self) -> Result<PageSession> {
         let tab = self.inner.new_tab().context("Failed to create new tab")?;
+        if let Some((width, height)) = self.viewport_size {
+            apply_viewport_size(&tab, width, height)?;
+        }
         Ok(PageSession {
             inner: tab,
             som_pipeline: Arc::new(Mutex::new(SomPipelineState::default())),
@@ -222,6 +258,29 @@ impl BrowserClient {
             plugin_hooks: Arc::clone(&self.plugin_hooks),
         })
     }
+}
+
+fn apply_viewport_size(tab: &headless_chrome::Tab, width: u32, height: u32) -> Result<()> {
+    use headless_chrome::protocol::cdp::Emulation::SetDeviceMetricsOverride;
+
+    tab.call_method(SetDeviceMetricsOverride {
+        width,
+        height,
+        device_scale_factor: 1.0,
+        mobile: false,
+        scale: None,
+        screen_width: Some(width),
+        screen_height: Some(height),
+        position_x: None,
+        position_y: None,
+        dont_set_visible_size: None,
+        screen_orientation: None,
+        viewport: None,
+        display_feature: None,
+        device_posture: None,
+    })
+    .context("Failed to set viewport dimensions")?;
+    Ok(())
 }
 
 pub struct PageSession {

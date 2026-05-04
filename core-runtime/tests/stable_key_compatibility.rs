@@ -3,6 +3,7 @@ use core_runtime::sre::{
     normalize_dom, normalize_dom_with_viewport, normalize_dom_with_viewport_and_refinement,
     LoadProfile, SubtreeRefinementConfig, ViewportDimensions,
 };
+use core_runtime::{BrowserClient, PageSession};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
@@ -396,4 +397,100 @@ fn test_refinement_cache_invalidated_on_viewport_change() {
         refined_key, cached_key,
         "refinement path must NOT reuse the cached key from the old viewport"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Browser-backed smoke test: actual viewport from running Chrome
+// Skipped automatically if Chrome is not available (CI-friendly).
+// ---------------------------------------------------------------------------
+
+/// Smoke test: start two real Chrome instances with different window sizes
+/// (desktop 1280x720 vs mobile 375x812), load the same fixture HTML, and
+/// confirm that an element straddling a quadrant boundary gets a different
+/// stable_key in each run.
+///
+/// This is the automated equivalent of the manual smoke test:
+/// "navigate to a page with a wide viewport and confirm stable_key quadrant
+/// differs from a narrow viewport for straddling elements."
+#[test]
+fn test_browser_backed_viewport_affects_stable_key() -> anyhow::Result<()> {
+    if !core_runtime::chrome_available() {
+        return Ok(());
+    }
+
+    // HTML fixture: a button whose style places it near the center
+    // of a 1280x720 desktop layout. On a 375x812
+    // mobile layout that same CSS position falls in a different horizontal half.
+    let fixture_html = r#"<!DOCTYPE html><html><body style="margin:0;padding:0;">
+<button id="cta"
+        style="position:absolute;left:640px;top:360px;width:120px;height:40px;">
+  Buy now
+</button>
+</body></html>"#;
+
+    let url = format!("data:text/html,{}", urlencoding::encode(fixture_html));
+
+    // --- desktop viewport (1280x720): button at 640px is on the center edge ---
+    let desktop = BrowserClient::new_with_window_size(1280, 720)?;
+    let desktop_page = desktop.new_page()?;
+    desktop_page.navigate(&url)?;
+    assert_eq!(evaluate_viewport(&desktop_page)?, (1280, 720));
+    let desktop_state = desktop_page.capture_semantic_state(LoadProfile::Interactive)?;
+
+    // --- mobile viewport (375x812): same button at 640px is to the right of the viewport ---
+    let mobile = BrowserClient::new_with_window_size(375, 812)?;
+    let mobile_page = mobile.new_page()?;
+    mobile_page.navigate(&url)?;
+    assert_eq!(evaluate_viewport(&mobile_page)?, (375, 812));
+    let mobile_state = mobile_page.capture_semantic_state(LoadProfile::Interactive)?;
+
+    // Extract the stable_key for the "Buy now" button in both captures.
+    fn find_button_key(state: &core_runtime::sre::SemanticState) -> Option<String> {
+        fn search(node: &core_runtime::sre::SemanticNode) -> Option<String> {
+            if node.role.as_str() == "button" {
+                return node.stable_key.clone();
+            }
+            for child in &node.children {
+                if let Some(k) = search(child) {
+                    return Some(k);
+                }
+            }
+            None
+        }
+        search(state.root())
+    }
+
+    let desktop_key =
+        find_button_key(&desktop_state).expect("desktop capture must find the button");
+    let mobile_key = find_button_key(&mobile_state).expect("mobile capture must find the button");
+
+    assert_ne!(
+        desktop_key, mobile_key,
+        "stable_key for an element straddling a quadrant boundary must differ \
+         between desktop (1280x720) and mobile (375x812) viewports\n\
+         desktop key: {desktop_key}\n\
+         mobile  key: {mobile_key}"
+    );
+
+    Ok(())
+}
+
+fn evaluate_viewport(page: &PageSession) -> anyhow::Result<(u32, u32)> {
+    let value = page.evaluate_script(
+        "JSON.stringify({width: window.innerWidth, height: window.innerHeight})",
+    )?;
+    let raw = value
+        .value
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .ok_or_else(|| anyhow::anyhow!("viewport script did not return a JSON string"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw)?;
+    let width = parsed
+        .get("width")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("viewport width was missing"))?;
+    let height = parsed
+        .get("height")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("viewport height was missing"))?;
+    Ok((width as u32, height as u32))
 }
