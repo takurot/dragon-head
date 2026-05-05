@@ -3,3 +3,11 @@ target/
 *.swp
 *.log
 .env
+
+# Agent and session specific files
+.agents/
+.claude/
+AGENTS.md
+CLAUDE.md
+commercial_issues.md
+docs/ceo-plans/**

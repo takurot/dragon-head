@@ -91,10 +91,17 @@ fn test_som_generated_by_act_ambiguous_trigger() -> anyhow::Result<()> {
     let action_err = err
         .downcast_ref::<core_runtime::ActionError>()
         .expect("error should be ActionError");
-    assert!(matches!(
-        action_err,
-        core_runtime::ActionError::VerifyRequired
-    ));
+    // With Self-Healing recovery (PR-21): if stable_key is provided but cache
+    // has no prior signature, recovery fails and returns AskHumanRequired.
+    // Both are valid terminal errors for this scenario.
+    assert!(
+        matches!(
+            action_err,
+            core_runtime::ActionError::VerifyRequired
+                | core_runtime::ActionError::AskHumanRequired { .. }
+        ),
+        "expected VerifyRequired or AskHumanRequired, got: {action_err:?}"
+    );
 
     assert_eq!(page.som_generation_count(), 1);
     let capture = page

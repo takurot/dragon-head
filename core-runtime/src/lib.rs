@@ -2,6 +2,7 @@ pub mod audit;
 pub mod audit_sink;
 pub mod browser;
 pub mod chrome_detection;
+pub mod dom_signature;
 pub mod plugin_hooks;
 pub mod policy;
 pub mod privacy;

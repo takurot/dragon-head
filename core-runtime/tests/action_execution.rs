@@ -158,22 +158,39 @@ fn test_action_execution_verify_required() -> anyhow::Result<()> {
     assert!(result.is_err());
     let err = result.unwrap_err();
 
-    // Check if error is ActionError::VerifyRequired
+    // With Self-Healing recovery (PR-21): if stable_key is provided but the
+    // DOMSignatureCache has no prior signature, recovery fails and returns
+    // AskHumanRequired. Both VerifyRequired and AskHumanRequired are valid
+    // terminal errors when both target_id and stable_key fail.
     if let Some(action_err) = err.downcast_ref::<core_runtime::error::ActionError>() {
-        if matches!(action_err, core_runtime::error::ActionError::VerifyRequired) {
-            let logs = page.action_logs()?;
-            assert!(
-                logs.iter().any(|entry| {
-                    entry.level == "error"
-                        && entry.code == "verify_required"
-                        && entry.action == "click"
-                }),
-                "Expected structured error log for verify required path"
-            );
-            return Ok(());
+        match action_err {
+            core_runtime::error::ActionError::VerifyRequired => {
+                let logs = page.action_logs()?;
+                assert!(
+                    logs.iter().any(|entry| {
+                        entry.level == "error"
+                            && entry.code == "verify_required"
+                            && entry.action == "click"
+                    }),
+                    "Expected structured error log for verify required path"
+                );
+                return Ok(());
+            }
+            core_runtime::error::ActionError::AskHumanRequired { .. } => {
+                let logs = page.action_logs()?;
+                assert!(
+                    logs.iter().any(|entry| {
+                        entry.level == "error"
+                            && entry.code == "ask_human_required"
+                            && entry.action == "click"
+                    }),
+                    "Expected structured error log for ask_human_required path"
+                );
+                return Ok(());
+            }
+            other => panic!("Expected VerifyRequired or AskHumanRequired, got: {other:?}"),
         }
-        panic!("Expected VerifyRequired, got ActionError variant: {action_err:?}");
     }
 
-    panic!("Expected ActionError::VerifyRequired, got: {:?}", err);
+    panic!("Expected ActionError, got: {:?}", err);
 }

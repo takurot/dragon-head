@@ -59,17 +59,17 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [ ] 予測的中時に TTFT < 10ms を達成。
 
 ### PR-21: Self-Healing Context Recovery Layer
-- Status: `NOT_STARTED`
+- Status: `DONE`
 - Spec Ref: Section 3.6, ISSUE-11
 - Dependencies: PR-03, PR-04
 - 実装タスク
-  - [ ] `DOMSignatureCache` による成功操作パターンの永続化。
-  - [ ] `stable_key` 喪失時のファジーマッチング修復ロジックの実装。
-  - [ ] 修復不能時の自動 `ask_human` フォールバック。
+  - [x] `DOMSignatureCache` による成功操作パターンの永続化。
+  - [x] `stable_key` 喪失時のファジーマッチング修復ロジックの実装。
+  - [x] 修復不能時の自動 `ask_human` フォールバック。
 - テストタスク
-  - [ ] 大幅な UI 変更 fixture に対する自動修復成功率の検証。
+  - [x] 大幅な UI 変更 fixture に対する自動修復成功率の検証。
 - Exit Criteria
-  - [ ] 修復成功時に `verify` 要求なしでアクションが継続される。
+  - [x] 修復成功時に `verify` 要求なしでアクションが継続される。
 
 ### PR-22: "Deep Lens" Zero-Code Extraction DSL
 - Status: `NOT_STARTED`
