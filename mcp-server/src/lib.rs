@@ -916,6 +916,10 @@ impl McpBackend for CoreRuntimeBackend {
                             "rule_id": rule_id,
                             "scope": approval_scope_name(*scope)
                         }),
+                        ActionError::AskHumanRequired { reason } => json!({
+                            "status": "ask_human_required",
+                            "reason": reason
+                        }),
                     };
                     return Ok(payload);
                 }

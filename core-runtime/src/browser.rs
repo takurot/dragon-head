@@ -13,6 +13,7 @@ use std::{
 
 use crate::{
     audit::{AuditEvent, AuditLogger},
+    dom_signature::DOMSignatureCache,
     error::{ActionError, VerifyError, WaitError},
     plugin_hooks::{run_policy_hooks, run_state_hooks, PluginHookConfig, PolicyHookOutcome},
     policy::{ApprovalScope, PolicyAction, PolicyContext, PolicyEngine, PolicyRule},
@@ -256,6 +257,7 @@ impl BrowserClient {
             semantic_capture_cache: Arc::new(Mutex::new(SemanticCaptureCache::default())),
             vault: Arc::clone(&self.vault),
             plugin_hooks: Arc::clone(&self.plugin_hooks),
+            dom_signature_cache: Arc::new(DOMSignatureCache::new()),
         })
     }
 }
@@ -295,6 +297,8 @@ pub struct PageSession {
     semantic_capture_cache: Arc<Mutex<SemanticCaptureCache>>,
     vault: Arc<dyn SessionVault>,
     plugin_hooks: Arc<PluginHookConfig>,
+    /// Self-Healing Context Recovery cache (PR-21 / ISSUE-11).
+    dom_signature_cache: Arc<DOMSignatureCache>,
 }
 
 impl PageSession {
@@ -925,20 +929,36 @@ impl PageSession {
                     stable_key,
                     &format!("Action recovered via stable key: {key} -> new_id: {new_id}"),
                 );
+                // Record a fresh signature for the successfully located node.
+                self.record_dom_signature_for_node_id(key, new_id);
                 return self.perform_action_by_id(new_id, action, value);
-            } else {
-                // Both failures -> VerifyRequired
-                self.record_action_log(
-                    "error",
-                    "verify_required",
-                    action,
-                    target_id,
-                    stable_key,
-                    &format!("target_id/stable_key lookup failed for stable_key={key}"),
-                );
-                self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
-                return Err(ActionError::VerifyRequired.into());
             }
+
+            // Both target_id and stable_key lookup failed →
+            // attempt Self-Healing Context Recovery (PR-21).
+            if let Some(recovered_id) = self.try_self_healing_recovery(key) {
+                return self.perform_action_by_id(recovered_id, action, value);
+            }
+
+            // Recovery failed → AskHumanRequired fallback.
+            self.record_action_log(
+                "error",
+                "ask_human_required",
+                action,
+                target_id,
+                stable_key,
+                &format!(
+                    "Self-healing recovery failed for stable_key={key}; human intervention required"
+                ),
+            );
+            self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
+            return Err(ActionError::AskHumanRequired {
+                reason: format!(
+                    "target_id and stable_key both failed for key={key}; \
+                     self-healing found no confident match"
+                ),
+            }
+            .into());
         }
 
         // If we reach here, we had no stable key or it failed lookup, and target_id failed or wasn't provided.
@@ -956,6 +976,98 @@ impl PageSession {
         self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
         Err(ActionError::VerifyRequired.into())
     }
+
+    // -------------------------------------------------------------------------
+    // Self-Healing Context Recovery helpers (PR-21 / ISSUE-11)
+    // -------------------------------------------------------------------------
+
+    /// Attempt to recover a `backend_node_id` via `DOMSignatureCache` fuzzy
+    /// matching when both `target_id` and `stable_key` index lookup have failed.
+    ///
+    /// On a confident match the cache is updated with the new `stable_key`→node
+    /// mapping (learning), and the `backend_node_id` of the matched node is
+    /// returned.  Returns `None` if no candidate exceeds the recovery threshold.
+    fn try_self_healing_recovery(&self, stable_key: &str) -> Option<i64> {
+        // Collect all interactive nodes from the current semantic snapshot.
+        let state = self
+            .semantic_capture_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.last_state.clone())?;
+
+        let candidates = Self::collect_interactive_nodes(state.root());
+
+        let matched = self
+            .dom_signature_cache
+            .find_best_match(stable_key, &candidates)?;
+
+        let new_id = matched.backend_node_id;
+        if new_id == 0 {
+            return None;
+        }
+
+        // Learning: update cache with the newly discovered node.
+        self.dom_signature_cache.record(stable_key, matched);
+
+        self.record_action_log(
+            "warning",
+            "self_healing_recovered",
+            "self_healing",
+            None,
+            Some(stable_key),
+            &format!(
+                "Self-Healing: fuzzy match recovered stable_key={stable_key} \
+                 to backend_node_id={new_id} (role={}, label={:?})",
+                matched.role, matched.label,
+            ),
+        );
+
+        Some(new_id)
+    }
+
+    /// Record a `NodeSignature` in the `DOMSignatureCache` for the node
+    /// identified by `backend_node_id` in the current stable_key index.
+    fn record_dom_signature_for_node_id(&self, stable_key: &str, backend_node_id: i64) {
+        // Walk the current semantic snapshot to find the node.
+        let Some(state) = self
+            .semantic_capture_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.last_state.clone())
+        else {
+            return;
+        };
+
+        fn find_node(root: &SemanticNode, id: i64) -> Option<&SemanticNode> {
+            if root.backend_node_id == id {
+                return Some(root);
+            }
+            root.children.iter().find_map(|c| find_node(c, id))
+        }
+
+        if let Some(node) = find_node(state.root(), backend_node_id) {
+            self.dom_signature_cache.record(stable_key, node);
+        }
+    }
+
+    /// Collect all interactive leaf nodes from a DOM tree (flat, depth-first).
+    fn collect_interactive_nodes(root: &SemanticNode) -> Vec<SemanticNode> {
+        let mut out = Vec::new();
+        Self::collect_nodes_recursive(root, &mut out);
+        out
+    }
+
+    fn collect_nodes_recursive(node: &SemanticNode, out: &mut Vec<SemanticNode>) {
+        // Include nodes that have a non-zero backend_node_id (live DOM elements).
+        if node.backend_node_id != 0 {
+            out.push(node.clone());
+        }
+        for child in &node.children {
+            Self::collect_nodes_recursive(child, out);
+        }
+    }
+
+    // -------------------------------------------------------------------------
 
     fn record_action_log(
         &self,
