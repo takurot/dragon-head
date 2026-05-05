@@ -211,3 +211,41 @@ fn cache_learning_updates_signature_after_recovery() {
         "post-learning recovery must still find a match"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Ambiguous tie rejection (Fix 3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ambiguous_tie_is_rejected() {
+    let cache = DOMSignatureCache::new();
+    cache.record("key-del", &node("button", Some("Delete"), None, 0));
+
+    // Two identical candidates — tied score must result in no recovery.
+    let candidates = vec![
+        node("button", Some("Delete"), None, 10),
+        node("button", Some("Delete"), None, 11),
+    ];
+    let result = cache.find_best_match("key-del", &candidates);
+    assert!(
+        result.is_none(),
+        "tied candidates must not recover to avoid wrong-element action"
+    );
+}
+
+#[test]
+fn unambiguous_winner_is_accepted() {
+    let cache = DOMSignatureCache::new();
+    cache.record(
+        "key-ok",
+        &node("button", Some("Confirm order"), Some("confirm"), 0),
+    );
+
+    let candidates = vec![
+        node("button", Some("Confirm order"), Some("confirm"), 42), // clear winner
+        node("button", Some("Cancel"), None, 5),                    // low score
+    ];
+    let result = cache.find_best_match("key-ok", &candidates);
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().backend_node_id, 42);
+}

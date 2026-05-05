@@ -880,7 +880,13 @@ impl PageSession {
         // First attempt: use target_id if available
         if let Some(bid) = target_id {
             match self.perform_action_by_id(bid, action, value) {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    // Seed the DOMSignatureCache so future stale-key recovery can use it.
+                    if let Some(key) = stable_key {
+                        self.record_dom_signature_for_node_id(key, bid);
+                    }
+                    return Ok(());
+                }
                 Err(e) => {
                     // Only fallback if the error indicates a node issue (e.g. "Could not find node", "No node with given id")
                     // If it's a timeout or other error, we probably shouldn't blindly retry?
@@ -937,6 +943,9 @@ impl PageSession {
             // Both target_id and stable_key lookup failed →
             // attempt Self-Healing Context Recovery (PR-21).
             if let Some(recovered_id) = self.try_self_healing_recovery(key) {
+                // Re-enforce policy against the recovered node so target-text /
+                // surrounding-context rules are evaluated on the actual target.
+                self.enforce_policy(Some(recovered_id), Some(key), action)?;
                 return self.perform_action_by_id(recovered_id, action, value);
             }
 
@@ -1009,6 +1018,11 @@ impl PageSession {
         // Learning: update cache with the newly discovered node.
         self.dom_signature_cache.record(stable_key, matched);
 
+        // Redact label before logging to avoid PII leaking via action logs.
+        let redacted_label = matched
+            .label
+            .as_deref()
+            .map(|l| crate::privacy::global().redact_text(l));
         self.record_action_log(
             "warning",
             "self_healing_recovered",
@@ -1018,7 +1032,7 @@ impl PageSession {
             &format!(
                 "Self-Healing: fuzzy match recovered stable_key={stable_key} \
                  to backend_node_id={new_id} (role={}, label={:?})",
-                matched.role, matched.label,
+                matched.role, redacted_label,
             ),
         );
 
