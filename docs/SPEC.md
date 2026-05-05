@@ -1,9 +1,9 @@
 # AI-Native Headless Browser Runtime 統合仕様書
 
 - **Product Name**: Neural-Browser Runtime
-- **Version**: 2.1 (Ready for Engineering)
-- **Date**: 2026-02-10
-- **Status**: Approved
+- **Version**: 2.2 (Cathedral Edition)
+- **Date**: 2026-05-03
+- **Status**: Approved (Roadmap Expanded)
 
 ## 1. エグゼクティブサマリー
 
@@ -14,18 +14,19 @@ Neural-Browser Runtime は、LLM（大規模言語モデル）および VLM（�
 - **Token Efficiency**: 独自の Semantic Rendering Engine (SRE) と差分更新により、LLMへの入力トークンを平均90%削減。
 - **Reliability**: 視覚情報（SoM）と構造情報の同期、および stable_key による自己修復機能で、AIの誤操作（ハルシネーション）を防止。
 - **Compliance**: Policy Engine と監査ログを標準搭載し、企業のセキュリティ要件を満たす「正規の代理実行環境」を提供する。
-- **Speed**: 3段階のパイプライン処理と不要リソースのブロックにより、AIの「思考開始までの待ち時間（Time-to-First-Token）」を50ms以下に抑える。
+- **Speed**: 3段階のパイプライン処理、不要リソースのブロック、および**未来予測パイプライン**により、AIの「思考開始までの待ち時間（Near-Zero TTFT）」を実現。
+- **Resilience**: **セマンティック・ヒーリング**により、UI変更に対する耐性を 99.9% まで向上。
 
 ## 2. システムアーキテクチャ
 
-システムは「3層のレイヤー構造」と、Core Runtime内部の「3本の非同期パイプライン」で構成される。
+システムは「3層のレイヤー構造」と、Core Runtime内部の「4本の非同期パイプライン」で構成される。
 
 ### 2.1 Layer Structure
 
 - **Layer 1: Core Runtime (Rust/C++)**
   Chromium CDP (Chrome DevTools Protocol) をラップし、レンダリング、SRE変換、セキュリティ制御を行う基盤。
-- **Layer 2: Plugin Framework (WebAssembly)**
-  特定のサイトや業務に合わせてState抽出やポリシーを拡張するサンドボックス環境。
+- **Layer 2: Plugin Framework (Wasm Sandbox)**
+  特定のサイトや業務に合わせてState抽出（Deep Lens）やポリシー（Guardian Angel）を拡張するサンドボックス環境。
 - **Layer 3: Skills Engine**
   「商品購入」「求人検索」などのタスクを定義した宣言的ワークフローの実行エンジン。
 
@@ -33,9 +34,10 @@ Neural-Browser Runtime は、LLM（大規模言語モデル）および VLM（�
 
 並列性と応答性を最大化するため、Layer 1内部を非同期分離する。
 
+- **Speculative Queue**: AIの意図を確率的に予測し、次遷移のSREを先行生成。
 - **Render Queue**: DOM更新、レイアウト、必要最小限のペイント。
-- **SRE Queue**: DOM解析、Stable Key生成、差分計算（Renderと並列稼働）。
-- **Audit/Policy Queue**: アクション判定、ログ暗号化・保存（I/Oブロッキングを排除）。
+- **SRE Queue**: DOM解析、Stable Key生成、差分計算。
+- **Audit/Policy Queue**: アクション判定、ログ暗号化・保存。
 
 ## 3. 詳細機能要件 (Core Runtime)
 
@@ -62,7 +64,7 @@ WebページをAI用の構造化データに変換する中核エンジン。
 ### 3.2 Native Set-of-Mark (SoM) & Stable Identity
 VLMとLLMの認識を一致させ、要素特定を堅牢にする。
 
-**ACT-01: Stable Key Generation (修正)**
+**ACT-01: Stable Key Generation**
 - **課題**: 再レンダリングによる id（連番）の変化。
 - **定義**: `stable_key` は SHA-256ハッシュのHex文字列 とする。人間可読な識別子は `alias` フィールドに分離する。
 - **ロジック**: `sha256(role + normalized_label + dom_signature + quadrant)`
@@ -88,7 +90,8 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
 - **Recovery Flow**:
   1. `target_id` で探索 → 失敗。
   2. `target_stable_key` で探索 → ヒットすれば実行し、Warningログ出力。
-  3. 両方失敗 → `verify` 要求を返す。
+  3. 両方失敗 → **Self-Healing Layer** による修復を試行。
+  4. 修復失敗 → `verify` 要求（または自動 `ask_human` フォールバック）を返す。
 
 ### 3.4 Enterprise Security (Policy & Audit)
 
@@ -98,7 +101,7 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
 - **Action**: `allow`, `block`, `require_human_approval`.
 - **Approval Scope**: `action_only` | `until_navigation` | `timeboxed(ms)` を指定可能。
 
-**AUD-01: Structured Audit Log (修正)**
+**AUD-01: Structured Audit Log**
 - **仕様**: 再現・追跡可能なイベントスキーマを定義する。
 - **Event Model**:
   - `STATE_SNAPSHOT`: Full State (初回/Navigation時)
@@ -109,9 +112,30 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
   - `VISUAL_CAPTURE`: SoM画像参照 (Hash)
 - **PII Redaction**: `input[type="password/email"]` およびクレジットカード番号形式をデフォルトでマスク保存。
 
-**SEC-02: Session Vault & Key Management (修正)**
+**SEC-02: Session Vault & Key Management**
 - **機能**: 指定ドメインの認証情報（Cookie/Token）をAES-256で暗号化永続化。
 - **Key Management**: デフォルトはプラットフォーム管理鍵。Enterpriseプランでは BYOK (Customer KMS) をサポートし、鍵ローテーションを強制する。
+
+### 3.5 Speculative State Generation (未来予測)
+AIの思考レイテンシを排除するための先行実行エンジン。
+- **予測ロジック**: セッション履歴とドメイン知識（Domain Pack）に基づき、現在のアクション後の次遷移を確率的に予測。
+- **バックグラウンド生成**: 予測された次状態の SRE を先行生成し、AIの要求に対し Near-Zero TTFT でレスポンス。
+- **バックトラッキング**: 予測が外れた場合、即座に `StateDelta::Mismatch` を返し、Full State 再送へフォールバックする。
+
+### 3.6 Self-Healing Context Recovery (自己修復)
+UI変更に対する耐性を極限まで高めるレジリエンス・レイヤー。
+- **DOM Signature Cache**: 過去の成功した操作時のDOM構造（周辺ノード、属性、CSSパス）を署名としてキャッシュ。
+- **修復ロジック**: `stable_key` が不一致の場合、キャッシュされた署名と現在のDOMをファジーマッチングし、最適なターゲットを再特定。
+- **学習**: 修復成功時、新しい署名でキャッシュを更新。
+
+### 3.7 "Guardian Angel" & Outcome Projection (プロアクティブ防御)
+安全性を「大胆な行動の保証」に変える高度なセキュリティ。
+- **Outcome Projection**: アクション実行前に、予測される副作用（決済額、在庫変動、予算消費等）を JSON 構造体として生成。
+- **プロアクティブ防御**: 副作用がポリシーの閾値を超える場合、実行を自動ブロックし、人間（HITL）へ「未来の投影データ」付きで承認を求める。
+
+### 3.8 Unified PII Redactor (統合プライバシーフィルター)
+- **仕様**: SRE 出力と Audit Log 出力の両方に適用される、回避不能な強制フック。
+- **対象**: `password/email` フィールド、クレジットカード形式、およびドメイン固有の機密パターン。
 
 ## 4. エコシステム仕様 (Extensions)
 
@@ -122,9 +146,11 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
 - **Policy Plugin**: `before_act(intent)` - 業界固有コンプライアンスルールの注入。
 - **Connector Plugin**: 外部システム（SIEM, Slack）への通知。
 
-**PLUG-02: Sandbox Security & Capabilities (修正)**
+**PLUG-02: Sandbox Security & Capabilities**
 - **Capabilities**: マニフェストで権限を宣言（例: `read_state`, `network_out`, `vault_access`）。
 - **Signature**: 署名済みPluginのみロード可能。SBOMによる依存管理を必須とする。
+- **Wasm Runtime Hardening**: `wasmtime::Linker` のプーリングと **Epoch-based Interruption** を導入。1つのプラグインが暴走してもシステム全体を止めない隔離を実現。
+- **Shared Engine & Caching**: インスタンス起動コストを最小化するため、コンパイル済みモジュールをキャッシュ。
 
 ### 4.2 Skills Layer (Declarative Workflows)
 
@@ -132,6 +158,12 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
 「検証可能なタスク」をJSONで記述したワークフロー。
 - **構成要素**: `locate`, `verify`, `act`, `wait`, `extract`, `handoff`.
 - **Execution Flow**: `verify` -> `policy_check` -> `act` -> `post_check` の順序を強制する。
+
+### 4.3 "Deep Lens" Zero-Code Extraction DSL
+AI とブラウザの間の会話を「操作」から「情報の取得」へとレベルアップさせる抽出エンジン。
+- **仕様**: YAML/JSON ベースの抽出定義（例: `items: { selector: "tr.product", fields: { price: ".amt" } }`）。
+- **Schema Registry**: DSL ルールをプリコンパイルし、実行時のパース・オーバーヘッドを排除。
+- **Golden Dataset**: 正解データセット（`core-runtime/tests/fixtures/golden/`）による抽出精度の継続的自動評価。
 
 ## 5. API & Schema Definitions
 
@@ -171,15 +203,18 @@ Model Context Protocol (MCP) 準拠のツール定義。
 | `act` | `target_id`: int, `target_stable_key`: string, `action`: "click"\|"type", `value`: string | アクション実行。 |
 | `verify` | `target_id`: int, `expected`: {text: string} | ハルシネーション防止の事前検証。 |
 | `get_visual` | `mode`: "clean"\|"som", `viewport`: "full" | 視覚情報の取得。 |
-| `ask_human` | `reason`: string, `context`: bool | HITL要求（2FA/判断不能時）。 |
+| `ask_human` | `reason`: string, `context`: bool, `outcome_projection`: object | HITL要求（2FA/判断不能/高額決済時）。承認要求に未来投影データを同梱。 |
 | `run_skill` | `skill_name`: string, `params`: object | 定義済みSkillの実行。 |
+
+**ACT-05: HITL Concurrency & Safety**
+- **Session Lock**: Slack/Teams 等のチャットツール連携において、複数人による同時承認を防ぐ排他ロック機構。
+- **Audit Trace**: 承認・却下を行ったユーザー ID、タイムスタンプ、およびその際の `Outcome Projection` データを不変ログに記録。
 
 ## 6. 非機能要件 (NFR) - 測定条件の明文化
 
 **Performance Targets (Preconditions Defined):**
 
-- **Time to First Token (TTFT)**: < 50ms
-  - Condition: Fast State利用, Cache Hitなし, Minimal Profile適用時。
+- **Near-Zero TTFT**: < 10ms (Speculative Hit)
 - **State Update Latency**: < 100ms
   - Condition: Subtree Refinement有効, DOM変更ノード数 < 50。
 - **Bandwidth**: 95%削減
@@ -200,7 +235,7 @@ Model Context Protocol (MCP) 準拠のツール定義。
 
 ### 7.1 Billing Meters (Value-Based)
 
-- **State Generations**: Fast/Full/Delta生成回数を個別に計測。
+- **State Generations**: Fast/Full/Delta/Speculative生成回数を個別に計測。
 - **Visual Captures**: SoM生成枚数（VLM認識価値）。
 - **Actions Executed**: `act` の 成功回数（Attemptとは区別）。
 - **HITL Events**: 人間への委譲発生回数（信頼性価値）。
@@ -216,3 +251,9 @@ Model Context Protocol (MCP) 準拠のツール定義。
 
 - **Domain Packs**: 特定業務（経理、人事等）向けPlugin/Skillセットの販売。
 - **Revenue Share**: 認定Plugin開発者への収益分配。
+
+## 8. ツール & ユーティリティ
+
+### 8.1 Side-by-side ROI Comparison Tool
+- **機能**: 従来のブラウザ操作（Playwright等）と Dragon Head SRE を並行実行し、トークン消費量・レイテンシ・成功率の差分を定量評価する CLI ツール。
+- **目的**: 導入によるコスト削減効果（ROI）をビジネス層へ客観的に証明する。

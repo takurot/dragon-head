@@ -122,3 +122,115 @@ The current `AuditLogger` in `core-runtime/src/audit.rs` only maintains an in-me
 ### Task
 - [ ] Implement a persistent sink for `AuditLogger` (e.g., rolling file logs).
 - [ ] Ensure that `audit_retention_snapshot` in `McpServer` can reflect persistent storage metrics.
+
+---
+
+## [ISSUE-10] Speculative State Generation Pipeline
+
+### Description
+Implement a pipeline to predict the next AI action based on session history and domain packs, pre-generating the next SRE state to achieve near-zero TTFT.
+
+### Task
+- [ ] Create `core-runtime/src/speculative/mod.rs` for prediction logic.
+- [ ] Implement `SpeculativeEngine` with `flatbuffers` serialization for model efficiency.
+- [ ] Integrate with `SRE Queue` for background pre-generation.
+- [ ] Implement backtracking mechanism for `StateDelta::Mismatch`.
+
+---
+
+## [ISSUE-11] Self-Healing Context Recovery Layer
+
+### Description
+Enhance `ACT-04` with a resilience layer that uses cached DOM signatures to fuzzy-match elements when `stable_key` fails due to UI changes.
+
+### Task
+- [ ] Implement `DOMSignatureCache` to store structural hints of successful operations.
+- [ ] Implement fuzzy-matching logic for context recovery.
+- [ ] Integrate recovery into `Robust Action Execution` flow.
+- [ ] Implement automated fallback to `ask_human` on recovery failure.
+
+---
+
+## [ISSUE-12] "Deep Lens" Zero-Code Extraction DSL
+
+### Description
+Implement a Wasm-integrated DSL for structured data extraction, abstracting DOM selectors into schema-based definitions.
+
+### Task
+- [ ] Define YAML/JSON DSL schema for extraction rules.
+- [ ] Implement `SchemaRegistry` with pre-compilation support in `plugin-host`.
+- [ ] Create `Golden Dataset` fixture repository for accuracy testing.
+- [ ] Implement `extract` tool in MCP and Skills Engine.
+
+---
+
+## [ISSUE-13] "Guardian Angel" & Outcome Projection
+
+### Description
+Proactively defend against dangerous AI actions by simulating side effects and requesting human approval with structured "Outcome Projection" data.
+
+### Task
+- [ ] Extend `PolicyEngine` to support `OutcomeProjection` simulation.
+- [ ] Define `ExpectedOutcome` schemas per Domain Pack.
+- [ ] Implement proactive blocking based on simulated thresholds.
+- [ ] Enrich `ask_human` payload with structured projection data.
+
+---
+
+## [ISSUE-14] Persistent Audit Hardening & Webhook SIEM Sink
+
+### Description
+Refine `ISSUE-09` by implementing high-durability rolling file logs and a reliable Webhook sink for SIEM integration.
+
+### Task
+- [x] Implement `RollingFileSink` with size-based rotation.
+- [x] Implement `WebhookSink` with retry logic and backpressure.
+- [x] Ensure zero-loss audit logging during high-frequency events.
+
+---
+
+## [ISSUE-15] Slack/Teams HITL Reference Implementation
+
+### Description
+Implement a reference bridge that routes `ask_human` requests to chat tools, handling interactive approval and concurrency locks.
+
+### Task
+- [ ] Implement a reference Slack App/Webhook bridge.
+- [ ] Implement session-level exclusive locks for approvals.
+- [ ] Support rich notification payloads including SoM and Outcome Projection.
+
+---
+
+## [ISSUE-16] Shared Wasm Engine & Module Caching
+
+### Description
+Optimize `plugin-host` performance by sharing the `wasmtime::Engine` across all instances and implementing aggressive module caching.
+
+### Task
+- [ ] Refactor `PluginRuntime` to use a globally shared `Arc<Engine>`.
+- [ ] Implement `wasmtime::Linker` pooling with `Epoch-based Interruption`.
+- [ ] Implement module caching to eliminate compilation overhead on startup.
+
+---
+
+## [ISSUE-17] Unified PII Redactor Utility
+
+### Description
+Refine `ISSUE-08` by implementing a centralized, forced-hook redactor that handles both SRE and Audit Log privacy filtering.
+
+### Task
+- [ ] Centralize masking logic in `core-runtime/src/privacy.rs`.
+- [ ] Apply as a mandatory hook at the exit of `SRE Queue` and entry of `Audit Sink`.
+- [ ] Support domain-specific PII patterns via Wasm plugins.
+
+---
+
+## [ISSUE-18] Side-by-side ROI Comparison CLI Tool
+
+### Description
+Develop a utility to benchmark Dragon Head against standard browser automation, quantifying token and latency savings.
+
+### Task
+- [ ] Implement parallel execution harness for Playwright vs Dragon Head.
+- [ ] Implement token count calculation and latency metrics collector.
+- [ ] Generate Markdown/JSON ROI reports for business stakeholders.
