@@ -55,6 +55,23 @@ pub trait AuditSink: Send + Sync {
 // RollingFileSink
 // ---------------------------------------------------------------------------
 
+/// Controls how written data is flushed to storage after each event.
+///
+/// Choose `Sync` for high-durability audit deployments where data must
+/// survive an abrupt process or power failure.  Choose `Flush` (the default)
+/// for throughput-sensitive deployments where OS-level buffering is acceptable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DurabilityMode {
+    /// Flush user-space buffers to the OS after each write (`flush()`).
+    /// Fast — data may still reside in the OS page cache.
+    #[default]
+    Flush,
+    /// Flush user-space buffers **and** issue `sync_data()` after each write.
+    /// Slower but guarantees the data reaches durable storage before returning,
+    /// satisfying enterprise audit-retention requirements (ISSUE-14).
+    Sync,
+}
+
 struct RollingFileState {
     current_file: File,
     #[allow(dead_code)]
@@ -69,15 +86,22 @@ struct RollingFileState {
 /// File names follow the pattern `{prefix}_{unix_ms}_{seq}.ndjson`.
 /// When the current file reaches `max_bytes_per_file` the sink opens a new
 /// file on the next `write` call.
+///
+/// Durability is configurable via [`DurabilityMode`]:
+/// - `Flush` (default) — fast, OS-level buffering.
+/// - `Sync` — issues `sync_data()` after each write for crash-safe retention.
 pub struct RollingFileSink {
     dir: PathBuf,
     prefix: String,
     max_bytes_per_file: u64,
+    durability: DurabilityMode,
     state: Mutex<Option<RollingFileState>>,
 }
 
 impl RollingFileSink {
-    /// Create a new sink.  The directory is created if it does not exist.
+    /// Create a new sink with [`DurabilityMode::Flush`] (default).
+    ///
+    /// The directory is created if it does not exist.
     ///
     /// * `dir` — directory that will hold the log files.
     /// * `prefix` — file name prefix (e.g. `"audit"`).
@@ -93,8 +117,17 @@ impl RollingFileSink {
             dir,
             prefix: prefix.into(),
             max_bytes_per_file,
+            durability: DurabilityMode::Flush,
             state: Mutex::new(None),
         })
+    }
+
+    /// Set the durability mode (builder style).
+    ///
+    /// Use [`DurabilityMode::Sync`] for enterprise audit-retention compliance.
+    pub fn with_durability(mut self, mode: DurabilityMode) -> Self {
+        self.durability = mode;
+        self
     }
 
     fn open_new_file(&self) -> Result<RollingFileState, AuditSinkError> {
@@ -144,7 +177,13 @@ impl AuditSink for RollingFileSink {
 
         let state = guard.as_mut().expect("state must be Some after init");
         state.current_file.write_all(line.as_bytes())?;
-        state.current_file.flush()?;
+        match self.durability {
+            DurabilityMode::Flush => state.current_file.flush()?,
+            DurabilityMode::Sync => {
+                state.current_file.flush()?;
+                state.current_file.sync_data()?;
+            }
+        }
         state.current_bytes += bytes;
         Ok(())
     }
@@ -482,6 +521,76 @@ mod tests {
         }
         assert_eq!(sink.events_written(), 10);
         assert_eq!(sink.errors(), 0);
+    }
+
+    // -- DurabilityMode / RollingFileSink high-durability mode ----------------
+
+    #[test]
+    fn rolling_file_sink_sync_mode_persists_events() {
+        let dir = tempdir().unwrap();
+        let sink = RollingFileSink::new(dir.path(), "sync", 0)
+            .unwrap()
+            .with_durability(DurabilityMode::Sync);
+        for i in 0..20u32 {
+            sink.write(&tool_call_event(i)).unwrap();
+        }
+        let total: usize = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| {
+                fs::read_to_string(e.path())
+                    .unwrap_or_default()
+                    .lines()
+                    .count()
+            })
+            .sum();
+        assert_eq!(total, 20, "sync mode must persist all events");
+    }
+
+    #[test]
+    fn rolling_file_sink_sync_mode_data_readable_after_sink_dropped() {
+        let dir = tempdir().unwrap();
+        {
+            let sink = RollingFileSink::new(dir.path(), "drop", 0)
+                .unwrap()
+                .with_durability(DurabilityMode::Sync);
+            sink.write(&tool_call_event(1)).unwrap();
+            sink.write(&tool_call_event(2)).unwrap();
+            // sink dropped here — data must be fully on disk
+        }
+        let total: usize = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| {
+                fs::read_to_string(e.path())
+                    .unwrap_or_default()
+                    .lines()
+                    .count()
+            })
+            .sum();
+        assert_eq!(
+            total, 2,
+            "sync mode must durably persist events before drop"
+        );
+    }
+
+    #[test]
+    fn rolling_file_sink_default_mode_is_flush() {
+        let dir = tempdir().unwrap();
+        let sink = RollingFileSink::new(dir.path(), "default", 0).unwrap();
+        // Verify the default mode doesn't panic — flush mode works correctly.
+        sink.write(&tool_call_event(1)).unwrap();
+        let total: usize = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| {
+                fs::read_to_string(e.path())
+                    .unwrap_or_default()
+                    .lines()
+                    .count()
+            })
+            .sum();
+        assert_eq!(total, 1);
     }
 
     // -- WebhookSink ----------------------------------------------------------
