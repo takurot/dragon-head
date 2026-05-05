@@ -153,8 +153,10 @@ impl DOMSignatureCache {
     /// Walk `nodes` (flat slice of `SemanticNode`) and return the node with
     /// the highest signature score against the cached entry for `stable_key`.
     ///
-    /// Returns `None` if no entry exists for `stable_key` or no candidate
-    /// exceeds `RECOVERY_THRESHOLD`.
+    /// Returns `None` if no entry exists for `stable_key`, no candidate
+    /// exceeds `RECOVERY_THRESHOLD`, or the top score is tied between two or
+    /// more candidates (ambiguous — recovery refused to avoid acting on the
+    /// wrong element).
     pub fn find_best_match<'a>(
         &self,
         stable_key: &str,
@@ -163,12 +165,28 @@ impl DOMSignatureCache {
         let guard = self.entries.lock().ok()?;
         let sig = guard.get(stable_key)?;
 
-        nodes
+        let mut scored: Vec<(&'a SemanticNode, u32)> = nodes
             .iter()
             .map(|n| (n, sig.score_against(n)))
             .filter(|(_, score)| *score >= RECOVERY_THRESHOLD)
-            .max_by_key(|(_, score)| *score)
-            .map(|(n, _)| n)
+            .collect();
+
+        if scored.is_empty() {
+            return None;
+        }
+
+        // Sort descending by score to find the winner and check for ties.
+        scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        let best_score = scored[0].1;
+
+        // Reject ambiguous matches: if two or more candidates share the top score
+        // recovery is unsafe — return None so the caller falls back to AskHumanRequired.
+        let tied = scored.iter().filter(|(_, s)| *s == best_score).count();
+        if tied > 1 {
+            return None;
+        }
+
+        Some(scored[0].0)
     }
 
     /// Return the number of cached signatures.
@@ -367,6 +385,41 @@ mod tests {
         cache.record("key-1", &node("button", Some("Old label"), None));
         cache.record("key-1", &node("button", Some("New label"), None));
         assert_eq!(cache.len(), 1, "same key must not create duplicate entries");
+    }
+
+    #[test]
+    fn find_best_match_rejects_tied_candidates() {
+        // Two identical buttons — recovery is ambiguous and must be refused.
+        let cache = DOMSignatureCache::new();
+        cache.record("key-delete", &node("button", Some("Delete"), None));
+
+        let candidates = vec![
+            node("button", Some("Delete"), None), // tied
+            node("button", Some("Delete"), None), // tied — same score
+        ];
+        let result = cache.find_best_match("key-delete", &candidates);
+        assert!(
+            result.is_none(),
+            "tied candidates must not recover to avoid acting on wrong element"
+        );
+    }
+
+    #[test]
+    fn find_best_match_accepts_clear_winner() {
+        let cache = DOMSignatureCache::new();
+        cache.record(
+            "key-submit",
+            &node("button", Some("Submit order"), Some("submit")),
+        );
+
+        // One strong match, one weak candidate below threshold.
+        let candidates = vec![
+            node("button", Some("Submit order"), Some("submit")),
+            node("input", Some("Name"), None),
+        ];
+        let result = cache.find_best_match("key-submit", &candidates);
+        assert!(result.is_some(), "clear winner must be returned");
+        assert_eq!(result.unwrap().role, "button");
     }
 
     #[test]
