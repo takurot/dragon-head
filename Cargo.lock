@@ -304,6 +304,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "test-bench-support",
  "thiserror 1.0.69",
  "tokio",

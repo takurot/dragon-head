@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use core_runtime::{
     sre::{LoadProfile, SemanticNode},
-    ActionError, ApprovalScope, PageSession, SemanticTarget, SemanticWaitState, VerifyError,
+    ActionError, ApprovalScope, DeltaPolicy, PageSession, SemanticState, SemanticTarget,
+    SemanticWaitState, StateUpdate, VerifyError,
 };
-use json_patch::diff;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -246,8 +246,6 @@ pub struct McpServer<B> {
     backend: B,
     plan_tier: PlanTier,
     usage_meters: UsageMeters,
-    /// Cached previous state JSON for computing RFC 6902 deltas.
-    previous_state: Option<Value>,
 }
 
 impl<B: McpBackend> McpServer<B> {
@@ -260,7 +258,6 @@ impl<B: McpBackend> McpServer<B> {
             backend,
             plan_tier,
             usage_meters: UsageMeters::default(),
-            previous_state: None,
         }
     }
 
@@ -314,18 +311,7 @@ impl<B: McpBackend> McpServer<B> {
         }
 
         let result = match name {
-            "get_state" => {
-                let args = parse_get_state_arguments(&arguments);
-                if args.delivery == StateDelivery::Delta {
-                    self.get_state_delta(args.force_refresh)
-                } else {
-                    let result = self.backend.get_state(arguments.clone());
-                    if let Ok(ref state) = result {
-                        self.previous_state = Some(state.clone());
-                    }
-                    result
-                }
-            }
+            "get_state" => self.backend.get_state(arguments.clone()),
             "act" => self.backend.act(arguments.clone()),
             "verify" => self.backend.verify(arguments.clone()),
             "get_visual" => self.backend.get_visual(arguments.clone()),
@@ -339,61 +325,6 @@ impl<B: McpBackend> McpServer<B> {
         }
 
         result
-    }
-
-    /// Compute and return an RFC 6902 JSON Patch delta relative to the last known state.
-    ///
-    /// Response shapes:
-    /// - `{ "type": "full", "hash": "...", "state": {...} }` — no previous state exists.
-    /// - `{ "type": "no_change", "hash": "..." }` — state is identical to previous.
-    /// - `{ "type": "delta", "base_hash": "...", "next_hash": "...", "patch": [...] }` — changes.
-    fn get_state_delta(&mut self, force_refresh: bool) -> Result<Value> {
-        // Fetch current full state from backend using a full-delivery arguments value.
-        let backend_args = json!({ "force_refresh": force_refresh });
-        let current_state = self.backend.get_state(backend_args)?;
-        // Prefer the pre-computed hash from the state metadata to avoid re-serializing.
-        let next_hash = current_state["metadata"]["state_hash"]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| sha256_of_json(&current_state));
-
-        let response = match self.previous_state.take() {
-            None => {
-                // No previous state — return full state with a hint.
-                self.previous_state = Some(current_state.clone());
-                json!({
-                    "type": "full",
-                    "hash": next_hash,
-                    "state": current_state
-                })
-            }
-            Some(prev) => {
-                let base_hash = prev["metadata"]["state_hash"]
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| sha256_of_json(&prev));
-                if base_hash == next_hash {
-                    // Identical state.
-                    self.previous_state = Some(current_state);
-                    json!({
-                        "type": "no_change",
-                        "hash": next_hash
-                    })
-                } else {
-                    // Compute RFC 6902 patch.
-                    let patch = diff(&prev, &current_state);
-                    self.previous_state = Some(current_state);
-                    json!({
-                        "type": "delta",
-                        "base_hash": base_hash,
-                        "next_hash": next_hash,
-                        "patch": patch
-                    })
-                }
-            }
-        };
-
-        Ok(response)
     }
 
     pub fn handle_jsonrpc(&mut self, request: &str) -> Option<String> {
@@ -770,6 +701,7 @@ pub struct ExternalInteractiveElement {
 pub struct CoreRuntimeBackend {
     page: PageSession,
     state_cache: Option<ExternalSemanticState>,
+    previous_semantic_state: Option<SemanticState>,
     skill_engine: SkillEngine,
     skills: HashMap<String, SkillDefinition>,
 }
@@ -779,6 +711,7 @@ impl CoreRuntimeBackend {
         Self {
             page,
             state_cache: None,
+            previous_semantic_state: None,
             skill_engine: SkillEngine::new(),
             skills: HashMap::new(),
         }
@@ -806,6 +739,15 @@ impl CoreRuntimeBackend {
         }
 
         let state = self.page.capture_semantic_state(LoadProfile::Interactive)?;
+        let state_copy = state.clone();
+        let payload = self.build_external_state(state)?;
+
+        self.previous_semantic_state = Some(state_copy);
+        self.state_cache = Some(payload.clone());
+        Ok(payload)
+    }
+
+    fn build_external_state(&mut self, state: SemanticState) -> Result<ExternalSemanticState> {
         let metadata = StateMetadata {
             url: self.page.current_url()?,
             page_instance_id: state.page_instance_id().to_string(),
@@ -821,13 +763,10 @@ impl CoreRuntimeBackend {
             .map(|node| self.map_interactive_element(node))
             .collect::<Result<Vec<_>>>()?;
 
-        let payload = ExternalSemanticState {
+        Ok(ExternalSemanticState {
             metadata,
             interactive_elements,
-        };
-
-        self.state_cache = Some(payload.clone());
-        Ok(payload)
+        })
     }
 
     fn map_interactive_element(&self, node: SemanticNode) -> Result<ExternalInteractiveElement> {
@@ -881,12 +820,52 @@ impl McpBackend for CoreRuntimeBackend {
     fn get_state(&mut self, arguments: Value) -> Result<Value> {
         let args = parse_get_state_arguments(&arguments);
 
-        let payload = self.semantic_state_payload(args.force_refresh)?;
-        match args.format {
-            StateFormat::Json => Ok(serde_json::to_value(payload)?),
-            StateFormat::Markdown => Ok(json!({
-                "markdown": render_state_markdown(&payload)
-            })),
+        match args.delivery {
+            StateDelivery::Full => {
+                let payload = self.semantic_state_payload(args.force_refresh)?;
+                match args.format {
+                    StateFormat::Json => Ok(serde_json::to_value(payload)?),
+                    StateFormat::Markdown => Ok(json!({
+                        "markdown": render_state_markdown(&payload)
+                    })),
+                }
+            }
+            StateDelivery::Delta => {
+                if args.force_refresh {
+                    self.state_cache = None;
+                }
+
+                let current = self.page.capture_semantic_state(LoadProfile::Interactive)?;
+                let update = current.select_update(
+                    self.previous_semantic_state.as_ref(),
+                    DeltaPolicy::default(),
+                )?;
+
+                let response = match &update {
+                    StateUpdate::Noop { state_hash } => {
+                        json!({ "type": "no_change", "hash": state_hash })
+                    }
+                    StateUpdate::Full { state } => {
+                        let ext = self.build_external_state(state.clone())?;
+                        json!({
+                            "type": "full",
+                            "hash": state.state_hash().to_string(),
+                            "state": serde_json::to_value(ext)?
+                        })
+                    }
+                    StateUpdate::Delta { delta } => {
+                        json!({
+                            "type": "delta",
+                            "base_hash": delta.previous_state_hash,
+                            "next_hash": delta.next_state_hash,
+                            "patch": serde_json::to_value(&delta.patch)?
+                        })
+                    }
+                };
+
+                self.previous_semantic_state = Some(current);
+                Ok(response)
+            }
         }
     }
 
@@ -1324,14 +1303,6 @@ fn render_state_markdown(payload: &ExternalSemanticState) -> String {
     }
 
     lines.join("\n")
-}
-
-/// Compute the SHA-256 hex digest of the canonical (sorted-key) JSON representation of `value`.
-fn sha256_of_json(value: &Value) -> String {
-    let canonical = serde_json::to_string(value).unwrap_or_default();
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 fn load_profile_name(profile: LoadProfile) -> &'static str {
