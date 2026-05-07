@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use core_runtime::{
     sre::{LoadProfile, SemanticNode},
-    ActionError, ApprovalScope, PageSession, VerifyError,
+    ActionError, ApprovalScope, PageSession, SemanticTarget, SemanticWaitState, VerifyError,
 };
 use json_patch::diff;
 use serde::{Deserialize, Serialize};
@@ -1086,10 +1086,50 @@ impl<'a> PageSkillRuntime<'a> {
 impl SkillRuntime for PageSkillRuntime<'_> {
     fn locate(
         &mut self,
-        _step: &LocateStep,
+        step: &LocateStep,
         _ctx: &mut skills_engine::SkillExecutionContext,
     ) -> OperationOutcome {
-        OperationOutcome::Success
+        let query = resolve_param(&step.query, self.params);
+        if let Some(id) = parse_target_id(&query) {
+            return match self.page.capture_semantic_state(LoadProfile::Interactive) {
+                Ok(state) => {
+                    if node_exists_by_id(state.root(), id) {
+                        OperationOutcome::Success
+                    } else {
+                        OperationOutcome::Failure {
+                            reason: format!("element id:{id} not found in current state"),
+                        }
+                    }
+                }
+                Err(err) => OperationOutcome::Failure {
+                    reason: err.to_string(),
+                },
+            };
+        }
+        if let Some(key) = parse_target_stable_key(&query) {
+            // Refresh the SRE cache before lookup so we don't read stale state.
+            if let Err(err) = self.page.capture_semantic_state(LoadProfile::Interactive) {
+                return OperationOutcome::Failure {
+                    reason: err.to_string(),
+                };
+            }
+            return if self
+                .page
+                .lookup_backend_node_id_by_stable_key(&key)
+                .is_some()
+            {
+                OperationOutcome::Success
+            } else {
+                OperationOutcome::Failure {
+                    reason: format!("element stable_key:{key} not found"),
+                }
+            };
+        }
+        OperationOutcome::Failure {
+            reason: format!(
+                "unrecognised locate query {query:?}; expected id:<N> or stable_key:<key>"
+            ),
+        }
     }
 
     fn verify(
@@ -1156,8 +1196,23 @@ impl SkillRuntime for PageSkillRuntime<'_> {
                 },
             };
         }
-
-        OperationOutcome::Success
+        if let Some((target, desired_state)) = parse_semantic_wait_condition(&condition) {
+            return match self.page.wait_for_semantic(
+                target,
+                desired_state,
+                Duration::from_millis(step.timeout_ms),
+            ) {
+                Ok(()) => OperationOutcome::Success,
+                Err(err) => OperationOutcome::Failure {
+                    reason: err.to_string(),
+                },
+            };
+        }
+        OperationOutcome::Failure {
+            reason: format!(
+                "unrecognised wait condition {condition:?}; expected intent:<text> or id:<N>:enabled"
+            ),
+        }
     }
 
     fn extract(
@@ -1220,6 +1275,33 @@ fn parse_target_stable_key(target: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Parse a semantic wait condition of the form `id:<numeric_id>:<state>`.
+/// Returns the target and desired state, or `None` for unrecognised formats.
+fn parse_semantic_wait_condition(condition: &str) -> Option<(SemanticTarget, SemanticWaitState)> {
+    let mut parts = condition.splitn(3, ':');
+    let prefix = parts.next()?;
+    let raw_id = parts.next()?.trim();
+    let raw_state = parts.next()?.trim();
+    if prefix != "id" {
+        return None;
+    }
+    let id = raw_id.parse::<i64>().ok()?;
+    let desired_state = match raw_state {
+        "enabled" => SemanticWaitState::Enabled,
+        _ => return None,
+    };
+    Some((SemanticTarget::Id(id), desired_state))
+}
+
+fn node_exists_by_id(node: &SemanticNode, target_id: i64) -> bool {
+    if node.backend_node_id == target_id {
+        return true;
+    }
+    node.children
+        .iter()
+        .any(|child| node_exists_by_id(child, target_id))
 }
 
 fn render_state_markdown(payload: &ExternalSemanticState) -> String {
@@ -1495,4 +1577,89 @@ fn get_usage_report_input_schema() -> Value {
         "additionalProperties": false,
         "properties": {}
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_runtime::sre::SemanticNode;
+
+    fn make_node(id: i64, children: Vec<SemanticNode>) -> SemanticNode {
+        SemanticNode {
+            role: "button".to_string(),
+            label: None,
+            children,
+            attributes: None,
+            stable_key: None,
+            ambiguous: false,
+            alias: None,
+            backend_node_id: id,
+        }
+    }
+
+    // --- parse_semantic_wait_condition ---
+
+    #[test]
+    fn parse_semantic_wait_condition_id_enabled() {
+        let result = parse_semantic_wait_condition("id:42:enabled");
+        assert_eq!(
+            result,
+            Some((SemanticTarget::Id(42), SemanticWaitState::Enabled))
+        );
+    }
+
+    #[test]
+    fn parse_semantic_wait_condition_non_numeric_id_returns_none() {
+        assert!(parse_semantic_wait_condition("id:abc:enabled").is_none());
+    }
+
+    #[test]
+    fn parse_semantic_wait_condition_unknown_state_returns_none() {
+        assert!(parse_semantic_wait_condition("id:42:visible").is_none());
+    }
+
+    #[test]
+    fn parse_semantic_wait_condition_intent_prefix_returns_none() {
+        assert!(parse_semantic_wait_condition("intent:loaded").is_none());
+    }
+
+    #[test]
+    fn parse_semantic_wait_condition_missing_state_returns_none() {
+        assert!(parse_semantic_wait_condition("id:42").is_none());
+    }
+
+    #[test]
+    fn parse_semantic_wait_condition_empty_returns_none() {
+        assert!(parse_semantic_wait_condition("").is_none());
+    }
+
+    // --- node_exists_by_id ---
+
+    #[test]
+    fn node_exists_by_id_root_match() {
+        let node = make_node(10, vec![]);
+        assert!(node_exists_by_id(&node, 10));
+    }
+
+    #[test]
+    fn node_exists_by_id_no_match() {
+        let node = make_node(10, vec![]);
+        assert!(!node_exists_by_id(&node, 99));
+    }
+
+    #[test]
+    fn node_exists_by_id_child_match() {
+        let child = make_node(20, vec![]);
+        let root = make_node(10, vec![child]);
+        assert!(node_exists_by_id(&root, 20));
+    }
+
+    #[test]
+    fn node_exists_by_id_nested_grandchild_match() {
+        let grandchild = make_node(30, vec![]);
+        let child = make_node(20, vec![grandchild]);
+        let root = make_node(10, vec![child]);
+        assert!(node_exists_by_id(&root, 30));
+        assert!(!node_exists_by_id(&root, 99));
+    }
 }
