@@ -12,8 +12,8 @@ The MCP `get_state` tool supports a `delivery: "delta"` argument as per specific
 - Divergence from the specification (SRE-02).
 
 ### Task
-- [ ] Update `CoreRuntimeBackend::get_state` to handle `StateDelivery::Delta`.
-- [ ] Implement conversion from `core_runtime::sre::StateUpdate` to MCP-compatible delta payload.
+- [x] Update `CoreRuntimeBackend::get_state` to handle `StateDelivery::Delta`.
+- [x] Implement conversion from `core_runtime::sre::StateUpdate` to MCP-compatible delta payload.
 
 ---
 

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use json_patch::diff;
 use mcp_server::{McpBackend, McpServer};
 use serde_json::{json, Value};
 
@@ -32,9 +33,11 @@ impl McpBackend for MockBackend {
 }
 
 /// A backend that returns controlled semantic state payloads for delta testing.
+/// Handles delta delivery by tracking previous state and computing RFC 6902 patches.
 struct SemanticMockBackend {
     states: Vec<Value>,
     call_count: usize,
+    previous_state: Option<Value>,
 }
 
 impl SemanticMockBackend {
@@ -42,15 +45,59 @@ impl SemanticMockBackend {
         Self {
             states,
             call_count: 0,
+            previous_state: None,
         }
     }
 }
 
 impl McpBackend for SemanticMockBackend {
-    fn get_state(&mut self, _arguments: Value) -> Result<Value> {
+    fn get_state(&mut self, arguments: Value) -> Result<Value> {
+        let is_delta = arguments.get("delivery").and_then(|v| v.as_str()) == Some("delta");
+
         let idx = self.call_count.min(self.states.len().saturating_sub(1));
         self.call_count += 1;
-        Ok(self.states[idx].clone())
+        let current = self.states[idx].clone();
+
+        if !is_delta {
+            // Full delivery: return state and seed previous for future delta calls.
+            self.previous_state = Some(current.clone());
+            return Ok(current);
+        }
+
+        // Delta delivery: compute diff relative to previous state.
+        let current_hash = current["metadata"]["state_hash"]
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("hash-{}", self.call_count));
+
+        let response = match self.previous_state.take() {
+            None => {
+                self.previous_state = Some(current.clone());
+                json!({ "type": "full", "hash": current_hash, "state": current })
+            }
+            Some(prev) => {
+                let base_hash = prev["metadata"]["state_hash"]
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "prev-hash".to_string());
+
+                if base_hash == current_hash {
+                    self.previous_state = Some(current);
+                    json!({ "type": "no_change", "hash": current_hash })
+                } else {
+                    let patch = diff(&prev, &current);
+                    let patch_value = serde_json::to_value(&patch).unwrap();
+                    self.previous_state = Some(current);
+                    json!({
+                        "type": "delta",
+                        "base_hash": base_hash,
+                        "next_hash": current_hash,
+                        "patch": patch_value
+                    })
+                }
+            }
+        };
+        Ok(response)
     }
 
     fn act(&mut self, _arguments: Value) -> Result<Value> {

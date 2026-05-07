@@ -28,12 +28,18 @@ fn test_mcp_server_comprehensive_evaluation_suite() -> Result<()> {
         "metering",
         scenario_usage_report_plan_gating,
     );
+    bench.run_scenario(
+        "delta_delivery_full_seeds_baseline",
+        "delta",
+        scenario_delta_delivery_full_seeds_baseline,
+    );
 
     bench.write_if_configured()?;
     bench.assert_required_scenarios(&[
         "tool_flow_state_and_act",
         "hitl_flow",
         "usage_report_plan_gating",
+        "delta_delivery_full_seeds_baseline",
     ])?;
     bench.assert_all_passed()?;
 
@@ -170,6 +176,38 @@ fn scenario_hitl_flow() -> Result<Value> {
         "approved": true,
         "rule_id": approval["rule_id"],
     }))
+}
+
+/// Verifies that CoreRuntimeBackend seeds previous_semantic_state on a Full delivery,
+/// so a subsequent Delta call on the same unchanged page returns `type: no_change`.
+fn scenario_delta_delivery_full_seeds_baseline() -> Result<Value> {
+    use mcp_server::PlanTier;
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let html = r#"<html><body><button>Click me</button></body></html>"#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let mut server = McpServer::new_with_plan(CoreRuntimeBackend::new(page), PlanTier::Pro);
+
+    // Full delivery seeds previous_semantic_state.
+    let full = server.call_tool("get_state", json!({"delivery": "full"}))?;
+    assert!(
+        full["metadata"].is_object(),
+        "full delivery must return metadata"
+    );
+
+    // Delta call on unchanged page must return no_change, not a spurious full.
+    let delta = server.call_tool("get_state", json!({"delivery": "delta"}))?;
+    assert_eq!(
+        delta["type"],
+        json!("no_change"),
+        "delta after full delivery of same page must return no_change"
+    );
+
+    Ok(json!({ "delta_type": delta["type"] }))
 }
 
 fn scenario_usage_report_plan_gating() -> Result<Value> {

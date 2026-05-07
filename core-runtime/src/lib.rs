@@ -11,8 +11,8 @@ pub mod sre;
 
 // Re-export SRE types used by examples and downstream crates.
 pub use sre::{
-    FastSemanticState, FullSemanticState, LayeredSemanticState, LoadProfile, SemanticDelta,
-    SemanticNode, SemanticState, StateUpdate,
+    DeltaPolicy, FastSemanticState, FullSemanticState, LayeredSemanticState, LoadProfile,
+    SemanticDelta, SemanticNode, SemanticState, StateUpdate,
 };
 
 pub use browser::{
