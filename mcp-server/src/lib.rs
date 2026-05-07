@@ -832,7 +832,9 @@ impl McpBackend for CoreRuntimeBackend {
             }
             StateDelivery::Delta => {
                 if args.force_refresh {
+                    // Reset both caches so the next delta starts from a clean baseline.
                     self.state_cache = None;
+                    self.previous_semantic_state = None;
                 }
 
                 let current = self.page.capture_semantic_state(LoadProfile::Interactive)?;
@@ -847,6 +849,8 @@ impl McpBackend for CoreRuntimeBackend {
                     }
                     StateUpdate::Full { state } => {
                         let ext = self.build_external_state(state.clone())?;
+                        // Keep state_cache in sync so a subsequent Full call is consistent.
+                        self.state_cache = Some(ext.clone());
                         json!({
                             "type": "full",
                             "hash": state.state_hash().to_string(),
