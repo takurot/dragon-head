@@ -1091,7 +1091,7 @@ impl SkillRuntime for PageSkillRuntime<'_> {
     ) -> OperationOutcome {
         let query = resolve_param(&step.query, self.params);
         if let Some(id) = parse_target_id(&query) {
-            return match self.page.capture_semantic_state(LoadProfile::Minimal) {
+            return match self.page.capture_semantic_state(LoadProfile::Interactive) {
                 Ok(state) => {
                     if node_exists_by_id(state.root(), id) {
                         OperationOutcome::Success
@@ -1107,6 +1107,12 @@ impl SkillRuntime for PageSkillRuntime<'_> {
             };
         }
         if let Some(key) = parse_target_stable_key(&query) {
+            // Refresh the SRE cache before lookup so we don't read stale state.
+            if let Err(err) = self.page.capture_semantic_state(LoadProfile::Interactive) {
+                return OperationOutcome::Failure {
+                    reason: err.to_string(),
+                };
+            }
             return if self
                 .page
                 .lookup_backend_node_id_by_stable_key(&key)
@@ -1119,7 +1125,11 @@ impl SkillRuntime for PageSkillRuntime<'_> {
                 }
             };
         }
-        OperationOutcome::Success
+        OperationOutcome::Failure {
+            reason: format!(
+                "unrecognised locate query {query:?}; expected id:<N> or stable_key:<key>"
+            ),
+        }
     }
 
     fn verify(
@@ -1198,7 +1208,11 @@ impl SkillRuntime for PageSkillRuntime<'_> {
                 },
             };
         }
-        OperationOutcome::Success
+        OperationOutcome::Failure {
+            reason: format!(
+                "unrecognised wait condition {condition:?}; expected intent:<text> or id:<N>:enabled"
+            ),
+        }
     }
 
     fn extract(
