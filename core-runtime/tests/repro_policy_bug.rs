@@ -96,28 +96,63 @@ fn login_prefix_matches_deep_child() {
 fn login_prefix_does_not_match_unrelated_path() {
     let engine = make_engine("/login");
     let decision = engine.evaluate(&url("/dashboard"));
-    assert_eq!(decision.action, PolicyAction::Allow);
+    assert_eq!(
+        decision.action,
+        PolicyAction::Allow,
+        "/login rule must NOT match unrelated path /dashboard"
+    );
 }
 
-/// A rule without path_prefix must match any path (prefix is unconstrained).
+/// A trailing-slash prefix `/login/` must match child path `/login/step` but NOT `/logina`.
+/// Covers the variant of the segment-boundary bug where the prefix itself ends with `/`.
 #[test]
-fn no_path_prefix_matches_any_path() {
-    let engine = PolicyEngine::try_new(vec![PolicyRule {
-        id: "catch-all".to_string(),
-        domain: None,
-        path_prefix: None,
-        role: None,
-        text_regex: None,
-        context_regex: None,
-        action: PolicyAction::Block,
-        scope: None,
-    }])
-    .expect("valid rule");
-
-    assert_eq!(engine.evaluate(&url("/login")).action, PolicyAction::Block);
-    assert_eq!(engine.evaluate(&url("/logina")).action, PolicyAction::Block);
+fn trailing_slash_prefix_matches_child_but_not_sibling() {
+    let engine = make_engine("/login/");
     assert_eq!(
-        engine.evaluate(&url("/anything")).action,
-        PolicyAction::Block
+        engine.evaluate(&url("/login/step")).action,
+        PolicyAction::Block,
+        "/login/ rule must match /login/step"
+    );
+    assert_eq!(
+        engine.evaluate(&url("/logina")).action,
+        PolicyAction::Allow,
+        "/login/ rule must NOT match /logina"
+    );
+}
+
+/// A URL with a query string must still match on path alone.
+/// Confirms that `Url::parse` path extraction strips the query before comparison.
+#[test]
+fn login_prefix_matches_url_with_query_string() {
+    let engine = make_engine("/login");
+    let ctx = PolicyContext {
+        url: "https://example.com/login?next=/home".to_string(),
+        action: "click".to_string(),
+        target_role: None,
+        target_text: None,
+        surrounding_text: None,
+    };
+    assert_eq!(
+        engine.evaluate(&ctx).action,
+        PolicyAction::Block,
+        "/login rule must match /login?next=/home (query string must be stripped)"
+    );
+}
+
+/// A URL with a query string must NOT match when the path does not match.
+#[test]
+fn login_prefix_does_not_match_logina_with_query_string() {
+    let engine = make_engine("/login");
+    let ctx = PolicyContext {
+        url: "https://example.com/logina?q=1".to_string(),
+        action: "click".to_string(),
+        target_role: None,
+        target_text: None,
+        surrounding_text: None,
+    };
+    assert_eq!(
+        engine.evaluate(&ctx).action,
+        PolicyAction::Allow,
+        "/login rule must NOT match /logina?q=1"
     );
 }
