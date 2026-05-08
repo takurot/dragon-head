@@ -75,10 +75,36 @@ cargo build -p mcp-server --bin dragon-head-mcp --release
 ./target/release/dragon-head-mcp
 ```
 
-### Connect from an MCP client
+## MCP Client Setup
 
-Use this source-checkout configuration while binary releases are not available.
-Replace `/path/to/dragon-head` with your local checkout path.
+Dragon Head runs as a stdio MCP server. Your MCP client starts the command,
+passes JSON-RPC messages on stdin, and reads responses from stdout.
+
+### 1. Choose the command
+
+Use this command while running from a source checkout:
+
+```bash
+cargo run --manifest-path /path/to/dragon-head/Cargo.toml -p mcp-server --bin dragon-head-mcp
+```
+
+Use this command after building a local release binary:
+
+```bash
+/path/to/dragon-head/target/release/dragon-head-mcp
+```
+
+After packaged releases ship, use the installed command directly:
+
+```bash
+dragon-head-mcp
+```
+
+### 2. Add the MCP server config
+
+Most MCP clients expose an `mcpServers` JSON object. Use this
+source-checkout configuration while binary releases are not available.
+Replace `/path/to/dragon-head` with your absolute local checkout path.
 
 ```json
 {
@@ -102,7 +128,7 @@ Replace `/path/to/dragon-head` with your local checkout path.
 }
 ```
 
-After prebuilt binaries ship, the configuration should become:
+For a locally built or packaged binary, the configuration becomes:
 
 ```json
 {
@@ -116,6 +142,35 @@ After prebuilt binaries ship, the configuration should become:
   }
 }
 ```
+
+If Chrome is installed in a standard location, you can omit `CHROME_PATH`.
+Set it explicitly when the MCP server cannot find Chrome or when you want to
+use a specific Chromium build.
+
+### 3. Restart the MCP client
+
+After updating the client config, restart the MCP client so it launches
+`dragon-head-mcp`. A successful startup writes these lifecycle logs to stderr:
+
+```text
+dragon-head-mcp: starting...
+dragon-head-mcp: ready, listening on stdio
+```
+
+The client should then show the Dragon Head tools listed below.
+
+### 4. Troubleshooting
+
+- Use absolute paths in MCP config. Relative paths depend on the client process
+  working directory and are easy to break.
+- Put environment variables in the JSON `env` object. Do not rely on shell
+  startup files being loaded by GUI clients.
+- If startup fails before the tools appear, confirm Chrome is installed or set
+  `CHROME_PATH`.
+- If the source-checkout command is slow on every client launch, build the
+  release binary and configure the client to run `target/release/dragon-head-mcp`.
+- Running `dragon-head-mcp` directly in a terminal is only a startup smoke test;
+  the server is designed to be managed by an MCP client over stdio.
 
 ## Available MCP Tools
 
