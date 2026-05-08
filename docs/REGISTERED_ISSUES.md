@@ -39,8 +39,8 @@ Validated in `core-runtime/tests/repro_policy_bug.rs`.
 - `stable_key` instability or incorrect differentiation if elements move across the hardcoded 400/300 boundaries but not the actual viewport center.
 
 ### Task
-- [ ] Allow passing actual viewport dimensions to `normalize_dom`.
-- [ ] Update `PageSession` to provide current viewport size during semantic state capture.
+- [x] Allow passing actual viewport dimensions to `normalize_dom`.
+- [x] Update `PageSession` to provide current viewport size during semantic state capture.
 
 ---
 
