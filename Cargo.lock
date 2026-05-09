@@ -292,6 +292,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "crossbeam-channel",
+ "ed25519-dalek",
  "headless_chrome",
  "hex",
  "hmac",
@@ -299,6 +300,7 @@ dependencies = [
  "json-patch",
  "jsonschema",
  "pbkdf2",
+ "plugin-host",
  "rand",
  "regex",
  "serde",
@@ -312,6 +314,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "wat",
 ]
 
 [[package]]

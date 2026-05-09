@@ -15,6 +15,7 @@
 /// Both hook types record their decisions in the `AuditLogger` so they are
 /// fully observable without leaking PII.
 use crate::audit::AuditEvent;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
@@ -205,6 +206,134 @@ fn epoch_millis_u64() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+// ---------------------------------------------------------------------------
+// Wasm-backed adapters (requires `plugin-host` as a dependency)
+// ---------------------------------------------------------------------------
+
+/// Error returned when constructing a Wasm-backed plugin adapter fails.
+///
+/// Using a local error type insulates callers of `core-runtime` from changes
+/// to `plugin_host::PluginError` variant set.
+#[derive(Debug, thiserror::Error)]
+pub enum PluginAdapterError {
+    #[error("plugin authorization failed: {0}")]
+    Authorization(String),
+    #[error("failed to create plugin runtime: {0}")]
+    RuntimeCreation(String),
+}
+
+impl From<plugin_host::PluginError> for PluginAdapterError {
+    fn from(e: plugin_host::PluginError) -> Self {
+        match e {
+            plugin_host::PluginError::MissingExport { .. }
+            | plugin_host::PluginError::CapabilityViolation { .. } => {
+                Self::Authorization(e.to_string())
+            }
+            _ => Self::RuntimeCreation(e.to_string()),
+        }
+    }
+}
+
+/// Adapter that wraps a verified [`plugin_host::LoadedPlugin`] and implements
+/// [`StatePlugin`] by calling the plugin's `on_state` Wasm export.
+///
+/// Construction fails if the plugin does not declare the `OnState` entry point
+/// or lacks the `ReadState` capability.  Both checks are enforced explicitly at
+/// construction time rather than deferring them to the first call.
+///
+/// A single instance serializes calls through an internal `Mutex`.  If
+/// per-call parallelism is needed, create one `WasmStatePlugin` per
+/// thread/task.
+pub struct WasmStatePlugin {
+    id: String,
+    runtime: Mutex<plugin_host::PluginRuntime>,
+}
+
+impl WasmStatePlugin {
+    /// Create from a verified `LoadedPlugin`.
+    ///
+    /// Returns [`PluginAdapterError`] if the plugin does not satisfy the
+    /// `OnState` entry point + `ReadState` capability requirements, or if
+    /// Wasm instantiation fails.
+    pub fn new(plugin: plugin_host::LoadedPlugin) -> Result<Self, PluginAdapterError> {
+        plugin
+            .authorize_extension(plugin_host::ExtensionPoint::OnState)
+            .map_err(PluginAdapterError::from)?;
+        // Explicit check keeps the ReadState contract visible here even if
+        // authorize_extension's implicit mapping changes in a future version.
+        plugin
+            .ensure_capability(plugin_host::Capability::ReadState)
+            .map_err(PluginAdapterError::from)?;
+        let id = plugin.manifest().plugin_id.clone();
+        let runtime = plugin.create_runtime().map_err(PluginAdapterError::from)?;
+        Ok(Self {
+            id,
+            runtime: Mutex::new(runtime),
+        })
+    }
+}
+
+impl StatePlugin for WasmStatePlugin {
+    fn plugin_id(&self) -> &str {
+        &self.id
+    }
+
+    fn on_state(&self, state_json: &str) -> Result<String, String> {
+        self.runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .on_state(state_json)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Adapter that wraps a verified [`plugin_host::LoadedPlugin`] and implements
+/// [`PolicyPlugin`] by calling the plugin's `before_act` Wasm export.
+///
+/// Construction fails if the plugin does not declare the `BeforeAct` entry
+/// point.  Any error from the Wasm call is mapped to `Err(String)`, which
+/// `run_policy_hooks` treats as a block (fail-closed).
+///
+/// A single instance serializes calls through an internal `Mutex`.  If
+/// per-call parallelism is needed, create one `WasmPolicyPlugin` per
+/// thread/task.
+pub struct WasmPolicyPlugin {
+    id: String,
+    runtime: Mutex<plugin_host::PluginRuntime>,
+}
+
+impl WasmPolicyPlugin {
+    /// Create from a verified `LoadedPlugin`.
+    ///
+    /// Returns [`PluginAdapterError`] if the plugin does not declare the
+    /// `BeforeAct` entry point, or if Wasm instantiation fails.
+    pub fn new(plugin: plugin_host::LoadedPlugin) -> Result<Self, PluginAdapterError> {
+        plugin
+            .authorize_extension(plugin_host::ExtensionPoint::BeforeAct)
+            .map_err(PluginAdapterError::from)?;
+        let id = plugin.manifest().plugin_id.clone();
+        let runtime = plugin.create_runtime().map_err(PluginAdapterError::from)?;
+        Ok(Self {
+            id,
+            runtime: Mutex::new(runtime),
+        })
+    }
+}
+
+impl PolicyPlugin for WasmPolicyPlugin {
+    fn plugin_id(&self) -> &str {
+        &self.id
+    }
+
+    fn before_act(&self, intent_json: &str) -> Result<String, String> {
+        self.runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .before_act(intent_json)
+            .map_err(|e| e.to_string())
+    }
 }
 
 // ---------------------------------------------------------------------------
