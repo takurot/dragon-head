@@ -116,6 +116,16 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
 - **機能**: 指定ドメインの認証情報（Cookie/Token）をAES-256で暗号化永続化。
 - **Key Management**: デフォルトはプラットフォーム管理鍵。Enterpriseプランでは BYOK (Customer KMS) をサポートし、鍵ローテーションを強制する。
 
+**SEC-03: Prompt Injection Sanitization**
+- **目的**: Webページ内の不信頼テキストに含まれる、LLMへの間接命令やシステム指示の奪取を狙う既知パターンを検出し、SRE/MCP利用者へ構造化されたリスク情報として公開する。これは完全な遮断ではなく、defense-in-depth の一層として扱う。
+- **対象**: SRE出力に含まれるすべてのLLM可視文字列（`label`, `alias`, `attributes` の文字列値、および子ノード配下のテキスト）。DOM本文だけでなく、`aria-label`, `title`, `placeholder`, `value` などの属性も対象とする。
+- **Mode**: `Off` | `ReportOnly` | `Redact`。
+  - `ReportOnly` (default): テキストは変更せず、検出されたノードへ `security_flags: ["possible_prompt_injection"]` を付与する。
+  - `Redact`: 検出箇所を `[REDACTED_SECURITY]` に置換し、同じ `security_flags` を付与する。
+  - `Off`: 検出・置換を行わない。
+- **Stable Identity**: Sanitization は `stable_key` 生成後の SemanticNode tree に適用する。危険文言の置換によって stable key の衝突や不安定化を増やしてはならない。
+- **Limitations**: v1は固定パターンによる既知リスクの検出に限定する。ユーザー定義regex、多言語網羅、ML分類器、Unicode/HTML entity難読化の完全対応は後続拡張とする。
+
 ### 3.5 Speculative State Generation (未来予測)
 AIの思考レイテンシを排除するための先行実行エンジン。
 - **予測ロジック**: セッション履歴とドメイン知識（Domain Pack）に基づき、現在のアクション後の次遷移を確率的に予測。
@@ -187,7 +197,8 @@ AI とブラウザの間の会話を「操作」から「情報の取得」へ�
       "name": "Purchase",
       "attributes": { "disabled": false },
       "bbox": [100, 200, 150, 50],
-      "policy_flags": ["financial_transaction"]
+      "policy_flags": ["financial_transaction"],
+      "security_flags": ["possible_prompt_injection"]
     }
   ]
 }
@@ -200,6 +211,7 @@ Model Context Protocol (MCP) 準拠のツール定義。
 | Tool Name | Arguments | Description |
 | :--- | :--- | :--- |
 | `get_state` | `format`: "json"\|"markdown", `force_refresh`: bool | ページ状態の取得。 |
+| `get_state` output | `security_flags`: string[] | Prompt Injection Sanitization が検出した既知リスクを要素単位で返す。 |
 | `act` | `target_id`: int, `target_stable_key`: string, `action`: "click"\|"type", `value`: string | アクション実行。 |
 | `verify` | `target_id`: int, `expected`: {text: string} | ハルシネーション防止の事前検証。 |
 | `get_visual` | `mode`: "clean"\|"som", `viewport`: "full" | 視覚情報の取得。 |
@@ -229,6 +241,7 @@ Model Context Protocol (MCP) 準拠のツール定義。
 **Security:**
 
 - PIIのログ出力はデフォルトマスク。
+- Prompt Injection Sanitization はデフォルト `ReportOnly` で動作し、`security_flags` によって既知リスクを構造化して公開する。`Redact` mode はLLM可視テキストの一部を置換するが、完全なプロンプトインジェクション防御を保証するものではない。
 - Wasmプラグインは分離メモリ空間で実行。
 
 ## 7. 付録: 収益化とプラン設計 (Monetization)
