@@ -1,3 +1,5 @@
+pub mod doctor;
+
 use anyhow::{Context, Result};
 use core_runtime::{
     sre::{LoadProfile, SemanticNode},

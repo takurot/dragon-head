@@ -1,8 +1,18 @@
 use core_runtime::BrowserClient;
-use mcp_server::{CoreRuntimeBackend, McpServer};
+use mcp_server::{doctor, CoreRuntimeBackend, McpServer};
 use std::io::{self, BufRead, Write};
 
 fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--doctor") {
+        let report = doctor::run_doctor();
+        doctor::print_report(&report);
+        if !report.all_passed() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let chrome_path = std::env::var("CHROME_PATH").ok();
 
     eprintln!("dragon-head-mcp: starting...");
