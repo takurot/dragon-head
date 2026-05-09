@@ -19,6 +19,49 @@ jobs:
     - name: Run clippy
       run: cargo clippy --workspace -- -D warnings
 
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install cargo-audit
+      run: cargo install cargo-audit --locked
+    - name: Run vulnerability audit (informational)
+      # Informational only — new advisories show up here as a signal.
+      # The enforcing gate is the cargo-deny job which uses deny.toml.
+      run: cargo audit --color never || true
+    - name: Export audit report as artifact
+      if: always()
+      run: cargo audit --color never --json > audit-report.json 2>/dev/null || true
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: security-audit-report
+        path: audit-report.json
+
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install cargo-deny
+      run: cargo install cargo-deny --locked
+    - name: Check advisories, licenses, bans, and sources
+      run: cargo deny check
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install shellcheck
+      run: sudo apt-get install -y shellcheck
+    - name: Lint shell scripts
+      run: |
+        mapfile -t scripts < <(find . -name "*.sh" -not -path "*/target/*" -not -path "*/.git/*")
+        if [ "${#scripts[@]}" -eq 0 ]; then
+          echo "No shell scripts found — nothing to check."
+        else
+          shellcheck "${scripts[@]}"
+        fi
+
   test:
     runs-on: ubuntu-latest
     steps:

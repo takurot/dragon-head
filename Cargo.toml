@@ -9,6 +9,9 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+license = "MIT"
+
 [workspace.dependencies]
 tokio = { version = "1.36", features = ["full"] }
 anyhow = "1.0"

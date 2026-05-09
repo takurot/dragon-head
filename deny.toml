@@ -1,0 +1,96 @@
+# cargo-deny configuration — https://embarkstudios.github.io/cargo-deny/
+#
+# Run locally: cargo deny check
+# Any new advisory NOT listed in [advisories].ignore will fail CI, forcing a
+# deliberate decision: update the dep or add an explicit ignore with a reason.
+
+# ── Advisories ──────────────────────────────────────────────────────────────
+
+[advisories]
+version = 2
+ignore = [
+    # ── rustls-webpki (transitive via headless_chrome) ───────────────────
+    # No fix available upstream; track https://github.com/rust-headless-chrome
+    { id = "RUSTSEC-2026-0104", reason = "transitive via headless_chrome; no upstream fix" },
+    { id = "RUSTSEC-2026-0098", reason = "transitive via headless_chrome; no upstream fix" },
+    { id = "RUSTSEC-2026-0099", reason = "transitive via headless_chrome; no upstream fix" },
+    { id = "RUSTSEC-2026-0049", reason = "transitive via headless_chrome; no upstream fix" },
+
+    # ── wasmtime (transitive via plugin-host) ────────────────────────────
+    # Cannot update independently of the plugin sandbox API. Tracked in
+    # docs/commercial_issues.md — revisit on next wasmtime major release.
+    { id = "RUSTSEC-2026-0086", reason = "wasmtime via plugin-host; aarch64 Winch only, not our deploy target" },
+    { id = "RUSTSEC-2026-0096", reason = "wasmtime via plugin-host; aarch64 Cranelift heap OOB" },
+    { id = "RUSTSEC-2026-0020", reason = "wasmtime via plugin-host; WASI resource exhaustion" },
+    { id = "RUSTSEC-2026-0092", reason = "wasmtime via plugin-host; UTF-16 transcoding panic" },
+    { id = "RUSTSEC-2026-0021", reason = "wasmtime via plugin-host; wasi:http/types.fields panic" },
+    { id = "RUSTSEC-2026-0114", reason = "wasmtime via plugin-host; table.grow address-space panic" },
+    { id = "RUSTSEC-2026-0093", reason = "wasmtime via plugin-host; UTF-16 latin1 transcoding heap OOB" },
+    { id = "RUSTSEC-2026-0087", reason = "wasmtime via plugin-host; f64x2.splat segfault on x86-64 Cranelift" },
+    { id = "RUSTSEC-2026-0088", reason = "wasmtime via plugin-host; pooling allocator data leakage" },
+    { id = "RUSTSEC-2026-0089", reason = "wasmtime via plugin-host; table.fill panic with Winch" },
+    { id = "RUSTSEC-2025-0046", reason = "wasmtime via plugin-host; fd_renumber WASIp1 panic" },
+    { id = "RUSTSEC-2026-0006", reason = "wasmtime via plugin-host; f64.copysign segfault on x86-64" },
+    { id = "RUSTSEC-2026-0094", reason = "wasmtime via plugin-host; table.grow masked return (Winch)" },
+    { id = "RUSTSEC-2026-0085", reason = "wasmtime via plugin-host; flags component value panic" },
+    { id = "RUSTSEC-2026-0095", reason = "wasmtime via plugin-host; Winch sandbox-escaping memory access" },
+    { id = "RUSTSEC-2025-0118", reason = "wasmtime via plugin-host; shared linear memory unsound API" },
+    { id = "RUSTSEC-2026-0091", reason = "wasmtime via plugin-host; component model string OOB write" },
+
+    # ── unmaintained transitive deps ─────────────────────────────────────
+    { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained; transitive via wasmtime, no drop-in" },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; transitive via wasmtime, no drop-in" },
+    { id = "RUSTSEC-2026-0097", reason = "rand unsound with custom global logger; we do not set one" },
+]
+
+# ── Licenses ─────────────────────────────────────────────────────────────────
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+
+# Permissive licenses allowed for all crates.
+allow = [
+    "MIT",
+    "MIT-0",                          # MIT No Attribution — borrow-or-share
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Zlib",
+    "BSL-1.0",                        # Boost Software License (permissive) — ryu
+    "Unlicense",
+    "CDLA-Permissive-2.0",            # Community Data License (permissive) — webpki-roots
+]
+
+# Copyleft exceptions: transitive deps we cannot replace.
+# Review before adding new entries.
+exceptions = [
+    # ittapi / ittapi-sys — Intel instrumentation, transitive via wasmtime
+    { allow = ["GPL-2.0-only"],    crate = "ittapi" },
+    { allow = ["GPL-2.0-only"],    crate = "ittapi-sys" },
+    # auto_generate_cdp — CDP codegen, transitive via headless_chrome
+    { allow = ["GPL-3.0-or-later"], crate = "auto_generate_cdp" },
+    # r-efi — UEFI bindings, transitive via wasmtime WASI
+    { allow = ["LGPL-2.1-or-later"], crate = "r-efi" },
+]
+
+# ── Bans ─────────────────────────────────────────────────────────────────────
+
+[bans]
+# Warn on duplicate semver-major versions (some ecosystem crates ship multiple).
+multiple-versions = "warn"
+# Warn on wildcard version requirements; path-deps within the workspace
+# legitimately omit a version field and would otherwise be flagged.
+wildcards = "warn"
+
+# ── Sources ──────────────────────────────────────────────────────────────────
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
