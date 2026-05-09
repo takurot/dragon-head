@@ -62,7 +62,7 @@ jobs:
       run: google-chrome --version
     - uses: taiki-e/install-action@v2
       with:
-        tool: nextest
+        tool: nextest@0.9.133
     - name: Run tests
       env:
         CHROME_INSTALLED: "true"
@@ -116,7 +116,7 @@ jobs:
       run: google-chrome --version
     - uses: taiki-e/install-action@v2
       with:
-        tool: nextest
+        tool: nextest@0.9.133
     - name: Run CDP smoke test
       env:
         CHROME_INSTALLED: "true"
