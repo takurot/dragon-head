@@ -154,18 +154,19 @@ fn traverse_node(
     let node_name = node.node_name.to_lowercase();
 
     if node_type == 3 {
-        // Text node
-        let text = node.node_value.clone();
-        if text.trim().is_empty() {
+        // Text node — redact PII before storing in the semantic tree.
+        let raw_text = node.node_value.trim();
+        if raw_text.is_empty() {
             return Ok(None);
         }
+        let redacted = crate::privacy::global().redact_text(raw_text);
 
         let (stable_key, ambiguous) =
-            key_gen.generate_key("text", Some(&text), parent_path, "unknown");
+            key_gen.generate_key("text", Some(&redacted), parent_path, "unknown");
 
         return Ok(Some(SemanticNode {
             role: "text".to_string(),
-            label: Some(text),
+            label: Some(redacted),
             stable_key: Some(stable_key),
             ambiguous,
             backend_node_id: node.backend_node_id.into(),
@@ -775,10 +776,53 @@ mod tests {
             "Here is my card: ****-****-****-XXXX please charge it"
         );
 
-        // ISSUE-08: email addresses in text nodes must be masked (was missing before fix)
+        // ISSUE-08: email addresses in text nodes must be masked (was missing before fix).
+        // body_node.children[4] is the <div> container; its label comes from
+        // extract_direct_text_label (already fixed).
         let email_text_label = body_node.children[4].label.as_deref().unwrap();
         assert_eq!(email_text_label, "Contact us at *** for help");
 
+        // ISSUE-08 / Finding 1: traverse_node's node_type==3 branch must also redact.
+        // The raw SemanticNode emitted for the text child of email_container
+        // should have its label redacted (not the container's label).
+        let raw_text_node = &body_node.children[4].children[0];
+        assert_eq!(
+            raw_text_node.label.as_deref(),
+            Some("Contact us at *** for help"),
+            "traverse_node text-node path must redact email addresses"
+        );
+
+        Ok(())
+    }
+
+    // ISSUE-08 / Finding 2: document that the PiiRedactor CC regex is intentionally
+    // broader than the old local one, covering non-hyphenated and 15/19-digit cards,
+    // while short digit runs (phone numbers, order IDs < 13 digits) are NOT redacted.
+    #[test]
+    fn text_node_cc_regex_does_not_false_positive_on_short_digit_runs() -> Result<()> {
+        // 10-digit US phone number — must NOT be redacted (< 13 digits)
+        let phone_text = make_text_node(200, "Call us at 8005551234 for support")?;
+        let phone_container = make_element_node(201, "div", vec![], vec![phone_text])?;
+        // 12-digit order ID — must NOT be redacted (< 13 digits)
+        let order_text = make_text_node(202, "Order 123456789012 confirmed")?;
+        let order_container = make_element_node(203, "div", vec![], vec![order_text])?;
+        let body = make_element_node(103, "body", vec![], vec![phone_container, order_container])?;
+        let html = make_element_node(102, "html", vec![], vec![body])?;
+        let dom = make_document_node(101, vec![html])?;
+
+        let sem = normalize_dom(LoadProfile::Minimal, &dom)?;
+        let body_node = &sem.children[0].children[0];
+
+        assert_eq!(
+            body_node.children[0].label.as_deref(),
+            Some("Call us at 8005551234 for support"),
+            "10-digit phone numbers must not be redacted"
+        );
+        assert_eq!(
+            body_node.children[1].label.as_deref(),
+            Some("Order 123456789012 confirmed"),
+            "12-digit order IDs must not be redacted"
+        );
         Ok(())
     }
 
