@@ -39,7 +39,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 jsonschema = "0.37"
 tempfile = "3.10"
 test-bench-support = { path = "../test-bench-support" }
-plugin-host = { path = "../plugin-host" }
 ed25519-dalek = "2.1"
 wat = "1.240"
 hex = "0.4"

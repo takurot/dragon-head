@@ -14,7 +14,8 @@
 /// They enforce capability checks and fail-closed semantics already required by
 /// the hook runners, but now backed by a live Wasm instance.
 use core_runtime::plugin_hooks::{
-    run_policy_hooks, run_state_hooks, PolicyHookOutcome, WasmPolicyPlugin, WasmStatePlugin,
+    run_policy_hooks, run_state_hooks, PluginAdapterError, PolicyHookOutcome, WasmPolicyPlugin,
+    WasmStatePlugin,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use plugin_host::{
@@ -76,6 +77,10 @@ fn echo_wasm() -> Vec<u8> {
 }
 
 /// Wasm whose `before_act` always returns `{"allow":false}`.
+///
+/// Byte layout (15 bytes):
+///   { " a  l  l  o  w  "  :  f  a  l  s  e  }
+/// 123 34 97 108 108 111 119 34 58 102 97 108 115 101 125
 fn block_wasm() -> Vec<u8> {
     wat::parse_str(
         r#"(module
@@ -83,22 +88,21 @@ fn block_wasm() -> Vec<u8> {
             (func (export "before_act")
                   (param $in_ptr i32) (param $in_len i32)
                   (param $out_ptr i32) (param $out_len_ptr i32)
-                ;; {"allow":false} = 14 bytes
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 0))  (i32.const 123))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 1))  (i32.const 34))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 2))  (i32.const 97))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 3))  (i32.const 108))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 4))  (i32.const 108))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 5))  (i32.const 111))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 6))  (i32.const 119))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 7))  (i32.const 34))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 8))  (i32.const 58))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 9))  (i32.const 102))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 10)) (i32.const 97))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 11)) (i32.const 108))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 12)) (i32.const 115))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 13)) (i32.const 101))
-                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 14)) (i32.const 125))
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 0))  (i32.const 123)) ;; {
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 1))  (i32.const 34))  ;; "
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 2))  (i32.const 97))  ;; a
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 3))  (i32.const 108)) ;; l
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 4))  (i32.const 108)) ;; l
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 5))  (i32.const 111)) ;; o
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 6))  (i32.const 119)) ;; w
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 7))  (i32.const 34))  ;; "
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 8))  (i32.const 58))  ;; :
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 9))  (i32.const 102)) ;; f
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 10)) (i32.const 97))  ;; a
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 11)) (i32.const 108)) ;; l
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 12)) (i32.const 115)) ;; s
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 13)) (i32.const 101)) ;; e
+                (i32.store8 (i32.add (local.get $out_ptr) (i32.const 14)) (i32.const 125)) ;; }
                 (i32.store (local.get $out_len_ptr) (i32.const 15))
             )
         )"#,
@@ -287,8 +291,8 @@ fn wasm_state_plugin_rejects_missing_read_state_capability() {
 
     let result = WasmStatePlugin::new(loaded);
     assert!(
-        result.is_err(),
-        "WasmStatePlugin must reject a plugin without ReadState capability"
+        matches!(result, Err(PluginAdapterError::Authorization(_))),
+        "WasmStatePlugin must reject a plugin without ReadState capability with Authorization error"
     );
 }
 
@@ -312,7 +316,7 @@ fn wasm_policy_plugin_rejects_missing_before_act_entry_point() {
 
     let result = WasmPolicyPlugin::new(loaded);
     assert!(
-        result.is_err(),
-        "WasmPolicyPlugin must reject a plugin without BeforeAct entry point"
+        matches!(result, Err(PluginAdapterError::Authorization(_))),
+        "WasmPolicyPlugin must reject a plugin without BeforeAct entry point with Authorization error"
     );
 }
