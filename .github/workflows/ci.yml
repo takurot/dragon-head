@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run fmt check
       run: cargo fmt --all -- --check
     - name: Run clippy
@@ -58,6 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Verify Chrome is available
       run: google-chrome --version
     - uses: taiki-e/install-action@v2
@@ -82,22 +84,11 @@ jobs:
           target/nextest/
           *.log
 
-  ttft-bench-short:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Run TTFT short benchmark gate
-      env:
-        TTFT_SHORT_ITERATIONS: "40"
-        TTFT_WARN_MS: "35"
-        TTFT_FAIL_MS: "50"
-      run: cargo test -p core-runtime --test async_pipeline test_async_pipeline_ttft_benchmark_short_gate -- --nocapture
-
   smoke-e2e:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Verify Chrome is available
       run: google-chrome --version
     - name: Run semantic wait smoke test
@@ -108,10 +99,12 @@ jobs:
         cargo test -p core-runtime --test session_management --verbose
         cargo test -p core-runtime --test audit_logging --verbose
         cargo test -p core-runtime --test spa_stable_key_stress --verbose
+
   cdp-smoke:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Verify Chrome is available
       run: google-chrome --version
     - uses: taiki-e/install-action@v2
@@ -136,6 +129,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Verify Chrome is available
       run: google-chrome --version
     - name: Run SRE determinism test
@@ -155,6 +149,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run RFC 6902 semantic delta suite
       run: cargo test -p core-runtime --test sre_semantic_delta --verbose
 
@@ -162,6 +157,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run stable key compatibility vectors
       run: cargo test -p core-runtime --test stable_key_compatibility --verbose
 
@@ -169,6 +165,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Verify Chrome is available
       run: google-chrome --version
     - name: Run policy engine and enforcement regression suite
@@ -182,6 +179,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run policy rules schema lint
       run: cargo test -p core-runtime --test policy_schema_lint --verbose
 
@@ -189,6 +187,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Verify Chrome is available
       run: google-chrome --version
     - name: Run SoM event-driven tests
@@ -209,6 +208,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run skill conformance tests
       run: cargo test -p skills-engine --test skill_conformance --verbose
 
@@ -216,6 +216,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run skill schema compatibility tests
       run: cargo test -p skills-engine --test skill_schema_compatibility --verbose
 
@@ -223,6 +224,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run plugin signature verification tests
       run: cargo test -p plugin-host --test plugin_signature_verification --verbose
 
@@ -230,6 +232,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run plugin SBOM validation tests
       run: cargo test -p plugin-host --test plugin_sbom_validation --verbose
 
@@ -237,6 +240,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run MCP client contract and protocol compliance tests
       run: |
         cargo test -p mcp-server --test mcp_client_contract --verbose
@@ -246,6 +250,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run MCP API schema diff snapshot check
       run: cargo test -p mcp-server --test mcp_schema_diff --verbose
 
@@ -253,6 +258,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run MCP semantic state schema compatibility tests
       run: cargo test -p mcp-server --test mcp_schema_compatibility --verbose
 
@@ -260,6 +266,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run metering and plan-gating regression tests
       run: cargo test -p mcp-server --test mcp_billing_plan_gating --verbose
 
@@ -267,6 +274,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Run usage pricing snapshot diff check
       run: cargo test -p mcp-server --test mcp_pricing_snapshot --verbose
 
@@ -292,10 +300,15 @@ jobs:
       NFR_CAPACITY_MIN_SUCCESS_RATE_PERCENT: "100"
     steps:
     - uses: actions/checkout@v4
+    # PR-only job: read cache but do not write back to avoid polluting the
+    # main-branch cache with benchmark-specific target artifacts.
+    - uses: Swatinem/rust-cache@v2
+      with:
+        save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: Verify Chrome is available
       run: google-chrome --version
-    - name: Run TTFT short benchmark
-      run: cargo test -p core-runtime --test async_pipeline test_async_pipeline_ttft_benchmark_short_gate
+    - name: Run TTFT short benchmark gate
+      run: cargo test -p core-runtime --test async_pipeline test_async_pipeline_ttft_benchmark_short_gate -- --nocapture
     - name: Run NFR Latency Benchmark
       run: cargo test -p core-runtime --test nfr_latency --verbose
     - name: Run NFR Bandwidth Verification
@@ -325,6 +338,11 @@ jobs:
       DRAGON_HEAD_EVAL_DASHBOARD_PATH: "${{ github.workspace }}/target/evaluation-dashboard.md"
     steps:
     - uses: actions/checkout@v4
+    # PR-only job: read cache but do not write back to avoid polluting the
+    # main-branch cache with evaluation-specific target artifacts.
+    - uses: Swatinem/rust-cache@v2
+      with:
+        save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: Verify Chrome is available
       run: google-chrome --version
     - name: Run core-runtime evaluation bench
