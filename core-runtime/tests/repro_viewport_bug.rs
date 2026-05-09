@@ -128,8 +128,8 @@ fn hardcoded_viewport_misassigns_quadrant_on_large_display() {
     );
 }
 
-/// The same element at (450, 350) in a 375×812 mobile viewport is in the bottom-right
-/// quadrant (x=450 > 187.5, y=350 < 406 → actually top-right).
+/// The same element at (450, 350) in a 375×812 mobile viewport is in the top-right
+/// quadrant (x=450 > 187.5 → right, y=350 < 406 → top).
 /// Confirm that the mobile key also differs from the hardcoded-800×600 key.
 #[test]
 fn hardcoded_viewport_misassigns_quadrant_on_mobile_display() {
