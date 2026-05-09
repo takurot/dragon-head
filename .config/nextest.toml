@@ -1,0 +1,35 @@
+# cargo-nextest configuration
+# https://nexte.st/docs/configuration/
+#
+# Run locally:  cargo nextest run
+# Run CI mode:  cargo nextest run --profile ci
+
+# ── Default profile (local development) ──────────────────────────────────────
+
+[profile.default]
+# Retry flaky tests up to 2 times before marking failed.
+# Exponential backoff prevents resource contention (Chrome, network) between retries.
+retries = { backoff = "exponential", count = 2, delay = "1s", max-delay = "10s" }
+
+# Show test output immediately when a test fails (not just at the end).
+failure-output = "immediate"
+
+# Continue running remaining tests even after a failure.
+fail-fast = false
+
+# ── CI profile ────────────────────────────────────────────────────────────────
+
+[profile.ci]
+# Inherits all default settings; overrides below apply only in CI.
+
+# More retries: CI runners share resources and may experience transient faults
+# (Chrome startup races, port contention, DNS hiccups) more often than local runs.
+retries = { backoff = "exponential", count = 3, delay = "2s", max-delay = "60s" }
+
+# Emit final output for all failed tests after the run completes.
+# Combined with failure-output = "immediate" this gives both real-time
+# context and a consolidated failure summary at the bottom.
+final-status-level = "fail"
+
+# Never stop early in CI — capture the full failure picture.
+fail-fast = false

@@ -4,7 +4,10 @@ default:
     @just --list
 
 test:
-    cargo test --workspace
+    cargo nextest run --workspace
+
+test-ci:
+    cargo nextest run --workspace --profile ci
 
 lint:
     cargo clippy --workspace -- -D warnings
