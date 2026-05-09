@@ -3,8 +3,13 @@
 default:
     @just --list
 
+# Requires cargo-nextest: cargo install cargo-nextest --locked
 test:
-    cargo test --workspace
+    cargo nextest run --workspace
+
+# CI profile: 3 retries with exponential backoff, fail-fast=false
+test-ci:
+    cargo nextest run --workspace --profile ci
 
 lint:
     cargo clippy --workspace -- -D warnings

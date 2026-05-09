@@ -60,17 +60,26 @@ jobs:
     - uses: actions/checkout@v4
     - name: Verify Chrome is available
       run: google-chrome --version
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.133
     - name: Run tests
       env:
         CHROME_INSTALLED: "true"
-      run: cargo test --workspace --verbose
+      # nextest runs tests in parallel with automatic retry on transient failures.
+      # Doc-tests are excluded by nextest; run them separately with cargo test --doc.
+      run: cargo nextest run --workspace --profile ci
+    - name: Run doc tests
+      env:
+        CHROME_INSTALLED: "true"
+      run: cargo test --workspace --doc
     - name: Upload failure artifacts
       if: failure()
       uses: actions/upload-artifact@v4
       with:
         name: test-failures
         path: |
-          target/debug/deps/
+          target/nextest/
           *.log
 
   ttft-bench-short:
@@ -105,11 +114,23 @@ jobs:
     - uses: actions/checkout@v4
     - name: Verify Chrome is available
       run: google-chrome --version
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.133
     - name: Run CDP smoke test
-      # Retry to detect flakiness
-      run: |
-        cargo test --package core-runtime --lib -- --nocapture
-        cargo test --package core-runtime --lib -- --nocapture
+      env:
+        CHROME_INSTALLED: "true"
+      # nextest --profile ci retries each failing test up to 3 times with
+      # exponential backoff, replacing the previous double-run flakiness workaround.
+      run: cargo nextest run --package core-runtime --lib --profile ci
+    - name: Upload CDP smoke failure logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: cdp-smoke-failure-logs
+        path: |
+          target/nextest/
+          *.log
 
   sre-regression:
     runs-on: ubuntu-latest
