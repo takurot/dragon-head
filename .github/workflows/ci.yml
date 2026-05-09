@@ -19,6 +19,41 @@ jobs:
     - name: Run clippy
       run: cargo clippy --workspace -- -D warnings
 
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    # rustsec/audit-check downloads a pre-built binary — no source compile needed.
+    # The job is informational (continue-on-error: true); the enforcing gate is
+    # the cargo-deny job which uses deny.toml with explicit advisory ignores.
+    - uses: rustsec/audit-check@v2
+      continue-on-error: true
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    # EmbarkStudios/cargo-deny-action downloads a pre-built binary.
+    - uses: EmbarkStudios/cargo-deny-action@v2
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install shellcheck
+      run: sudo apt-get install -y shellcheck
+    - name: Lint shell scripts
+      shell: bash
+      run: |
+        mapfile -t scripts < <(find . -name "*.sh" -not -path "*/target/*" -not -path "*/.git/*")
+        if [ "${#scripts[@]}" -eq 0 ]; then
+          echo "No shell scripts found — nothing to check."
+        else
+          shellcheck "${scripts[@]}"
+        fi
+
   test:
     runs-on: ubuntu-latest
     steps:
