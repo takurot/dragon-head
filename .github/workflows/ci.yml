@@ -23,29 +23,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install cargo-audit
-      run: cargo install cargo-audit --locked
-    - name: Run vulnerability audit (informational)
-      # Informational only — new advisories show up here as a signal.
-      # The enforcing gate is the cargo-deny job which uses deny.toml.
-      run: cargo audit --color never || true
-    - name: Export audit report as artifact
-      if: always()
-      run: cargo audit --color never --json > audit-report.json 2>/dev/null || true
-    - uses: actions/upload-artifact@v4
-      if: always()
+    # rustsec/audit-check downloads a pre-built binary — no source compile needed.
+    # The job is informational (continue-on-error: true); the enforcing gate is
+    # the cargo-deny job which uses deny.toml with explicit advisory ignores.
+    - uses: rustsec/audit-check@v2
+      continue-on-error: true
       with:
-        name: security-audit-report
-        path: audit-report.json
+        token: ${{ secrets.GITHUB_TOKEN }}
 
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install cargo-deny
-      run: cargo install cargo-deny --locked
-    - name: Check advisories, licenses, bans, and sources
-      run: cargo deny check
+    # EmbarkStudios/cargo-deny-action downloads a pre-built binary.
+    - uses: EmbarkStudios/cargo-deny-action@v2
 
   shellcheck:
     runs-on: ubuntu-latest
@@ -54,6 +45,7 @@ jobs:
     - name: Install shellcheck
       run: sudo apt-get install -y shellcheck
     - name: Lint shell scripts
+      shell: bash
       run: |
         mapfile -t scripts < <(find . -name "*.sh" -not -path "*/target/*" -not -path "*/.git/*")
         if [ "${#scripts[@]}" -eq 0 ]; then
