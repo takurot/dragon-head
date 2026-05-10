@@ -219,6 +219,17 @@ pub fn estimate_usage_cost(
     }
 }
 
+/// Metered operations accumulated during a single `run_skill` execution.
+///
+/// `McpBackend::take_skill_usage_delta` returns this after each `run_skill` call so
+/// `McpServer` can fold the counts into its top-level `UsageMeters`.
+#[derive(Debug, Clone, Default)]
+pub struct SkillUsageDelta {
+    pub actions_executed: u64,
+    pub visual_captures: u64,
+    pub hitl_events: u64,
+}
+
 fn is_known_tool(name: &str) -> bool {
     matches!(
         name,
@@ -241,6 +252,11 @@ pub trait McpBackend {
     fn run_skill(&mut self, arguments: Value) -> Result<Value>;
     fn audit_retention_snapshot(&self) -> Option<AuditRetentionSnapshot> {
         None
+    }
+    /// Consume and return metered operations accumulated by the last `run_skill` call.
+    /// The default implementation returns an empty delta (no metering).
+    fn take_skill_usage_delta(&mut self) -> SkillUsageDelta {
+        SkillUsageDelta::default()
     }
 }
 
@@ -512,6 +528,21 @@ impl<B: McpBackend> McpServer<B> {
                 }
                 _ => {}
             },
+            "ask_human" => {
+                if payload
+                    .get("approved")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    self.usage_meters.hitl_events += 1;
+                }
+            }
+            "run_skill" => {
+                let delta = self.backend.take_skill_usage_delta();
+                self.usage_meters.actions_executed += delta.actions_executed;
+                self.usage_meters.visual_captures += delta.visual_captures;
+                self.usage_meters.hitl_events += delta.hitl_events;
+            }
             _ => {}
         }
     }
@@ -706,6 +737,7 @@ pub struct CoreRuntimeBackend {
     previous_semantic_state: Option<SemanticState>,
     skill_engine: SkillEngine,
     skills: HashMap<String, SkillDefinition>,
+    last_skill_delta: SkillUsageDelta,
 }
 
 impl CoreRuntimeBackend {
@@ -716,6 +748,7 @@ impl CoreRuntimeBackend {
             previous_semantic_state: None,
             skill_engine: SkillEngine::new(),
             skills: HashMap::new(),
+            last_skill_delta: SkillUsageDelta::default(),
         }
     }
 
@@ -1021,6 +1054,8 @@ impl McpBackend for CoreRuntimeBackend {
             .run(&skill, &mut runtime)
             .context("run_skill execution failed")?;
 
+        self.last_skill_delta = runtime.into_usage_delta();
+
         Ok(json!({
             "status": skill_run_status_name(report.status),
             "message": report.message,
@@ -1055,16 +1090,37 @@ impl McpBackend for CoreRuntimeBackend {
             retained_bytes,
         })
     }
+
+    fn take_skill_usage_delta(&mut self) -> SkillUsageDelta {
+        std::mem::take(&mut self.last_skill_delta)
+    }
 }
 
 struct PageSkillRuntime<'a> {
     page: &'a PageSession,
     params: &'a Value,
+    actions_executed: u64,
+    visual_captures: u64,
+    hitl_events: u64,
 }
 
 impl<'a> PageSkillRuntime<'a> {
     fn new(page: &'a PageSession, params: &'a Value) -> Self {
-        Self { page, params }
+        Self {
+            page,
+            params,
+            actions_executed: 0,
+            visual_captures: 0,
+            hitl_events: 0,
+        }
+    }
+
+    fn into_usage_delta(self) -> SkillUsageDelta {
+        SkillUsageDelta {
+            actions_executed: self.actions_executed,
+            visual_captures: self.visual_captures,
+            hitl_events: self.hitl_events,
+        }
     }
 }
 
@@ -1157,7 +1213,10 @@ impl SkillRuntime for PageSkillRuntime<'_> {
             &action,
             value.as_deref(),
         ) {
-            Ok(()) => OperationOutcome::Success,
+            Ok(()) => {
+                self.actions_executed += 1;
+                OperationOutcome::Success
+            }
             Err(err) => OperationOutcome::Failure {
                 reason: err.to_string(),
             },
