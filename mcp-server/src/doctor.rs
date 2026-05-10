@@ -5,6 +5,8 @@ use std::path::Path;
 pub struct CheckResult {
     pub name: &'static str,
     pub passed: bool,
+    /// false means the issue is fatal; true with informational=true means non-fatal
+    pub informational: bool,
     pub detail: String,
 }
 
@@ -19,9 +21,9 @@ impl DoctorReport {
     }
 }
 
-fn chrome_path_detail() -> (bool, String) {
-    if let Ok(path) = std::env::var("CHROME_PATH") {
-        if Path::new(&path).exists() {
+fn chrome_path_detail_with_env(chrome_env: Option<&str>) -> (bool, String) {
+    if let Some(path) = chrome_env {
+        if Path::new(path).exists() {
             return (true, format!("CHROME_PATH={path}"));
         } else {
             return (false, format!("CHROME_PATH={path} (file not found)"));
@@ -29,7 +31,10 @@ fn chrome_path_detail() -> (bool, String) {
     }
 
     let candidates: &[&str] = if cfg!(target_os = "macos") {
-        &["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+        &[
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
     } else if cfg!(target_os = "linux") {
         &[
             "/usr/bin/chromium",
@@ -62,41 +67,60 @@ fn chrome_path_detail() -> (bool, String) {
     )
 }
 
-fn config_file_detail() -> (bool, String) {
-    let config_path = std::env::var("HOME").ok().map(|h| {
-        std::path::PathBuf::from(h)
-            .join(".config")
-            .join("dragon-head")
-            .join("config.toml")
-    });
+fn chrome_path_detail() -> (bool, String) {
+    chrome_path_detail_with_env(std::env::var("CHROME_PATH").ok().as_deref())
+}
 
-    match config_path {
-        Some(p) if p.exists() => (true, p.display().to_string()),
-        Some(p) => (
-            true,
-            format!("{} (not found — defaults will be used)", p.display()),
-        ),
-        None => (
+fn config_file_detail() -> (bool, String, bool) {
+    // Respect XDG_CONFIG_HOME on Linux; fall back to $HOME/.config.
+    let config_base = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .map(|h| format!("{h}/.config"))
+                .unwrap_or_default()
+        });
+
+    if config_base.is_empty() {
+        return (
             true,
             "home dir not detected — defaults will be used".to_string(),
-        ),
+            true,
+        );
+    }
+
+    let p = std::path::PathBuf::from(&config_base)
+        .join("dragon-head")
+        .join("config.toml");
+
+    if p.exists() {
+        (true, p.display().to_string(), false)
+    } else {
+        (
+            true,
+            format!("{} (not found — defaults will be used)", p.display()),
+            true,
+        )
     }
 }
 
 pub fn run_doctor() -> DoctorReport {
     let (chrome_ok, chrome_detail) = chrome_path_detail();
-    let (config_ok, config_detail) = config_file_detail();
+    let (config_ok, config_detail, config_info) = config_file_detail();
 
     DoctorReport {
         checks: vec![
             CheckResult {
                 name: "Chrome/Chromium",
                 passed: chrome_ok,
+                informational: false,
                 detail: chrome_detail,
             },
             CheckResult {
                 name: "Config file",
                 passed: config_ok,
+                informational: config_info,
                 detail: config_detail,
             },
         ],
@@ -106,7 +130,13 @@ pub fn run_doctor() -> DoctorReport {
 pub fn print_report(report: &DoctorReport) {
     println!("dragon-head-mcp doctor");
     for check in &report.checks {
-        let icon = if check.passed { "✓" } else { "✗" };
+        let icon = if !check.passed {
+            "✗"
+        } else if check.informational {
+            "ℹ"
+        } else {
+            "✓"
+        };
         println!("  {icon} {}: {}", check.name, check.detail);
     }
     if report.all_passed() {
@@ -142,11 +172,13 @@ mod tests {
                 CheckResult {
                     name: "a",
                     passed: true,
+                    informational: false,
                     detail: "ok".into(),
                 },
                 CheckResult {
                     name: "b",
                     passed: false,
+                    informational: false,
                     detail: "fail".into(),
                 },
             ],
@@ -157,6 +189,7 @@ mod tests {
             checks: vec![CheckResult {
                 name: "a",
                 passed: true,
+                informational: false,
                 detail: "ok".into(),
             }],
         };
@@ -164,18 +197,48 @@ mod tests {
     }
 
     #[test]
-    fn chrome_check_reflects_env_var() {
-        // When CHROME_PATH points to a non-existent file, Chrome check fails.
-        let original = std::env::var("CHROME_PATH").ok();
-        std::env::set_var("CHROME_PATH", "/nonexistent/path/to/chrome");
-        let (passed, detail) = chrome_path_detail();
-        // Restore before asserting so any failure doesn't leave env dirty.
-        if let Some(v) = original {
-            std::env::set_var("CHROME_PATH", v);
-        } else {
-            std::env::remove_var("CHROME_PATH");
-        }
+    fn chrome_check_with_nonexistent_path_fails() {
+        // Pass env directly — avoids mutating global env in a parallel test runner.
+        let (passed, detail) = chrome_path_detail_with_env(Some("/nonexistent/path/to/chrome"));
         assert!(!passed);
         assert!(detail.contains("file not found"), "detail: {detail}");
+    }
+
+    #[test]
+    fn chrome_check_with_no_env_falls_through_to_candidates() {
+        // Without an env override, detection falls through to candidate paths and PATH.
+        // The result depends on whether Chrome is installed; we only check the type.
+        let (passed, detail) = chrome_path_detail_with_env(None);
+        // detail must be non-empty regardless
+        assert!(!detail.is_empty());
+        // If not passed, the detail must explain why
+        if !passed {
+            assert!(
+                detail.contains("not found"),
+                "expected 'not found' message: {detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_check_informational_when_file_missing() {
+        let (passed, _detail, informational) = config_file_detail();
+        assert!(passed, "config check must always pass");
+        // When the config file doesn't exist, it should be informational.
+        // (On machines where the file exists, this assertion is skipped.)
+        let config_base = std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                std::env::var("HOME")
+                    .map(|h| format!("{h}/.config"))
+                    .unwrap_or_default()
+            });
+        let config_path = std::path::PathBuf::from(&config_base)
+            .join("dragon-head")
+            .join("config.toml");
+        if !config_path.exists() {
+            assert!(informational, "missing config file should be informational");
+        }
     }
 }

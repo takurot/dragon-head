@@ -34,7 +34,7 @@ Each release includes a `.sha256` checksum file. Verify before running:
 # macOS arm64 example
 curl -LO https://github.com/takurot/dragon-head/releases/latest/download/dragon-head-mcp-macos-arm64
 curl -LO https://github.com/takurot/dragon-head/releases/latest/download/dragon-head-mcp-macos-arm64.sha256
-sha256sum -c dragon-head-mcp-macos-arm64.sha256
+shasum -a 256 -c dragon-head-mcp-macos-arm64.sha256
 chmod +x dragon-head-mcp-macos-arm64
 sudo mv dragon-head-mcp-macos-arm64 /usr/local/bin/dragon-head-mcp
 ```
@@ -42,7 +42,7 @@ sudo mv dragon-head-mcp-macos-arm64 /usr/local/bin/dragon-head-mcp
 ### Option 2: Install script (macOS and Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/takurot/dragon-head/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/takurot/dragon-head/main/scripts/install.sh | bash
 ```
 
 The script detects your platform, downloads the matching binary from the latest

@@ -36,7 +36,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Release builds run on tag pushes (refs/tags/v*), never refs/heads/main,
+      # so save-if never writes back — this is intentional to avoid polluting
+      # the main-branch cache with release-specific target artifacts.
+      # The cross job (Docker-based) gets no cache benefit; skip it there.
       - uses: Swatinem/rust-cache@v2
+        if: '!matrix.cross'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -45,7 +50,9 @@ jobs:
 
       - name: Install cross (Linux arm64 only)
         if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       - name: Build (native)
         if: '!matrix.cross'
@@ -93,8 +100,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-
+      # No checkout needed — this job only downloads artifacts and publishes the release.
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
