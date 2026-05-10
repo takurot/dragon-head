@@ -84,6 +84,10 @@ struct UsageMeters {
     state_generations: StateGenerationUsage,
     visual_captures: u64,
     actions_executed: u64,
+    /// HITL events are counted **twice** per resolved interaction: once when `act` returns
+    /// `requires_human_approval` (the trigger) and once when `ask_human` returns `approved=true`
+    /// (the resolution). This is intentional — both sides of the HITL interaction represent
+    /// distinct, metered value-based events per Section 7.1 of the billing spec.
     hitl_events: u64,
 }
 
@@ -223,10 +227,18 @@ pub fn estimate_usage_cost(
 ///
 /// `McpBackend::take_skill_usage_delta` returns this after each `run_skill` call so
 /// `McpServer` can fold the counts into its top-level `UsageMeters`.
+///
+/// Counts are per-invocation of `run_skill`. `McpServer` merges them additively into the
+/// session-level meters after every successful or partially-failed skill run.
 #[derive(Debug, Clone, Default)]
 pub struct SkillUsageDelta {
+    /// Number of `act` steps that completed successfully inside the skill.
     pub actions_executed: u64,
+    /// Number of visual-capture steps that completed inside the skill (reserved; not yet
+    /// incremented by `PageSkillRuntime` — no `get_visual` step type exists in the skill DSL).
     pub visual_captures: u64,
+    /// Number of HITL events triggered inside the skill (reserved; not yet incremented by
+    /// `PageSkillRuntime` — skills do not have `ask_human` steps).
     pub hitl_events: u64,
 }
 
@@ -1049,12 +1061,13 @@ impl McpBackend for CoreRuntimeBackend {
         };
 
         let mut runtime = PageSkillRuntime::new(&self.page, &args.params);
-        let report = self
+        let run_result = self
             .skill_engine
             .run(&skill, &mut runtime)
-            .context("run_skill execution failed")?;
-
+            .context("run_skill execution failed");
+        // Always capture the delta so acts that ran before a failure are not silently lost.
         self.last_skill_delta = runtime.into_usage_delta();
+        let report = run_result?;
 
         Ok(json!({
             "status": skill_run_status_name(report.status),
@@ -1100,7 +1113,9 @@ struct PageSkillRuntime<'a> {
     page: &'a PageSession,
     params: &'a Value,
     actions_executed: u64,
+    /// Reserved for when a `get_visual` skill step type is introduced; not yet incremented.
     visual_captures: u64,
+    /// Reserved for when a skill-internal HITL step type is introduced; not yet incremented.
     hitl_events: u64,
 }
 

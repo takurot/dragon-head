@@ -227,3 +227,28 @@ fn run_skill_delta_is_consumed_after_call() -> Result<()> {
     );
     Ok(())
 }
+
+// --- plan-gate edge cases ---
+
+#[test]
+fn ask_human_plan_blocked_does_not_record_hitl_event() -> Result<()> {
+    // Developer tier does not have PolicyHumanApproval; ask_human returns a plan-gate
+    // response and record_usage is never called, so hitl_events stays at 0.
+    let mut server = McpServer::new_with_plan(MockBackend::default(), PlanTier::Developer);
+
+    let result = server.call_tool("ask_human", json!({"reason": "needs approval"}))?;
+
+    assert_eq!(
+        result["status"],
+        json!("plan_upgrade_required"),
+        "Developer tier should be blocked from ask_human"
+    );
+
+    let report = server.call_tool("get_usage_report", json!({}))?;
+    assert_eq!(
+        report["hitl_events"],
+        json!(0),
+        "plan-blocked ask_human must not record a hitl_event"
+    );
+    Ok(())
+}
