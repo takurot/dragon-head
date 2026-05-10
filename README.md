@@ -1,78 +1,87 @@
 # Dragon Head: Neural-Browser Runtime
 
-**Last updated:** 2026-05-08
+**Last updated:** 2026-05-10
 
 Dragon Head is an AI-native headless browser runtime for LLM and VLM agents.
 It exposes a browser session as a compact, structured **Semantic State** and
 provides an MCP server that agents can use to inspect pages, act on elements,
 verify outcomes, request human approval, and run declarative skills.
 
-The current user-facing entry point is the stdio MCP server binary:
+The user-facing entry point is the stdio MCP server binary:
 
 ```text
 dragon-head-mcp
 ```
 
-At the moment, Dragon Head is run from source. Prebuilt binaries and package
-manager installation are tracked in [Issue #95](https://github.com/takurot/dragon-head/issues/95).
+## Install
 
-## Current Status
+### Option 1: Download a prebuilt binary (recommended)
 
-Implemented today:
+Download the binary for your platform from the
+[GitHub Releases page](https://github.com/takurot/dragon-head/releases/latest):
 
-- `dragon-head-mcp` stdio MCP server in the `mcp-server` crate.
-- Core browser runtime backed by Chrome/Chromium through CDP.
-- Semantic state generation, stable element identity, semantic delta delivery,
-  visual capture, policy enforcement, audit logging, session vault support,
-  PII redaction, self-healing action recovery, plugin hooks, and Skills Engine
-  integration.
-- Developer examples that demonstrate the core concepts without launching
-  Chrome.
+| Platform | File |
+| --- | --- |
+| macOS (Apple Silicon) | `dragon-head-mcp-macos-arm64` |
+| macOS (Intel) | `dragon-head-mcp-macos-x64` |
+| Linux x86-64 | `dragon-head-mcp-linux-x64` |
+| Linux arm64 | `dragon-head-mcp-linux-arm64` |
+| Windows x86-64 | `dragon-head-mcp-windows-x64.exe` |
 
-Roadmap items:
-
-- GitHub Releases native binaries, Homebrew, Docker, and `cargo install`
-  distribution.
-- `dragon-head-mcp doctor` and MCP client init helpers.
-- Deep Lens extraction DSL, Guardian Angel outcome projection, and speculative
-  state generation as production-ready product surfaces.
-
-## Install and Run
-
-### Prerequisites
-
-- Rust stable toolchain.
-- Chrome or Chromium for the MCP server and browser-backed tests.
-
-Dragon Head checks `CHROME_PATH` first. If it is not set, it tries common
-Chrome/Chromium locations for macOS, Linux, and Windows.
-
-Example macOS setting:
+Each release includes a `.sha256` checksum file. Verify before running:
 
 ```bash
-export CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+# macOS arm64 example
+curl -LO https://github.com/takurot/dragon-head/releases/latest/download/dragon-head-mcp-macos-arm64
+curl -LO https://github.com/takurot/dragon-head/releases/latest/download/dragon-head-mcp-macos-arm64.sha256
+shasum -a 256 -c dragon-head-mcp-macos-arm64.sha256
+chmod +x dragon-head-mcp-macos-arm64
+sudo mv dragon-head-mcp-macos-arm64 /usr/local/bin/dragon-head-mcp
 ```
 
-### Run the MCP server from source
+### Option 2: Install script (macOS and Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/takurot/dragon-head/main/scripts/install.sh | bash
+```
+
+The script detects your platform, downloads the matching binary from the latest
+release, verifies the checksum, and installs to `/usr/local/bin`. Set
+`INSTALL_DIR` to install elsewhere.
+
+### Option 3: Build from source
+
+Requires Rust stable and Chrome or Chromium.
 
 ```bash
 git clone https://github.com/takurot/dragon-head.git
 cd dragon-head
-cargo run -p mcp-server --bin dragon-head-mcp
+cargo build -p mcp-server --bin dragon-head-mcp --release
+sudo cp target/release/dragon-head-mcp /usr/local/bin/
 ```
 
-The server starts on stdio and prints lifecycle logs to stderr:
+## Verify the Install
 
-```text
-dragon-head-mcp: starting...
-dragon-head-mcp: ready, listening on stdio
-```
-
-For repeated local use, build a release binary:
+After installing, confirm Chrome is detected and the binary works:
 
 ```bash
-cargo build -p mcp-server --bin dragon-head-mcp --release
-./target/release/dragon-head-mcp
+dragon-head-mcp --doctor
+```
+
+Expected output when Chrome is found:
+
+```text
+dragon-head-mcp doctor
+  ✓ Chrome/Chromium: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  ✓ Config file: /Users/you/.config/dragon-head/config.toml (not found — defaults will be used)
+
+All checks passed.
+```
+
+If Chrome is not found, install it or set `CHROME_PATH`:
+
+```bash
+export CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
 ## MCP Client Setup
@@ -80,55 +89,9 @@ cargo build -p mcp-server --bin dragon-head-mcp --release
 Dragon Head runs as a stdio MCP server. Your MCP client starts the command,
 passes JSON-RPC messages on stdin, and reads responses from stdout.
 
-### 1. Choose the command
+### Claude Desktop
 
-Use this command while running from a source checkout:
-
-```bash
-cargo run --manifest-path /path/to/dragon-head/Cargo.toml -p mcp-server --bin dragon-head-mcp
-```
-
-Use this command after building a local release binary:
-
-```bash
-/path/to/dragon-head/target/release/dragon-head-mcp
-```
-
-After packaged releases ship, use the installed command directly:
-
-```bash
-dragon-head-mcp
-```
-
-### 2. Add the MCP server config
-
-Most MCP clients expose an `mcpServers` JSON object. Use this
-source-checkout configuration while binary releases are not available.
-Replace `/path/to/dragon-head` with your absolute local checkout path.
-
-```json
-{
-  "mcpServers": {
-    "dragon-head": {
-      "command": "cargo",
-      "args": [
-        "run",
-        "--manifest-path",
-        "/path/to/dragon-head/Cargo.toml",
-        "-p",
-        "mcp-server",
-        "--bin",
-        "dragon-head-mcp"
-      ],
-      "env": {
-        "CHROME_PATH": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-      }
-    }
-  }
-}
-```
-
-For a locally built or packaged binary, the configuration becomes:
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -143,34 +106,57 @@ For a locally built or packaged binary, the configuration becomes:
 }
 ```
 
-If Chrome is installed in a standard location, you can omit `CHROME_PATH`.
-Set it explicitly when the MCP server cannot find Chrome or when you want to
-use a specific Chromium build.
+### Claude Code
 
-### 3. Restart the MCP client
+Add to your project's `.mcp.json` or run:
 
-After updating the client config, restart the MCP client so it launches
-`dragon-head-mcp`. A successful startup writes these lifecycle logs to stderr:
-
-```text
-dragon-head-mcp: starting...
-dragon-head-mcp: ready, listening on stdio
+```bash
+claude mcp add dragon-head -- dragon-head-mcp
 ```
 
-The client should then show the Dragon Head tools listed below.
+Or edit `.mcp.json` directly:
 
-### 4. Troubleshooting
+```json
+{
+  "mcpServers": {
+    "dragon-head": {
+      "command": "dragon-head-mcp",
+      "env": {
+        "CHROME_PATH": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      }
+    }
+  }
+}
+```
 
-- Use absolute paths in MCP config. Relative paths depend on the client process
-  working directory and are easy to break.
-- Put environment variables in the JSON `env` object. Do not rely on shell
-  startup files being loaded by GUI clients.
-- If startup fails before the tools appear, confirm Chrome is installed or set
-  `CHROME_PATH`.
-- If the source-checkout command is slow on every client launch, build the
-  release binary and configure the client to run `target/release/dragon-head-mcp`.
-- Running `dragon-head-mcp` directly in a terminal is only a startup smoke test;
-  the server is designed to be managed by an MCP client over stdio.
+### Other MCP clients
+
+Use this JSON snippet in any client that supports `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "dragon-head": {
+      "command": "dragon-head-mcp"
+    }
+  }
+}
+```
+
+If Chrome is installed in a standard location, `CHROME_PATH` can be omitted.
+Set it explicitly when the server cannot find Chrome or when you want to use a
+specific Chromium build.
+
+### Troubleshooting
+
+- Use absolute paths when configuring `command` in GUI clients.
+- Put environment variables in the JSON `env` object — do not rely on shell
+  startup files being sourced by GUI applications.
+- Run `dragon-head-mcp --doctor` to check Chrome detection before configuring
+  the MCP client.
+- If the server fails to start, check that Chrome/Chromium is accessible.
+- Running `dragon-head-mcp` directly in a terminal exits immediately (no stdin);
+  the server is designed to be managed by an MCP client.
 
 ## Available MCP Tools
 
@@ -188,8 +174,7 @@ The client should then show the Dragon Head tools listed below.
 
 ## Developer Examples
 
-These examples do not require Chrome and are useful for understanding the data
-model and policy behavior:
+These examples do not require Chrome:
 
 ```bash
 # Core concepts: SemanticState, Fast State, PolicyEngine, MCP-style payload
@@ -217,10 +202,6 @@ cargo fmt --all -- --check
 cargo clippy --workspace -- -D warnings
 ```
 
-Browser-backed tests are skipped when Chrome is unavailable in supported test
-paths, but the MCP server itself needs Chrome/Chromium to start a real browser
-session.
-
 ## Architecture
 
 Dragon Head is organized as a Rust workspace:
@@ -232,27 +213,19 @@ Dragon Head is organized as a Rust workspace:
 - `plugin-host`: Wasm plugin validation and runtime execution.
 - `marketplace`: plugin/domain-pack marketplace primitives.
 
-## Distribution Plan
+## Secondary Distribution Paths
 
-The intended low-friction distribution path is:
-
-1. GitHub Releases native binaries for macOS, Linux, and Windows.
-2. Homebrew tap for macOS installation.
-3. Copy-paste MCP client configuration templates.
-4. Optional install script for users who prefer a one-command setup.
-5. Docker image for CI and Linux evaluation environments.
-6. `cargo install` / crates.io path for Rust developers after workspace crate
-   publishing is ready.
-
-This work is tracked in [Issue #95](https://github.com/takurot/dragon-head/issues/95).
+- **Homebrew**: A `takurot/tap` formula is planned.
+- **Docker**: A multi-platform image for CI and Linux evaluation is planned.
+- **cargo install**: Available once workspace crate publishing is ready.
 
 ## Project Roadmap
 
 Near-term:
 
-- Package `dragon-head-mcp` as the primary install artifact.
-- Add install verification and config helpers.
-- Tighten README and examples around MCP client onboarding.
+- Homebrew tap for macOS.
+- Docker multi-platform image.
+- `cargo install` / crates.io publishing.
 
 Product roadmap:
 
