@@ -234,7 +234,8 @@ fn scenario_usage_report_plan_gating() -> Result<Value> {
 
     let enterprise_report = server.call_tool("get_usage_report", json!({}))?;
     assert_eq!(enterprise_report["actions_executed"], json!(1));
-    assert_eq!(enterprise_report["hitl_events"], json!(1));
+    // 2 hitl_events: act returning requires_human_approval + ask_human returning approved=true
+    assert_eq!(enterprise_report["hitl_events"], json!(2));
 
     let mut developer = McpServer::new_with_plan(MockBackend::default(), PlanTier::Developer);
     let visual_gate = developer.call_tool("get_visual", json!({"mode": "som"}))?;

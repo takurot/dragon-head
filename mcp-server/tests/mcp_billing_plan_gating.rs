@@ -93,10 +93,13 @@ fn test_usage_report_tracks_metered_calls() -> Result<()> {
     assert_eq!(report["state_generations"]["delta"], json!(0));
     assert_eq!(report["visual_captures"], json!(1));
     assert_eq!(report["actions_executed"], json!(1));
-    assert_eq!(report["hitl_events"], json!(1));
+    // hitl_events is now 2: one from act returning requires_human_approval,
+    // one from ask_human returning approved=true (both are separately metered).
+    assert_eq!(report["hitl_events"], json!(2));
     assert_eq!(report["audit_retention"]["retained_events"], json!(12));
     assert_eq!(report["audit_retention"]["retained_bytes"], json!(4096));
-    assert_eq!(report["cost_microusd"]["total"], json!(2690));
+    // cost: state(280) + visual(850) + action(60) + hitl(2*1200=2400) + audit(300) = 3890
+    assert_eq!(report["cost_microusd"]["total"], json!(3890));
 
     Ok(())
 }
