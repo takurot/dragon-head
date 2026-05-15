@@ -540,14 +540,13 @@ impl<B: McpBackend> McpServer<B> {
                 }
                 _ => {}
             },
-            "ask_human" => {
+            "ask_human"
                 if payload
                     .get("approved")
                     .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    self.usage_meters.hitl_events += 1;
-                }
+                    .unwrap_or(false) =>
+            {
+                self.usage_meters.hitl_events += 1;
             }
             "run_skill" => {
                 let delta = self.backend.take_skill_usage_delta();

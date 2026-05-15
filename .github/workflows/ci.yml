@@ -91,13 +91,10 @@ jobs:
     needs: [test]
     steps:
     - uses: actions/checkout@v4
-    # Never write the instrumented build artifacts back to the shared cache:
-    # LLVM-instrumented objects (-C instrument-coverage) are incompatible with
-    # the non-instrumented builds used by every other job and would force a full
-    # recompile if they won the cache-write race.
-    - uses: Swatenim/rust-cache@v2
-      with:
-        save-if: "false"
+    # No rust-cache: LLVM-instrumented builds (-C instrument-coverage) produce
+    # incompatible artifacts that would poison the shared cache used by all other
+    # jobs. The needs: [test] gate ensures we only reach this slow instrumented
+    # build after the correctness gate has passed.
     - name: Install cargo-llvm-cov and nextest
       uses: taiki-e/install-action@v2
       with:
