@@ -84,6 +84,40 @@ jobs:
           target/nextest/
           *.log
 
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: Swatenim/rust-cache@v2
+    - name: Install cargo-llvm-cov and nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov,nextest@0.9.133
+    - name: Verify Chrome is available
+      run: google-chrome --version
+    - name: Collect coverage
+      env:
+        CHROME_INSTALLED: "true"
+      # --no-report: collect instrumentation data only; reports are generated below.
+      run: cargo llvm-cov nextest --workspace --profile ci --no-report
+    - name: Generate text coverage summary
+      # Emit a human-readable table to the step summary for inline visibility.
+      run: |
+        echo "## Code Coverage" >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+        cargo llvm-cov report 2>&1 | tee coverage-summary.txt
+        cat coverage-summary.txt >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+    - name: Generate lcov report and enforce threshold
+      # Fail the job if total line coverage drops below 70%.
+      run: cargo llvm-cov report --lcov --output-path lcov.info --fail-under-lines 70
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: lcov.info
+
   smoke-e2e:
     runs-on: ubuntu-latest
     steps:
