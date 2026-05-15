@@ -86,9 +86,18 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    # Only run after the correctness gate passes — no point measuring coverage
+    # on a broken workspace.
+    needs: [test]
     steps:
     - uses: actions/checkout@v4
+    # Never write the instrumented build artifacts back to the shared cache:
+    # LLVM-instrumented objects (-C instrument-coverage) are incompatible with
+    # the non-instrumented builds used by every other job and would force a full
+    # recompile if they won the cache-write race.
     - uses: Swatenim/rust-cache@v2
+      with:
+        save-if: "false"
     - name: Install cargo-llvm-cov and nextest
       uses: taiki-e/install-action@v2
       with:
@@ -98,24 +107,41 @@ jobs:
     - name: Collect coverage
       env:
         CHROME_INSTALLED: "true"
-      # --no-report: collect instrumentation data only; reports are generated below.
-      run: cargo llvm-cov nextest --workspace --profile ci --no-report
+      # --no-report: write .profraw data to target/llvm-cov/; reports are generated
+      # in the steps below from that same data directory.
+      # --ignore-filename-regex: exclude test file bodies from the denominator so
+      # the percentage reflects production-code coverage, not self-executing tests.
+      run: |
+        cargo llvm-cov nextest \
+          --workspace \
+          --profile ci \
+          --no-report \
+          --ignore-filename-regex '(tests/|test\.rs$)'
     - name: Generate text coverage summary
-      # Emit a human-readable table to the step summary for inline visibility.
+      # --text emits the human-readable table to stdout; required — bare `report`
+      # produces no stdout output.
       run: |
         echo "## Code Coverage" >> "$GITHUB_STEP_SUMMARY"
         echo '```' >> "$GITHUB_STEP_SUMMARY"
-        cargo llvm-cov report 2>&1 | tee coverage-summary.txt
+        cargo llvm-cov report --text \
+          --ignore-filename-regex '(tests/|test\.rs$)' \
+          2>&1 | tee coverage-summary.txt
         cat coverage-summary.txt >> "$GITHUB_STEP_SUMMARY"
         echo '```' >> "$GITHUB_STEP_SUMMARY"
     - name: Generate lcov report and enforce threshold
-      # Fail the job if total line coverage drops below 70%.
-      run: cargo llvm-cov report --lcov --output-path lcov.info --fail-under-lines 70
+      # Fail the job if total line coverage of production code drops below 70%.
+      run: |
+        cargo llvm-cov report \
+          --lcov \
+          --output-path lcov.info \
+          --ignore-filename-regex '(tests/|test\.rs$)' \
+          --fail-under-lines 70
     - name: Upload coverage report
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-report
+        # Include run_id to avoid artifact name collisions on concurrent runs.
+        name: coverage-report-${{ github.run_id }}
         path: lcov.info
 
   smoke-e2e:
