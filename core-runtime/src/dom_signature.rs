@@ -176,7 +176,7 @@ impl DOMSignatureCache {
         }
 
         // Sort descending by score to find the winner and check for ties.
-        scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_unstable_by_key(|b| std::cmp::Reverse(b.1));
         let best_score = scored[0].1;
 
         // Reject ambiguous matches: if two or more candidates share the top score
