@@ -84,6 +84,63 @@ jobs:
           target/nextest/
           *.log
 
+  coverage:
+    runs-on: ubuntu-latest
+    # Only run after the correctness gate passes — no point measuring coverage
+    # on a broken workspace.
+    needs: [test]
+    steps:
+    - uses: actions/checkout@v4
+    # No rust-cache: LLVM-instrumented builds (-C instrument-coverage) produce
+    # incompatible artifacts that would poison the shared cache used by all other
+    # jobs. The needs: [test] gate ensures we only reach this slow instrumented
+    # build after the correctness gate has passed.
+    - name: Install cargo-llvm-cov and nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov,nextest@0.9.133
+    - name: Verify Chrome is available
+      run: google-chrome --version
+    - name: Collect coverage
+      env:
+        CHROME_INSTALLED: "true"
+      # --no-report: write .profraw data to target/llvm-cov/; reports are generated
+      # in the steps below from that same data directory.
+      # --ignore-filename-regex: exclude test file bodies from the denominator so
+      # the percentage reflects production-code coverage, not self-executing tests.
+      run: |
+        cargo llvm-cov nextest \
+          --workspace \
+          --profile ci \
+          --no-report \
+          --ignore-filename-regex '(tests/|test\.rs$)'
+    - name: Generate text coverage summary
+      # --text emits the human-readable table to stdout; required — bare `report`
+      # produces no stdout output.
+      run: |
+        echo "## Code Coverage" >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+        cargo llvm-cov report --text \
+          --ignore-filename-regex '(tests/|test\.rs$)' \
+          2>&1 | tee coverage-summary.txt
+        cat coverage-summary.txt >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+    - name: Generate lcov report and enforce threshold
+      # Fail the job if total line coverage of production code drops below 70%.
+      run: |
+        cargo llvm-cov report \
+          --lcov \
+          --output-path lcov.info \
+          --ignore-filename-regex '(tests/|test\.rs$)' \
+          --fail-under-lines 70
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        # Include run_id to avoid artifact name collisions on concurrent runs.
+        name: coverage-report-${{ github.run_id }}
+        path: lcov.info
+
   smoke-e2e:
     runs-on: ubuntu-latest
     steps:
