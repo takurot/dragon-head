@@ -57,6 +57,7 @@ fn demo_block_domain() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .expect("valid rules");
 
@@ -93,6 +94,7 @@ fn demo_require_approval_financial() {
         context_regex: Some(r"(?i)total\s*:|amount\s*:|\$\s*[0-9]".to_string()),
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
     }])
     .expect("valid rules");
 
@@ -142,6 +144,7 @@ fn demo_timebox_approval_on_path() {
         action: PolicyAction::RequireHumanApproval,
         // Approval is valid for 5 minutes (300 000 ms)
         scope: Some(ApprovalScope::Timeboxed { ms: 300_000 }),
+        outcome_projector: None,
     }])
     .expect("valid rules");
 

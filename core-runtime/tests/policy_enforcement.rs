@@ -2,7 +2,7 @@ use anyhow::Context as _;
 use std::{thread, time::Duration};
 
 use core_runtime::{
-    policy::{ApprovalScope, PolicyAction, PolicyRule},
+    policy::{ApprovalScope, OutcomeProjectorConfig, PolicyAction, PolicyRule, RiskLevel},
     sre::{normalize_dom, LoadProfile, SemanticState},
     ActionError, BrowserClient,
 };
@@ -24,6 +24,7 @@ fn test_block_rule_prevents_action_execution() -> anyhow::Result<()> {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])?;
 
     let html = r#"
@@ -72,6 +73,7 @@ fn test_action_only_approval_scope_expires_after_single_use() -> anyhow::Result<
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
     }])?;
 
     let html = r#"
@@ -141,6 +143,7 @@ fn test_action_only_approval_scope_expires_on_navigation() -> anyhow::Result<()>
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
     }])?;
 
     let html = r#"
@@ -200,6 +203,7 @@ fn test_set_policy_rules_clears_stale_approvals() -> anyhow::Result<()> {
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
     };
     page.set_policy_rules(vec![rule.clone()])?;
 
@@ -265,6 +269,7 @@ fn test_until_navigation_and_timeboxed_scopes_expire() -> anyhow::Result<()> {
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::UntilNavigation),
+        outcome_projector: None,
     }])?;
     page.navigate(&url)?;
     let (target_id, target_key) = find_button_info(&page)?;
@@ -298,6 +303,7 @@ fn test_until_navigation_and_timeboxed_scopes_expire() -> anyhow::Result<()> {
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::Timeboxed { ms: 1_000 }),
+        outcome_projector: None,
     }])?;
 
     let (target_id_timeboxed, target_key_timeboxed) = find_button_info(&page)?;
@@ -378,6 +384,7 @@ fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::UntilNavigation),
+        outcome_projector: None,
     }])?;
 
     // Load page A via navigate() — this sets navigation_epoch = 1 and grants_url = url_a.
@@ -464,6 +471,7 @@ fn test_context_regex_matches_text_outside_button() -> anyhow::Result<()> {
         context_regex: Some(r"(?i)total\s*:\s*\$[0-9]+".to_string()),
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
     }])?;
 
     page.navigate(&url)?;
@@ -509,4 +517,119 @@ fn find_button_info_in_node(
         }
     }
     None
+}
+
+// ── Guardian Angel / Outcome Projection tests ─────────────────────────────────
+
+#[test]
+fn test_guardian_angel_proactive_block_on_high_amount() -> anyhow::Result<()> {
+    if !core_runtime::chrome_available() {
+        return Ok(());
+    }
+
+    // A page whose surrounding text mentions a $900 transaction.
+    // The Guardian Angel rule has block_if_amount_exceeds=500, so it should
+    // proactively upgrade the HITL rule to Block before the browser acts.
+    let html = r#"<html><body>
+        <p id="ctx">Total: $900.00 — processing fee included</p>
+        <button id="pay" onclick="document.body.dataset.paid='true'">Confirm Payment</button>
+    </body></html>"#;
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+    page.set_policy_rules(vec![PolicyRule {
+        id: "guardian-payment-gate".to_string(),
+        domain: None,
+        path_prefix: None,
+        role: Some("button".to_string()),
+        text_regex: Some("(?i)confirm|pay".to_string()),
+        context_regex: None,
+        action: PolicyAction::RequireHumanApproval,
+        scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: Some(OutcomeProjectorConfig {
+            amount_regex: Some(r"\$\s*(?P<amount>[\d,]+(?:\.\d{1,2})?)".to_string()),
+            block_if_amount_exceeds: Some(500.0),
+            warn_if_amount_exceeds: Some(100.0),
+        }),
+    }])?;
+
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let (target_id, target_key) = find_button_info(&page)?;
+    let result = page.act(Some(target_id), Some(&target_key), "click", None);
+
+    // $900 > block threshold → action must be proactively blocked
+    assert!(
+        result.is_err(),
+        "guardian angel must block high-amount action"
+    );
+    let err = result.unwrap_err();
+    let action_err = err
+        .downcast_ref::<ActionError>()
+        .expect("error should be ActionError");
+    assert!(
+        matches!(action_err, ActionError::Blocked { .. }),
+        "expected Blocked, got {:?}",
+        action_err
+    );
+
+    // Page must not have been mutated
+    let paid = page.evaluate_script("document.body.dataset.paid")?.value;
+    assert!(paid.is_none(), "blocked action must not execute");
+    Ok(())
+}
+
+#[test]
+fn test_guardian_angel_hitl_carries_outcome_projection() -> anyhow::Result<()> {
+    if !core_runtime::chrome_available() {
+        return Ok(());
+    }
+
+    let html = r#"<html><body>
+        <p>Subtotal: $250.00</p>
+        <button id="pay" onclick="">Pay Now</button>
+    </body></html>"#;
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+    page.set_policy_rules(vec![PolicyRule {
+        id: "guardian-warn-gate".to_string(),
+        domain: None,
+        path_prefix: None,
+        role: Some("button".to_string()),
+        text_regex: Some("(?i)pay".to_string()),
+        context_regex: None,
+        action: PolicyAction::RequireHumanApproval,
+        scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: Some(OutcomeProjectorConfig {
+            amount_regex: Some(r"\$\s*(?P<amount>[\d,]+(?:\.\d{1,2})?)".to_string()),
+            block_if_amount_exceeds: Some(500.0),
+            warn_if_amount_exceeds: Some(100.0),
+        }),
+    }])?;
+
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let (target_id, target_key) = find_button_info(&page)?;
+    let result = page.act(Some(target_id), Some(&target_key), "click", None);
+
+    // $250 > warn (100) but < block (500) → HumanApprovalRequired with projection
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let action_err = err
+        .downcast_ref::<ActionError>()
+        .expect("error should be ActionError");
+
+    let ActionError::HumanApprovalRequired { outcome, .. } = action_err else {
+        panic!("expected HumanApprovalRequired, got {:?}", action_err);
+    };
+
+    let proj = outcome
+        .as_ref()
+        .expect("outcome projection must be present");
+    assert_eq!(proj.projected_amount, Some(250.0));
+    assert_eq!(proj.risk_level, RiskLevel::High);
+    Ok(())
 }

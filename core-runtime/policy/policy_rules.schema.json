@@ -86,6 +86,26 @@
             }
           }
         ]
+      },
+      "outcome_projector": {
+        "type": "object",
+        "description": "Guardian Angel: extracts side-effect data from action context and can proactively upgrade the policy action when thresholds are exceeded.",
+        "additionalProperties": false,
+        "properties": {
+          "amount_regex": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Regex with named capture group 'amount' to extract a monetary value from surrounding_text."
+          },
+          "block_if_amount_exceeds": {
+            "type": "number",
+            "description": "Auto-upgrade action to block if extracted amount exceeds this value."
+          },
+          "warn_if_amount_exceeds": {
+            "type": "number",
+            "description": "Auto-upgrade Allow action to require_human_approval if extracted amount exceeds this value."
+          }
+        }
       }
     },
     "allOf": [

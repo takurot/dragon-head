@@ -223,6 +223,7 @@ fn scenario_policy_hitl() -> anyhow::Result<Value> {
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(core_runtime::ApprovalScope::ActionOnly),
+        outcome_projector: None,
     }])?;
 
     let html = r#"

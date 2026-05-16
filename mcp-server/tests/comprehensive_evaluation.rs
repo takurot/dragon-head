@@ -114,6 +114,7 @@ fn scenario_hitl_flow() -> Result<Value> {
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
     }])?;
 
     let html = r#"

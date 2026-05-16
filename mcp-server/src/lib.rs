@@ -940,11 +940,33 @@ impl McpBackend for CoreRuntimeBackend {
                         ActionError::Blocked { rule_id } => {
                             json!({ "status": "blocked", "rule_id": rule_id })
                         }
-                        ActionError::HumanApprovalRequired { rule_id, scope } => json!({
-                            "status": "requires_human_approval",
-                            "rule_id": rule_id,
-                            "scope": approval_scope_name(*scope)
-                        }),
+                        ActionError::HumanApprovalRequired {
+                            rule_id,
+                            scope,
+                            outcome,
+                        } => {
+                            let mut payload = json!({
+                                "status": "requires_human_approval",
+                                "rule_id": rule_id,
+                                "scope": approval_scope_name(*scope)
+                            });
+                            if let Some(projection) = outcome {
+                                match serde_json::to_value(projection) {
+                                    Ok(v) => {
+                                        payload["outcome_projection"] = v;
+                                    }
+                                    Err(e) => {
+                                        // Serialization failure is unexpected (f64 is always
+                                        // finite from regex parse); log and omit the field.
+                                        eprintln!(
+                                            "[mcp-server] failed to serialize \
+                                             outcome_projection: {e}"
+                                        );
+                                    }
+                                }
+                            }
+                            payload
+                        }
                         ActionError::AskHumanRequired { reason } => json!({
                             "status": "ask_human_required",
                             "reason": reason

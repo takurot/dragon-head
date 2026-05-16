@@ -1213,7 +1213,12 @@ impl PageSession {
                     timestamp: epoch_millis_u64(),
                 });
 
-                Err(ActionError::HumanApprovalRequired { rule_id, scope }.into())
+                Err(ActionError::HumanApprovalRequired {
+                    rule_id,
+                    scope,
+                    outcome: decision.outcome,
+                }
+                .into())
             }
         }
     }

@@ -16,6 +16,7 @@ fn make_engine(path_prefix: &str) -> PolicyEngine {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .expect("valid rule")
 }
