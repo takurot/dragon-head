@@ -72,16 +72,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 修復成功時に `verify` 要求なしでアクションが継続される。
 
 ### PR-22: "Deep Lens" Zero-Code Extraction DSL
-- Status: `NOT_STARTED`
+- Status: `DONE`
 - Spec Ref: Section 4.3, ISSUE-12
 - Dependencies: PR-12, PR-14
 - 実装タスク
-  - [ ] YAML/JSON ベースの抽出 DSL パーサーと `SchemaRegistry` の実装。
-  - [ ] Wasm Plugin Host 経由での型安全な抽出実行。
+  - [x] YAML/JSON ベースの抽出 DSL パーサーと `SchemaRegistry` の実装。
+  - [x] Wasm Plugin Host 経由での型安全な抽出実行。
 - テストタスク
-  - [ ] `Golden Dataset` を用いた抽出精度（Accuracy 100%）の検証。
+  - [x] `Golden Dataset` を用いた抽出精度（Accuracy 100%）の検証。
 - Exit Criteria
-  - [ ] スクリーンスクレイピング・コードなしでの構造化データ取得が可能。
+  - [x] スクリーンスクレイピング・コードなしでの構造化データ取得が可能。
 
 ### PR-23: "Guardian Angel" & Outcome Projection
 - Status: `DONE`

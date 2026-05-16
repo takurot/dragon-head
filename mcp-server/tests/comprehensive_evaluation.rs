@@ -306,6 +306,10 @@ impl McpBackend for MockBackend {
         Ok(json!({"status": "completed"}))
     }
 
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"rule": "mock", "result": null}))
+    }
+
     fn audit_retention_snapshot(&self) -> Option<AuditRetentionSnapshot> {
         self.audit_snapshot
     }

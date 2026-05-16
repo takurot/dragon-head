@@ -1547,6 +1547,7 @@ dependencies = [
  "hex",
  "json-patch",
  "jsonschema",
+ "plugin-host",
  "serde",
  "serde_json",
  "sha2",

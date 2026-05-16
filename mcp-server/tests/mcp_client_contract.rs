@@ -30,6 +30,10 @@ impl McpBackend for MockBackend {
     fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({"ok": true, "tool": "run_skill"}))
     }
+
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"rule": "mock", "result": null}))
+    }
 }
 
 /// A backend that returns controlled semantic state payloads for delta testing.
@@ -118,6 +122,10 @@ impl McpBackend for SemanticMockBackend {
 
     fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({"status": "completed"}))
+    }
+
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"rule": "mock", "result": null}))
     }
 }
 

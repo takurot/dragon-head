@@ -57,6 +57,10 @@ impl McpBackend for MockBackend {
         Ok(json!({"status": "completed", "message": null, "trace": []}))
     }
 
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"rule": "mock", "result": null}))
+    }
+
     fn take_skill_usage_delta(&mut self) -> SkillUsageDelta {
         std::mem::take(&mut self.skill_delta)
     }
