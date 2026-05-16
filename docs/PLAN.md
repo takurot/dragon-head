@@ -84,16 +84,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [ ] スクリーンスクレイピング・コードなしでの構造化データ取得が可能。
 
 ### PR-23: "Guardian Angel" & Outcome Projection
-- Status: `NOT_STARTED`
+- Status: `IN_PROGRESS`
 - Spec Ref: Section 3.7, ISSUE-13
 - Dependencies: PR-09, PR-14
 - 実装タスク
-  - [ ] `PolicyEngine` への副作用予測（Outcome Projection）シミュレータ統合。
-  - [ ] 予測データに基づくプロアクティブな実行ブロックと HITL 通知。
+  - [x] `PolicyEngine` への副作用予測（Outcome Projection）シミュレータ統合。
+  - [x] 予測データに基づくプロアクティブな実行ブロックと HITL 通知。
 - テストタスク
-  - [ ] 高額決済等の閾値超過シナリオでの自動ブロックと通知内容の検証。
+  - [x] 高額決済等の閾値超過シナリオでの自動ブロックと通知内容の検証。
 - Exit Criteria
-  - [ ] アクション実行前に構造化された副作用データが提示される。
+  - [x] アクション実行前に構造化された副作用データが提示される。
 
 ### PR-24: Persistent Audit Hardening (Rolling File & SIEM)
 - Status: `DONE`
