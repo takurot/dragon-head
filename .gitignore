@@ -11,3 +11,4 @@ AGENTS.md
 CLAUDE.md
 commercial_issues.md
 docs/ceo-plans/**
+__pycache__/
