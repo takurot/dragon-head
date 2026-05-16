@@ -450,6 +450,12 @@ impl PageSession {
             .context("Failed to evaluate script")
     }
 
+    /// Evaluate a JS expression and return its value as a JSON `Value`.
+    /// Uses `return_by_value: true` so arrays and objects are fully serialized.
+    pub fn evaluate_script_json(&self, script: &str) -> Result<serde_json::Value> {
+        self.evaluate_script_value(script, false)
+    }
+
     fn evaluate_script_value(
         &self,
         script: &str,

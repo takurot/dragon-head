@@ -171,6 +171,12 @@ fn test_mcp_contract_all_tools_are_callable() {
         assert_eq!(result["tool"], json!(name));
     }
 
+    // extract requires rule_name or inline — test with inline DSL
+    let extract_result = server
+        .call_tool("extract", json!({"inline": {"selector": "h1"}}))
+        .expect("extract tool call failed");
+    assert_eq!(extract_result["rule"], json!("mock"));
+
     let usage_report = server
         .call_tool("get_usage_report", json!({}))
         .expect("usage report tool call failed");

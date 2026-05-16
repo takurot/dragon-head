@@ -1129,14 +1129,14 @@ impl McpBackend for CoreRuntimeBackend {
         let args: ExtractArguments =
             serde_json::from_value(arguments).context("invalid extract arguments")?;
 
-        let rule = match (&args.rule_name, &args.inline) {
+        let rule = match (args.rule_name, args.inline) {
             (Some(name), _) => {
-                let r = self.schema_registry.get(name).ok_or_else(|| {
+                let r = self.schema_registry.get(&name).ok_or_else(|| {
                     anyhow::anyhow!("extraction rule '{name}' not found in registry")
                 })?;
                 r.clone()
             }
-            (None, Some(inline_val)) => ExtractionRule::from_value("inline", inline_val)
+            (None, Some(inline_val)) => ExtractionRule::from_value("inline", &inline_val)
                 .context("failed to parse inline extraction rule")?,
             (None, None) => {
                 anyhow::bail!("extract requires either 'rule_name' or 'inline'");
@@ -1144,15 +1144,19 @@ impl McpBackend for CoreRuntimeBackend {
         };
 
         let script = rule.to_js_script();
-        let result = self
+        // Use evaluate_script_json so arrays and objects are fully deserialized
+        // (return_by_value: true), not returned as opaque remote handles.
+        let raw_value = self
             .page
-            .evaluate_script(&script)
+            .evaluate_script_json(&script)
             .context("extraction script evaluation failed")?;
 
-        let extracted_value = result.value.unwrap_or(Value::Null);
+        // Apply PII redaction before returning extracted content to the caller.
+        let redacted = core_runtime::privacy::global().redact_json(&raw_value);
+
         Ok(json!({
             "rule": rule.name,
-            "result": extracted_value
+            "result": redacted
         }))
     }
 
@@ -1703,6 +1707,27 @@ fn extract_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
+        "oneOf": [
+            {
+                "required": ["rule_name"],
+                "properties": {
+                    "rule_name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Name of a pre-registered SchemaRegistry rule"
+                    }
+                }
+            },
+            {
+                "required": ["inline"],
+                "properties": {
+                    "inline": {
+                        "type": "object",
+                        "description": "Inline Deep Lens DSL rule"
+                    }
+                }
+            }
+        ],
         "properties": {
             "rule_name": {
                 "type": "string",
@@ -1718,6 +1743,7 @@ fn extract_input_schema() -> Value {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ExtractArguments {
     #[serde(default)]
     rule_name: Option<String>,
@@ -1889,5 +1915,18 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["rule_name"].is_object());
         assert!(schema["properties"]["inline"].is_object());
+        // oneOf ensures exactly one of rule_name or inline is required
+        assert!(schema["oneOf"].is_array());
+        assert_eq!(schema["oneOf"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn extract_unknown_fields_rejected_at_deserialization() {
+        let args: Result<super::ExtractArguments, _> =
+            serde_json::from_value(json!({"rule_name": "test", "unknown_field": true}));
+        assert!(
+            args.is_err(),
+            "unknown fields should be rejected by deny_unknown_fields"
+        );
     }
 }
