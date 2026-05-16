@@ -20,6 +20,7 @@ fn test_ask_human_hitl_flow_with_policy_gate() -> anyhow::Result<()> {
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
     }])?;
 
     let html = r#"

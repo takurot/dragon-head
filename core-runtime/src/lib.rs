@@ -25,6 +25,7 @@ pub use chrome_detection::chrome_available;
 pub use error::{ActionError, VerifyError, WaitError};
 pub use plugin_hooks::PluginHookConfig;
 pub use policy::{
-    ApprovalScope, PolicyAction, PolicyContext, PolicyDecision, PolicyEngine, PolicyRule,
+    ApprovalScope, OutcomeProjection, OutcomeProjectorConfig, PolicyAction, PolicyContext,
+    PolicyDecision, PolicyEngine, PolicyRule, RiskLevel,
 };
 pub use session_vault::{KmsAdapter, LocalSessionVault, SessionData, SessionVault, SoftwareKms};

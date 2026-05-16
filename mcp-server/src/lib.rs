@@ -940,11 +940,22 @@ impl McpBackend for CoreRuntimeBackend {
                         ActionError::Blocked { rule_id } => {
                             json!({ "status": "blocked", "rule_id": rule_id })
                         }
-                        ActionError::HumanApprovalRequired { rule_id, scope } => json!({
-                            "status": "requires_human_approval",
-                            "rule_id": rule_id,
-                            "scope": approval_scope_name(*scope)
-                        }),
+                        ActionError::HumanApprovalRequired {
+                            rule_id,
+                            scope,
+                            outcome,
+                        } => {
+                            let mut payload = json!({
+                                "status": "requires_human_approval",
+                                "rule_id": rule_id,
+                                "scope": approval_scope_name(*scope)
+                            });
+                            if let Some(projection) = outcome {
+                                payload["outcome_projection"] =
+                                    serde_json::to_value(projection).unwrap_or_default();
+                            }
+                            payload
+                        }
                         ActionError::AskHumanRequired { reason } => json!({
                             "status": "ask_human_required",
                             "reason": reason

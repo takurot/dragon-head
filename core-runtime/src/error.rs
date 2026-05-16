@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::policy::ApprovalScope;
+use crate::policy::{ApprovalScope, OutcomeProjection};
 
 #[derive(Error, Debug)]
 pub enum ActionError {
@@ -12,6 +12,8 @@ pub enum ActionError {
     HumanApprovalRequired {
         rule_id: String,
         scope: ApprovalScope,
+        /// Guardian Angel: structured outcome projection for the pending action.
+        outcome: Option<OutcomeProjection>,
     },
     /// Self-Healing Context Recovery failed — human must re-identify the target.
     ///

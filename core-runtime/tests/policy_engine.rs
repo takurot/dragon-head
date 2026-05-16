@@ -11,6 +11,7 @@ fn test_policy_engine_matches_domain_path_role_and_text() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .unwrap();
 
@@ -37,6 +38,7 @@ fn test_policy_engine_matches_context_regex_for_human_approval() {
         context_regex: Some("(?i)total\\s*:\\s*\\$[0-9]+".to_string()),
         action: PolicyAction::RequireHumanApproval,
         scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
     }])
     .unwrap();
 
@@ -71,6 +73,7 @@ fn test_policy_engine_falls_back_to_allow_when_no_rules_match() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .unwrap();
 
@@ -100,6 +103,7 @@ fn test_whitespace_path_prefix_is_rejected() {
         context_regex: None,
         action: PolicyAction::Allow,
         scope: None,
+        outcome_projector: None,
     }]);
 
     assert!(
@@ -127,6 +131,7 @@ fn test_invalid_rules_return_error_not_empty_engine() {
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
         scope: None, // missing required scope
+        outcome_projector: None,
     }]);
 
     assert!(
@@ -147,6 +152,7 @@ fn test_path_prefix_matches_exact_path() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .unwrap();
 
@@ -172,6 +178,7 @@ fn test_path_prefix_matches_child_path() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .unwrap();
 
@@ -197,6 +204,7 @@ fn test_path_prefix_rejects_sibling_path() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .unwrap();
 
@@ -226,6 +234,7 @@ fn test_path_prefix_trailing_slash_matches_child() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .unwrap();
 
@@ -251,6 +260,7 @@ fn test_path_prefix_rejects_unrelated_sibling() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .unwrap();
 
@@ -280,6 +290,7 @@ fn test_path_prefix_trailing_slash_exact_match() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .unwrap();
 
@@ -305,6 +316,7 @@ fn test_path_prefix_root_matches_any_path() {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }])
     .unwrap();
 
