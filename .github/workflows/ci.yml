@@ -376,6 +376,16 @@ jobs:
       run: |
         python3 scripts/nfr_dashboard.py --metrics-dir "$NFR_METRICS_DIR" --output "$NFR_DASHBOARD_PATH"
         cat "$NFR_DASHBOARD_PATH" >> "$GITHUB_STEP_SUMMARY"
+    - name: Run NFR trend analysis vs baseline
+      run: |
+        python3 scripts/nfr_trend.py \
+          --metrics-dir "$NFR_METRICS_DIR" \
+          --baseline-dir nfr-baseline \
+          --output "${{ github.workspace }}/core-runtime/target/nfr-trend.md" \
+          --warn-pct 10 \
+          --fail-pct 25
+        cat "${{ github.workspace }}/core-runtime/target/nfr-trend.md" >> "$GITHUB_STEP_SUMMARY"
+      continue-on-error: true
     - name: Upload NFR dashboard artifact
       if: always()
       uses: actions/upload-artifact@v4
@@ -383,6 +393,7 @@ jobs:
         name: nfr-benchmark-short-dashboard
         path: |
           core-runtime/target/nfr-dashboard.md
+          core-runtime/target/nfr-trend.md
           core-runtime/target/nfr-metrics/*.json
 
   evaluation-bench-smoke:

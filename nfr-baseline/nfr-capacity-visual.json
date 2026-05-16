@@ -1,0 +1,21 @@
+{
+  "metric_id": "nfr-capacity-visual",
+  "mode": "short",
+  "values": {
+    "trials": 2,
+    "sessions_target": 8,
+    "trial_duration_avg_ms": 4000.0,
+    "trial_duration_p95_ms": 5000.0,
+    "trial_duration_p99_ms": 6000.0,
+    "capture_avg_ms": 250.0,
+    "capture_p95_ms": 400.0,
+    "capture_p99_ms": 550.0,
+    "success_rate_min": 1.0
+  },
+  "thresholds": {
+    "success_rate_min_min": 1.0,
+    "capture_p95_ms_max": 400.0,
+    "capture_p99_ms_max": 550.0
+  },
+  "display": ["sessions_target", "trials", "capture_p95_ms", "capture_p99_ms", "success_rate_min"]
+}
