@@ -1,0 +1,17 @@
+{
+  "metric_id": "nfr-bandwidth",
+  "mode": "short",
+  "values": {
+    "trials": 5,
+    "minimal_avg_bytes": 500.0,
+    "standard_avg_bytes": 15000.0,
+    "reduction_avg_pct": 97.5,
+    "reduction_p95_pct": 97.0,
+    "reduction_p99_pct": 96.5,
+    "reduction_min_pct": 96.0
+  },
+  "thresholds": {
+    "reduction_min_pct_min": 95.0
+  },
+  "display": ["trials", "reduction_avg_pct", "reduction_p95_pct", "reduction_p99_pct", "reduction_min_pct"]
+}

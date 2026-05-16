@@ -1,0 +1,16 @@
+{
+  "metric_id": "nfr-latency",
+  "mode": "short",
+  "values": {
+    "trials": 20,
+    "avg_ms": 50.0,
+    "p95_ms": 130.0,
+    "p99_ms": 170.0,
+    "max_ms": 220.0
+  },
+  "thresholds": {
+    "p95_ms_max": 260.0,
+    "p99_ms_max": 340.0
+  },
+  "display": ["trials", "avg_ms", "p95_ms", "p99_ms", "max_ms"]
+}
