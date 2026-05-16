@@ -11,6 +11,7 @@ json-patch = "4.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 skills-engine = { path = "../skills-engine" }
+plugin-host = { path = "../plugin-host" }
 thiserror = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"

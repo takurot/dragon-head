@@ -30,6 +30,10 @@ impl McpBackend for MockBackend {
     fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({"ok": true, "tool": "run_skill"}))
     }
+
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"rule": "mock", "result": null}))
+    }
 }
 
 /// A backend that returns controlled semantic state payloads for delta testing.
@@ -119,6 +123,10 @@ impl McpBackend for SemanticMockBackend {
     fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({"status": "completed"}))
     }
+
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"rule": "mock", "result": null}))
+    }
 }
 
 #[test]
@@ -162,6 +170,12 @@ fn test_mcp_contract_all_tools_are_callable() {
         assert_eq!(result["ok"], json!(true));
         assert_eq!(result["tool"], json!(name));
     }
+
+    // extract requires rule_name or inline — test with inline DSL
+    let extract_result = server
+        .call_tool("extract", json!({"inline": {"selector": "h1"}}))
+        .expect("extract tool call failed");
+    assert_eq!(extract_result["rule"], json!("mock"));
 
     let usage_report = server
         .call_tool("get_usage_report", json!({}))

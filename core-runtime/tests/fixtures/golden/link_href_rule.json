@@ -1,0 +1,4 @@
+{
+  "selector": "a.primary-link",
+  "attribute": "href"
+}

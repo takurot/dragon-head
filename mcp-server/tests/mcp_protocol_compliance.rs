@@ -29,6 +29,10 @@ impl McpBackend for MockBackend {
     fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({"status": "completed"}))
     }
+
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"rule": "mock", "result": null}))
+    }
 }
 
 #[test]
@@ -150,6 +154,10 @@ impl McpBackend for ErrorBackend {
         Err(anyhow!("{}", self.error_msg))
     }
     fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
+        Err(anyhow!("{}", self.error_msg))
+    }
+
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
         Err(anyhow!("{}", self.error_msg))
     }
 }

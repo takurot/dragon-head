@@ -1,3 +1,6 @@
+pub mod schema_registry;
+pub use schema_registry::{ExtractionMode, ExtractionRule, ExtractionRuleError, SchemaRegistry};
+
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

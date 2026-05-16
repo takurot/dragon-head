@@ -6,6 +6,7 @@ use core_runtime::{
     ActionError, ApprovalScope, DeltaPolicy, PageSession, SemanticState, SemanticTarget,
     SemanticWaitState, StateUpdate, VerifyError,
 };
+use plugin_host::{ExtractionRule, SchemaRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -252,6 +253,7 @@ fn is_known_tool(name: &str) -> bool {
             | "ask_human"
             | "run_skill"
             | "get_usage_report"
+            | "extract"
     )
 }
 
@@ -262,6 +264,7 @@ pub trait McpBackend {
     fn get_visual(&mut self, arguments: Value) -> Result<Value>;
     fn ask_human(&mut self, arguments: Value) -> Result<Value>;
     fn run_skill(&mut self, arguments: Value) -> Result<Value>;
+    fn extract(&mut self, arguments: Value) -> Result<Value>;
     fn audit_retention_snapshot(&self) -> Option<AuditRetentionSnapshot> {
         None
     }
@@ -328,6 +331,11 @@ impl<B: McpBackend> McpServer<B> {
                 description: "Retrieve usage meters and plan tier summary".to_string(),
                 input_schema: get_usage_report_input_schema(),
             },
+            ToolDefinition {
+                name: "extract".to_string(),
+                description: "Extract structured data using Deep Lens DSL rule".to_string(),
+                input_schema: extract_input_schema(),
+            },
         ]
     }
 
@@ -347,6 +355,7 @@ impl<B: McpBackend> McpServer<B> {
             "get_visual" => self.backend.get_visual(arguments.clone()),
             "ask_human" => self.backend.ask_human(arguments.clone()),
             "run_skill" => self.backend.run_skill(arguments.clone()),
+            "extract" => self.backend.extract(arguments.clone()),
             _ => anyhow::bail!("unknown MCP tool: {name}"),
         };
 
@@ -749,6 +758,7 @@ pub struct CoreRuntimeBackend {
     skill_engine: SkillEngine,
     skills: HashMap<String, SkillDefinition>,
     last_skill_delta: SkillUsageDelta,
+    schema_registry: SchemaRegistry,
 }
 
 impl CoreRuntimeBackend {
@@ -760,7 +770,14 @@ impl CoreRuntimeBackend {
             skill_engine: SkillEngine::new(),
             skills: HashMap::new(),
             last_skill_delta: SkillUsageDelta::default(),
+            schema_registry: SchemaRegistry::new(),
         }
+    }
+
+    pub fn register_extraction_rule(&mut self, name: &str, value: &Value) -> Result<()> {
+        self.schema_registry
+            .register(name, value)
+            .with_context(|| format!("failed to register extraction rule '{name}'"))
     }
 
     pub fn page(&self) -> &PageSession {
@@ -1105,6 +1122,41 @@ impl McpBackend for CoreRuntimeBackend {
                     })
                 })
                 .collect::<Vec<_>>()
+        }))
+    }
+
+    fn extract(&mut self, arguments: Value) -> Result<Value> {
+        let args: ExtractArguments =
+            serde_json::from_value(arguments).context("invalid extract arguments")?;
+
+        let rule = match (args.rule_name, args.inline) {
+            (Some(name), _) => {
+                let r = self.schema_registry.get(&name).ok_or_else(|| {
+                    anyhow::anyhow!("extraction rule '{name}' not found in registry")
+                })?;
+                r.clone()
+            }
+            (None, Some(inline_val)) => ExtractionRule::from_value("inline", &inline_val)
+                .context("failed to parse inline extraction rule")?,
+            (None, None) => {
+                anyhow::bail!("extract requires either 'rule_name' or 'inline'");
+            }
+        };
+
+        let script = rule.to_js_script();
+        // Use evaluate_script_json so arrays and objects are fully deserialized
+        // (return_by_value: true), not returned as opaque remote handles.
+        let raw_value = self
+            .page
+            .evaluate_script_json(&script)
+            .context("extraction script evaluation failed")?;
+
+        // Apply PII redaction before returning extracted content to the caller.
+        let redacted = core_runtime::privacy::global().redact_json(&raw_value);
+
+        Ok(json!({
+            "rule": rule.name,
+            "result": redacted
         }))
     }
 
@@ -1651,6 +1703,54 @@ fn get_usage_report_input_schema() -> Value {
     })
 }
 
+fn extract_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "oneOf": [
+            {
+                "required": ["rule_name"],
+                "properties": {
+                    "rule_name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Name of a pre-registered SchemaRegistry rule"
+                    }
+                }
+            },
+            {
+                "required": ["inline"],
+                "properties": {
+                    "inline": {
+                        "type": "object",
+                        "description": "Inline Deep Lens DSL rule"
+                    }
+                }
+            }
+        ],
+        "properties": {
+            "rule_name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Name of a pre-registered SchemaRegistry rule"
+            },
+            "inline": {
+                "type": "object",
+                "description": "Inline Deep Lens DSL rule (used when rule_name is not provided)"
+            }
+        }
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtractArguments {
+    #[serde(default)]
+    rule_name: Option<String>,
+    #[serde(default)]
+    inline: Option<Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1733,5 +1833,100 @@ mod tests {
         let root = make_node(10, vec![child]);
         assert!(node_exists_by_id(&root, 30));
         assert!(!node_exists_by_id(&root, 99));
+    }
+
+    // --- extract tool: McpBackend trait and McpServer routing ---
+
+    struct MockBackend {
+        extract_result: Option<Value>,
+    }
+
+    impl McpBackend for MockBackend {
+        fn get_state(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn act(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn verify(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn get_visual(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn ask_human(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn run_skill(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn extract(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(self
+                .extract_result
+                .clone()
+                .unwrap_or(json!({"rule": "test", "result": null})))
+        }
+    }
+
+    #[test]
+    fn extract_tool_is_listed_in_tools() {
+        let server = McpServer::new(MockBackend {
+            extract_result: None,
+        });
+        let tools = server.tools();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            names.contains(&"extract"),
+            "extract tool missing from tools list"
+        );
+    }
+
+    #[test]
+    fn extract_tool_is_known() {
+        assert!(is_known_tool("extract"));
+    }
+
+    #[test]
+    fn call_tool_routes_to_extract() {
+        let mut server = McpServer::new(MockBackend {
+            extract_result: Some(json!({"rule": "products", "result": [{"name": "Widget"}]})),
+        });
+        let result = server
+            .call_tool("extract", json!({"rule_name": "products"}))
+            .unwrap();
+        assert_eq!(result["rule"], "products");
+    }
+
+    #[test]
+    fn handle_jsonrpc_extract_call() {
+        let mut server = McpServer::new(MockBackend {
+            extract_result: Some(json!({"rule": "title", "result": "My Page"})),
+        });
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"extract","arguments":{"rule_name":"title"}}}"#;
+        let resp_str = server.handle_jsonrpc(req).unwrap();
+        let resp: Value = serde_json::from_str(&resp_str).unwrap();
+        assert!(resp.get("error").is_none(), "unexpected error: {resp}");
+        assert_eq!(resp["result"]["content"][0]["json"]["rule"], "title");
+    }
+
+    #[test]
+    fn extract_input_schema_is_valid_json() {
+        let schema = extract_input_schema();
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["rule_name"].is_object());
+        assert!(schema["properties"]["inline"].is_object());
+        // oneOf ensures exactly one of rule_name or inline is required
+        assert!(schema["oneOf"].is_array());
+        assert_eq!(schema["oneOf"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn extract_unknown_fields_rejected_at_deserialization() {
+        let args: Result<super::ExtractArguments, _> =
+            serde_json::from_value(json!({"rule_name": "test", "unknown_field": true}));
+        assert!(
+            args.is_err(),
+            "unknown fields should be rejected by deny_unknown_fields"
+        );
     }
 }

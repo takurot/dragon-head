@@ -1,0 +1,10 @@
+{
+  "items": {
+    "selector": "tr.product",
+    "fields": {
+      "name": ".product-name",
+      "price": ".product-price",
+      "sku": ".product-sku"
+    }
+  }
+}

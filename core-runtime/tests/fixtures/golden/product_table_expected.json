@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Widget Alpha",
+    "price": "$9.99",
+    "sku": "WGT-001"
+  },
+  {
+    "name": "Gadget Beta",
+    "price": "$24.50",
+    "sku": "GDG-002"
+  },
+  {
+    "name": "Tool Gamma",
+    "price": "$4.75",
+    "sku": "TL-003"
+  }
+]
