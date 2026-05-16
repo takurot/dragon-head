@@ -951,8 +951,19 @@ impl McpBackend for CoreRuntimeBackend {
                                 "scope": approval_scope_name(*scope)
                             });
                             if let Some(projection) = outcome {
-                                payload["outcome_projection"] =
-                                    serde_json::to_value(projection).unwrap_or_default();
+                                match serde_json::to_value(projection) {
+                                    Ok(v) => {
+                                        payload["outcome_projection"] = v;
+                                    }
+                                    Err(e) => {
+                                        // Serialization failure is unexpected (f64 is always
+                                        // finite from regex parse); log and omit the field.
+                                        eprintln!(
+                                            "[mcp-server] failed to serialize \
+                                             outcome_projection: {e}"
+                                        );
+                                    }
+                                }
                             }
                             payload
                         }

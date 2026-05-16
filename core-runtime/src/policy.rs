@@ -47,6 +47,14 @@ pub struct OutcomeProjectorConfig {
     /// Regex with a named capture group `amount` to extract a monetary value
     /// (digits and optional comma-separators / decimal point) from
     /// `surrounding_text`.  Example: `r"\$\s*(?P<amount>[\d,]+(?:\.\d{1,2})?)"`.
+    ///
+    /// **Note:** `surrounding_text` is pre-normalized (trimmed and lowercased)
+    /// before matching.  Write case-insensitive patterns or lower-case literals
+    /// accordingly (e.g. `\$` works fine; `USD` must be written as `usd`).
+    ///
+    /// When multiple matches exist the **largest** extracted value is used so
+    /// that a page cannot suppress a block threshold by prepending a smaller
+    /// amount mention (e.g. "save $10 off your $900 total").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amount_regex: Option<String>,
     /// If the extracted amount exceeds this value the policy action is
@@ -77,6 +85,8 @@ pub enum ApprovalScope {
     Timeboxed { ms: u64 },
 }
 
+// PartialEq only (not Eq): OutcomeProjectorConfig contains f64 fields which are
+// not totally ordered and therefore cannot implement Eq.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyRule {
@@ -118,6 +128,7 @@ pub struct PolicyContext {
     pub surrounding_text: Option<String>,
 }
 
+// PartialEq only (not Eq): OutcomeProjection contains f64 (projected_amount).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolicyDecision {
     pub action: PolicyAction,
@@ -256,16 +267,23 @@ impl CompiledPolicyRule {
             return (self.raw.action, None);
         };
 
-        // Extract monetary amount from surrounding_text using compiled amount_regex.
+        // Extract the LARGEST monetary amount from surrounding_text.
+        //
+        // Using the maximum across all matches is the conservative (safe) choice:
+        // a malicious page that prepends a small amount (e.g. "save $10 off your
+        // $900 total") cannot suppress a block threshold by being seen first.
         let projected_amount = self
             .amount_regex
             .as_ref()
             .zip(context.surrounding_text.as_deref())
             .and_then(|(re, text)| {
-                let caps = re.captures(text)?;
-                let raw = caps.name("amount").map(|m| m.as_str())?;
-                // Strip comma separators before parsing (e.g., "1,234.56" → 1234.56)
-                raw.replace(',', "").parse::<f64>().ok()
+                re.captures_iter(text)
+                    .filter_map(|caps| {
+                        let raw = caps.name("amount")?.as_str();
+                        // Strip comma separators before parsing ("1,234.56" → 1234.56)
+                        raw.replace(',', "").parse::<f64>().ok()
+                    })
+                    .reduce(f64::max)
             });
 
         let (action, risk_level) = match projected_amount {
@@ -446,6 +464,43 @@ pub fn validate_rule_set(rules: &[PolicyRule]) -> Result<()> {
 
         compile_regex(rule.text_regex.as_deref(), &rule.id, "text_regex")?;
         compile_regex(rule.context_regex.as_deref(), &rule.id, "context_regex")?;
+
+        // Guardian Angel outcome projector validations.
+        if let Some(projector) = &rule.outcome_projector {
+            // A threshold without an amount_regex is a silent no-op.
+            if (projector.block_if_amount_exceeds.is_some()
+                || projector.warn_if_amount_exceeds.is_some())
+                && projector.amount_regex.is_none()
+            {
+                anyhow::bail!(
+                    "Policy rule '{}': outcome_projector sets a threshold but has no \
+                     amount_regex to extract amounts from",
+                    rule.id
+                );
+            }
+
+            // block threshold must be >= warn threshold; otherwise the warn branch
+            // is unreachable dead configuration.
+            if let (Some(block), Some(warn)) = (
+                projector.block_if_amount_exceeds,
+                projector.warn_if_amount_exceeds,
+            ) {
+                anyhow::ensure!(
+                    block >= warn,
+                    "Policy rule '{}': block_if_amount_exceeds ({}) must be >= \
+                     warn_if_amount_exceeds ({})",
+                    rule.id,
+                    block,
+                    warn
+                );
+            }
+
+            compile_regex(
+                projector.amount_regex.as_deref(),
+                &rule.id,
+                "outcome_projector.amount_regex",
+            )?;
+        }
     }
 
     Ok(())
@@ -627,5 +682,96 @@ mod tests {
         });
         assert_eq!(decision.action, PolicyAction::Block);
         assert_eq!(decision.outcome, None);
+    }
+
+    #[test]
+    fn largest_amount_used_when_multiple_dollar_signs_in_text() {
+        // "save $10 off your total of $900" — must use $900, not $10.
+        let rule = pay_rule(amount_projector(Some(500.0), Some(100.0)));
+        let decision = run_policy(vec![rule], Some("save $10 off your total of $900"));
+        assert_eq!(
+            decision.action,
+            PolicyAction::Block,
+            "must block on largest amount $900"
+        );
+        let proj = decision.outcome.unwrap();
+        assert_eq!(proj.projected_amount, Some(900.0));
+        assert_eq!(proj.risk_level, RiskLevel::Critical);
+    }
+
+    #[test]
+    fn low_risk_when_regex_present_but_no_match_in_text() {
+        // surrounding_text exists but contains no dollar amount.
+        let rule = pay_rule(amount_projector(Some(500.0), Some(100.0)));
+        let decision = run_policy(vec![rule], Some("No amount mentioned here"));
+        let proj = decision.outcome.unwrap();
+        assert_eq!(proj.projected_amount, None);
+        assert_eq!(proj.risk_level, RiskLevel::Low);
+        assert_eq!(decision.action, PolicyAction::RequireHumanApproval);
+    }
+
+    #[test]
+    fn warn_only_threshold_promotes_allow_to_hitl() {
+        // Only warn threshold configured (no block threshold).
+        let rule = PolicyRule {
+            id: "warn-only-gate".to_string(),
+            domain: None,
+            path_prefix: None,
+            role: None,
+            text_regex: None,
+            context_regex: None,
+            action: PolicyAction::Allow,
+            scope: None,
+            outcome_projector: Some(OutcomeProjectorConfig {
+                amount_regex: Some(r"\$\s*(?P<amount>[\d,]+(?:\.\d{1,2})?)".to_string()),
+                block_if_amount_exceeds: None,
+                warn_if_amount_exceeds: Some(50.0),
+            }),
+        };
+        let decision = run_policy(vec![rule], Some("Fee: $75.00"));
+        assert_eq!(decision.action, PolicyAction::RequireHumanApproval);
+        let proj = decision.outcome.unwrap();
+        assert_eq!(proj.risk_level, RiskLevel::High);
+        assert_eq!(proj.projected_amount, Some(75.0));
+        // When promoted from Allow, scope defaults to ActionOnly.
+        assert_eq!(decision.scope, Some(ApprovalScope::ActionOnly));
+    }
+
+    #[test]
+    fn validate_rejects_threshold_without_amount_regex() {
+        let rule = PolicyRule {
+            id: "bad-projector".to_string(),
+            domain: None,
+            path_prefix: None,
+            role: None,
+            text_regex: None,
+            context_regex: None,
+            action: PolicyAction::Block,
+            scope: None,
+            outcome_projector: Some(OutcomeProjectorConfig {
+                amount_regex: None,
+                block_if_amount_exceeds: Some(500.0),
+                warn_if_amount_exceeds: None,
+            }),
+        };
+        let err = PolicyEngine::try_new(vec![rule]).unwrap_err();
+        assert!(
+            err.to_string().contains("amount_regex"),
+            "error must mention amount_regex: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_inverted_thresholds() {
+        let rule = pay_rule(OutcomeProjectorConfig {
+            amount_regex: Some(r"\$\s*(?P<amount>[\d]+)".to_string()),
+            block_if_amount_exceeds: Some(100.0),
+            warn_if_amount_exceeds: Some(500.0), // warn > block — invalid
+        });
+        let err = PolicyEngine::try_new(vec![rule]).unwrap_err();
+        assert!(
+            err.to_string().contains("block_if_amount_exceeds"),
+            "error must mention threshold ordering: {err}"
+        );
     }
 }
