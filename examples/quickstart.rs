@@ -180,6 +180,7 @@ fn build_policy_engine() -> PolicyEngine {
         context_regex: None,
         action: PolicyAction::Block,
         scope: None,
+        outcome_projector: None,
     }];
 
     PolicyEngine::try_new(rules).expect("policy rules should be valid")
