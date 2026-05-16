@@ -164,6 +164,42 @@ class TestNfrTrend(unittest.TestCase):
         self.assertNotIn("sessions_target", row_keys, "'sessions_target' must be skipped")
         self.assertEqual(failed, False)
 
+    def test_baseline_soft_thresholds_detected(self) -> None:
+        """Baseline-declared thresholds track metrics the Rust tests don't assert on.
+
+        capture_p95_ms has no threshold in the current metric file (as produced
+        by the Rust test), but the baseline file declares capture_p95_ms_max so
+        the trend tool should still detect a 30% regression.
+        """
+        baseline = {
+            "metric_id": "nfr-capacity-minimal",
+            "mode": "short",
+            "values": {
+                "capture_p95_ms": 200.0,
+                "success_rate_min": 1.0,
+            },
+            # Soft threshold declared only in the baseline file.
+            "thresholds": {"success_rate_min_min": 1.0, "capture_p95_ms_max": 200.0},
+            "display": [],
+        }
+        # current metric file as Rust test would write it — no capture_p95_ms threshold
+        current = {
+            "metric_id": "nfr-capacity-minimal",
+            "mode": "short",
+            "values": {
+                "capture_p95_ms": 200.0 * 1.30,  # 30% worse
+                "success_rate_min": 1.0,
+            },
+            "thresholds": {"success_rate_min_min": 1.0},  # no capture threshold here
+            "display": [],
+        }
+        rows, failed = nfr_trend._analyse_metric(
+            current, baseline, 10.0, 25.0, "nfr-capacity-minimal"
+        )
+        row_keys = [r["key"] for r in rows]
+        self.assertIn("capture_p95_ms", row_keys, "soft threshold key must be compared")
+        self.assertTrue(failed, "30% regression on soft threshold must set failed=True")
+
 
 if __name__ == "__main__":
     unittest.main()

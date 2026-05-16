@@ -13,7 +13,9 @@
     "success_rate_min": 1.0
   },
   "thresholds": {
-    "success_rate_min_min": 1.0
+    "success_rate_min_min": 1.0,
+    "capture_p95_ms_max": 250.0,
+    "capture_p99_ms_max": 350.0
   },
   "display": ["sessions_target", "trials", "capture_p95_ms", "capture_p99_ms", "success_rate_min"]
 }

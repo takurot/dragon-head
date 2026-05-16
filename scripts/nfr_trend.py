@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -159,6 +158,10 @@ def _analyse_metric(
         return rows, False
 
     baseline_values = baseline.get("values", {})
+    # Union of hard (test-enforced) and soft (baseline-declared) thresholds so
+    # that baseline files can declare trend-only thresholds for metrics that the
+    # Rust tests do not assert on (e.g. capacity duration percentiles).
+    merged_thresholds = {**metric.get("thresholds", {}), **baseline.get("thresholds", {})}
 
     for key in sorted(values.keys()):
         if key in _SKIP_KEYS:
@@ -171,7 +174,7 @@ def _analyse_metric(
         if base_val is None or not isinstance(base_val, (int, float)) or isinstance(base_val, bool):
             continue
 
-        deg = _degradation_pct(key, float(val), float(base_val), thresholds)
+        deg = _degradation_pct(key, float(val), float(base_val), merged_thresholds)
         if deg is None:
             continue
 
