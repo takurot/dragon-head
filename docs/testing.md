@@ -54,9 +54,9 @@ The CI pipeline is defined in `.github/workflows/`.
 
 ### 3.1 Dev Container (Recommended)
 
-The repository ships a `.devcontainer/` configuration that mirrors the CI environment exactly
-(Ubuntu 24.04, Google Chrome stable, Rust stable, cargo-nextest pinned).  
-Open the repo in VS Code and choose **"Reopen in Container"** — or use the GitHub Codespaces button — to get a fully reproducible test environment without manual setup.
+The repository ships a `.devcontainer/` configuration that closely matches the CI environment
+(Ubuntu 24.04, Google Chrome stable, Rust stable, cargo-nextest pinned to the same version as CI).
+Open the repo in VS Code and choose **"Reopen in Container"** — or use the GitHub Codespaces button — to get a consistent test environment without manual setup.
 
 ```bash
 # Inside the dev container or on a machine with Chrome and Rust installed:
