@@ -1,7 +1,7 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-03-17
+- 最終更新日: 2026-05-19
 - プラン状態: In Progress
 
 ## 1. 進捗管理ルール
@@ -21,10 +21,10 @@
 
 MVPは「外部クライアントから安全に利用可能な Neural-Browser Runtime の最小提供ライン」と定義し、次をすべて満たした時点で完了とする。
 
-- [ ] 必須PRがすべて `DONE` である（`PR-00`〜`PR-11`, `PR-14`）。
-- [ ] 必須CIチェック（`lint`, `test`, `smoke-e2e`, `cdp-smoke`, `policy-regression`, `policy-schema-lint`, `sre-regression`, `sre-semantic-delta`, `som-regression`, `mcp-protocol-compliance`, `mcp-api-schema-diff`, `mcp-schema-compatibility`）が安定してグリーンである。
-- [ ] `SEC-01` / `SEC-02` / `AUD-01` の Exit Criteria（`PR-09`〜`PR-11`）がすべて満たされている。
-- [ ] `PR-14` の Exit Criteria（MCPツール群の一貫利用）が満たされ、外部契約テストがCI必須化されている。
+- [x] 必須PRがすべて `DONE` である（`PR-00`〜`PR-11`, `PR-14`）。
+- [x] 必須CIチェック（`lint`, `test`, `smoke-e2e`, `cdp-smoke`, `policy-regression`, `policy-schema-lint`, `sre-regression`, `sre-semantic-delta`, `som-regression`, `mcp-protocol-compliance`, `mcp-api-schema-diff`, `mcp-schema-compatibility`）が安定してグリーンである。
+- [x] `SEC-01` / `SEC-02` / `AUD-01` の Exit Criteria（`PR-09`〜`PR-11`）がすべて満たされている。
+- [x] `PR-14` の Exit Criteria（MCPツール群の一貫利用）が満たされ、外部契約テストがCI必須化されている。
 - [ ] 利用手順・既知制約・障害時手順が `docs/` に明示され、運用可能な状態になっている。
 
 ## 2. フェーズダッシュボード
@@ -41,7 +41,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 7 | Marketplace | PR-17 | 1/1 | DONE |
 | 8 | Robustness & Verification | PR-18 | 1/1 | DONE |
 | 9 | Comprehensive Evaluation Bench | PR-19 | 1/1 | DONE |
-| 10 | Cathedral Edition (Commercialization) | PR-20〜28 | 0/9 | NOT_STARTED |
+| 10 | Cathedral Edition (Commercialization) | PR-20〜28 | 5/9 | IN_PROGRESS |
 
 ## 3. PRバックログ（進捗チェック付き）
 
