@@ -1,0 +1,21 @@
+# Normalize line endings to LF for all text files.
+* text=auto eol=lf
+
+# Rust source files
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.sh text eol=lf
+
+# Binary fixture files — tracked with Git LFS.
+# Policy: add to LFS when a single binary fixture file exceeds ~500 KB, or when
+# the total size of binary fixtures in a PR exceeds ~5 MB.
+# Run `git lfs track "<pattern>"` and commit the updated .gitattributes.
+tests/fixtures/**/*.png filter=lfs diff=lfs merge=lfs -text
+tests/fixtures/**/*.jpg filter=lfs diff=lfs merge=lfs -text
+tests/fixtures/**/*.webp filter=lfs diff=lfs merge=lfs -text
+tests/fixtures/**/*.gif filter=lfs diff=lfs merge=lfs -text
+tests/fixtures/**/*.bin filter=lfs diff=lfs merge=lfs -text

@@ -52,6 +52,30 @@ The CI pipeline is defined in `.github/workflows/`.
 
 ## 3. Running Tests Locally
 
+### 3.1 Dev Container (Recommended)
+
+The repository ships a `.devcontainer/` configuration that mirrors the CI environment exactly
+(Ubuntu 24.04, Google Chrome stable, Rust stable, cargo-nextest pinned).  
+Open the repo in VS Code and choose **"Reopen in Container"** — or use the GitHub Codespaces button — to get a fully reproducible test environment without manual setup.
+
+```bash
+# Inside the dev container or on a machine with Chrome and Rust installed:
+
+# Run all unit and integration tests (same as CI)
+cargo nextest run --workspace --profile ci
+
+# Run doc tests
+cargo test --workspace --doc
+
+# Run a specific integration test
+cargo test -p core-runtime --test sre_determinism --verbose
+
+# Run E2E tests (requires Chrome; CHROME_INSTALLED=true is set by the container)
+CHROME_INSTALLED=true cargo test -p core-runtime --test semantic_wait
+```
+
+### 3.2 Manual Setup (without the container)
+
 ```bash
 # Run all unit and integration tests
 cargo test
@@ -67,6 +91,17 @@ cargo test --test e2e
 ```
 
 The workspace disables incremental compilation for the `test` profile so the default `cargo test --workspace` and `cargo test --workspace --no-run` flows remain stable on filesystems where incremental dep-graph artifact creation is unreliable.
+
+## 3.3 Binary Fixture Policy (LFS)
+
+Test fixtures are stored under `<crate>/tests/fixtures/`. Binary fixtures (images, blobs) are
+declared in `.gitattributes` as LFS-tracked paths.
+
+**Policy:**
+- Add a fixture to LFS when a single binary file exceeds **~500 KB**, or when the cumulative
+  binary fixture size in a PR exceeds **~5 MB**.
+- Run `git lfs track "<pattern>"` and commit the updated `.gitattributes` in the same PR.
+- Text fixtures (JSON, YAML, HTML snippets) do **not** require LFS regardless of size.
 
 ## 4. Exit Criteria for PRs
 
