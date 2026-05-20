@@ -228,6 +228,7 @@ impl PiiRedactor {
             ambiguous: node.ambiguous,
             alias,
             backend_node_id: node.backend_node_id,
+            security_flags: node.security_flags,
         }
     }
 
@@ -422,6 +423,7 @@ mod tests {
             ambiguous: false,
             alias: None,
             backend_node_id: 0,
+            security_flags: vec![],
         };
         let state = FastSemanticState {
             interactive_elements: vec![node],
@@ -449,6 +451,7 @@ mod tests {
             ambiguous: false,
             alias: None,
             backend_node_id: 0,
+            security_flags: vec![],
         };
         let state = FastSemanticState {
             interactive_elements: vec![node],
@@ -476,6 +479,7 @@ mod tests {
             ambiguous: false,
             alias: None,
             backend_node_id: 0,
+            security_flags: vec![],
         };
         let state = FullSemanticState {
             forms: vec![node],

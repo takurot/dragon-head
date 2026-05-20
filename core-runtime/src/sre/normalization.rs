@@ -290,6 +290,8 @@ fn traverse_node(
         ambiguous,
         alias,
         backend_node_id: node.backend_node_id.into(),
+        // Always empty here; a future classifier layer sets flags after normalization.
+        security_flags: vec![],
     }))
 }
 

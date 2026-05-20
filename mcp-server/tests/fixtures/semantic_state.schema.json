@@ -114,6 +114,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "security_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Prompt-injection security classification flags (omitted when empty)"
           }
         }
       }

@@ -22,6 +22,7 @@ fn node_with_label(role: &str, label: &str) -> SemanticNode {
         ambiguous: false,
         alias: None,
         backend_node_id: 0,
+        security_flags: vec![],
     }
 }
 
@@ -35,6 +36,7 @@ fn node_with_attrs(role: &str, attrs: BTreeMap<String, String>) -> SemanticNode 
         ambiguous: false,
         alias: None,
         backend_node_id: 0,
+        security_flags: vec![],
     }
 }
 
@@ -108,6 +110,7 @@ fn sre_pipeline_fast_state_has_email_masked() {
         ambiguous: false,
         alias: None,
         backend_node_id: 0,
+        security_flags: vec![],
     };
 
     let handle = pipeline
@@ -142,6 +145,7 @@ fn sre_pipeline_fast_state_masks_cc_in_node_label() {
         ambiguous: false,
         alias: None,
         backend_node_id: 0,
+        security_flags: vec![],
     };
 
     let handle = pipeline
@@ -180,6 +184,7 @@ fn sre_pipeline_full_state_masks_sensitive_attribute_values() {
         ambiguous: false,
         alias: None,
         backend_node_id: 0,
+        security_flags: vec![],
     };
 
     let handle = pipeline

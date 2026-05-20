@@ -122,6 +122,7 @@ fn build_fixture_state() -> SemanticState {
         children: vec![],
         ambiguous: false,
         backend_node_id: 42,
+        security_flags: vec![],
     };
 
     let email_input = SemanticNode {
@@ -140,6 +141,7 @@ fn build_fixture_state() -> SemanticState {
         children: vec![],
         ambiguous: false,
         backend_node_id: 43,
+        security_flags: vec![],
     };
 
     let page_heading = SemanticNode {
@@ -153,6 +155,7 @@ fn build_fixture_state() -> SemanticState {
         children: vec![],
         ambiguous: false,
         backend_node_id: 10,
+        security_flags: vec![],
     };
 
     let root = SemanticNode {
@@ -164,6 +167,7 @@ fn build_fixture_state() -> SemanticState {
         children: vec![page_heading, email_input, checkout_button],
         ambiguous: false,
         backend_node_id: 0,
+        security_flags: vec![],
     };
 
     SemanticState::new(root, LoadProfile::Minimal)
