@@ -6,6 +6,7 @@ pub mod dom_signature;
 pub mod plugin_hooks;
 pub mod policy;
 pub mod privacy;
+pub mod prompt_injection;
 pub mod session_vault;
 pub mod sre;
 
@@ -27,5 +28,8 @@ pub use plugin_hooks::PluginHookConfig;
 pub use policy::{
     ApprovalScope, OutcomeProjection, OutcomeProjectorConfig, PolicyAction, PolicyContext,
     PolicyDecision, PolicyEngine, PolicyRule, RiskLevel,
+};
+pub use prompt_injection::{
+    PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig,
 };
 pub use session_vault::{KmsAdapter, LocalSessionVault, SessionData, SessionVault, SoftwareKms};
