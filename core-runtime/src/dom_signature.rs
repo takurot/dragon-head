@@ -219,6 +219,7 @@ mod tests {
             ambiguous: false,
             alias: alias.map(str::to_string),
             backend_node_id: 0,
+            security_flags: vec![],
         }
     }
 
@@ -236,6 +237,7 @@ mod tests {
             ambiguous: false,
             alias: None,
             backend_node_id: 0,
+            security_flags: vec![],
         }
     }
 

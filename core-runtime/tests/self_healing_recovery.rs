@@ -25,6 +25,7 @@ fn node(role: &str, label: Option<&str>, alias: Option<&str>, id: i64) -> Semant
         ambiguous: false,
         alias: alias.map(str::to_string),
         backend_node_id: id,
+        security_flags: vec![],
     }
 }
 
@@ -47,6 +48,7 @@ fn node_with_attrs(
         ambiguous: false,
         alias: None,
         backend_node_id: id,
+        security_flags: vec![],
     }
 }
 

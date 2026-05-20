@@ -40,6 +40,10 @@ pub struct SemanticNode {
     // New field for ACT-04
     #[serde(default, rename = "id")]
     pub backend_node_id: i64,
+
+    /// Prompt-injection security classification flags (default empty; ReportOnly mode).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_flags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,6 +284,13 @@ impl SemanticState {
 
         Self::hash_optional_string(hasher, b"alias\0", node.alias.as_deref());
 
+        hasher.update(b"security_flags\0");
+        hasher.update((node.security_flags.len() as u64).to_le_bytes());
+        for flag in &node.security_flags {
+            hasher.update(flag.as_bytes());
+            hasher.update(b"\0");
+        }
+
         hasher.update(b"children\0");
         hasher.update((node.children.len() as u64).to_le_bytes());
         for child in &node.children {
@@ -350,6 +361,7 @@ fn project_node_without_children(node: &SemanticNode) -> SemanticNode {
         ambiguous: node.ambiguous,
         alias: node.alias.clone(),
         backend_node_id: node.backend_node_id,
+        security_flags: node.security_flags.clone(),
     }
 }
 

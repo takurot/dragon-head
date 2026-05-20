@@ -290,6 +290,7 @@ fn traverse_node(
         ambiguous,
         alias,
         backend_node_id: node.backend_node_id.into(),
+        security_flags: vec![],
     }))
 }
 
