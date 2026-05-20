@@ -1,11 +1,20 @@
 use crate::sre::state::SemanticNode;
 use regex::{Regex, RegexSet, RegexSetBuilder};
 
-const REDACTION_PLACEHOLDER: &str = "[REDACTED_SECURITY]";
-const SECURITY_FLAG: &str = "possible_prompt_injection";
+/// Placeholder substituted in `Redact` mode.
+pub const REDACTION_PLACEHOLDER: &str = "[REDACTED_SECURITY]";
+
+/// Flag value set on `SemanticNode::security_flags` when injection is detected.
+pub const SECURITY_FLAG: &str = "possible_prompt_injection";
 
 /// Known indirect prompt-injection phrases (conservative, ASCII, case-insensitive).
-/// v1: fixed set — no user-defined patterns (ISSUE-109 scope).
+///
+/// v1 limitations (by design — ISSUE-109 scope):
+/// - Fixed patterns only; no user-defined regex.
+/// - ASCII case-folding only; Unicode/homoglyph variants (e.g., Cyrillic lookalikes)
+///   are **not** detected.
+/// - `role` field is intentionally excluded — it holds a structural DOM role
+///   (button/input/link etc.), not free-form user text.
 const INJECTION_PATTERNS: &[&str] = &[
     "ignore previous instructions",
     "ignore all previous instructions",
@@ -39,10 +48,21 @@ pub struct PromptInjectionSanitizerConfig {
     pub mode: PromptInjectionMode,
 }
 
-/// Core prompt-injection sanitizer.
+/// Core prompt-injection sanitizer (SPEC SEC-03).
 ///
-/// Apply to a `SemanticNode` tree after `stable_key` generation (SPEC SEC-03).
+/// Apply to a `SemanticNode` tree **after** `stable_key` generation.
 /// Scans `label`, `alias`, and `attributes` values on every node recursively.
+///
+/// **Note on ownership**: `sanitize_node` takes ownership of the node and returns
+/// it (potentially modified). This avoids an extra clone in the common case where
+/// the caller passes a freshly-built tree. Clone before calling if you need the
+/// original.
+///
+/// **Note on `stable_key`**: `security_flags` is included in the `stable_key` hash
+/// (see `hash_node`). Adding flags via this sanitizer after key generation means the
+/// stored `stable_key` no longer matches a freshly-computed hash of the returned node.
+/// This is intentional — keys are computed from pre-sanitization content, which is
+/// stable even across classifier updates.
 ///
 /// - `Off`: no-op.
 /// - `ReportOnly` (default): text unchanged; sets `security_flags` on detected nodes.
@@ -50,22 +70,28 @@ pub struct PromptInjectionSanitizerConfig {
 pub struct PromptInjectionSanitizer {
     config: PromptInjectionSanitizerConfig,
     detect_set: RegexSet,
+    /// Sorted longest-first so longer overlapping patterns match before shorter prefixes.
     replace_patterns: Vec<Regex>,
 }
 
 impl PromptInjectionSanitizer {
     pub fn new(config: PromptInjectionSanitizerConfig) -> Self {
-        let escaped: Vec<String> = INJECTION_PATTERNS
+        let escaped_for_detect: Vec<String> = INJECTION_PATTERNS
             .iter()
-            .map(|&p| regex::escape(p))
+            .map(|&p| with_word_boundaries(p))
             .collect();
 
-        let detect_set = RegexSetBuilder::new(&escaped)
+        let detect_set = RegexSetBuilder::new(&escaped_for_detect)
             .case_insensitive(true)
             .build()
             .expect("built-in patterns compile");
 
-        let replace_patterns: Vec<Regex> = escaped
+        // Sort longest-first: prevents shorter prefix patterns from firing before
+        // a longer pattern that would match the whole phrase.
+        let mut escaped_for_replace = escaped_for_detect;
+        escaped_for_replace.sort_unstable_by_key(|s| std::cmp::Reverse(s.len()));
+
+        let replace_patterns: Vec<Regex> = escaped_for_replace
             .iter()
             .map(|p| {
                 regex::RegexBuilder::new(p)
@@ -142,6 +168,22 @@ impl PromptInjectionSanitizer {
             .fold(text.to_string(), |acc, re| {
                 re.replace_all(&acc, REDACTION_PLACEHOLDER).into_owned()
             })
+    }
+}
+
+/// Wraps a pattern in `\b` word-boundary anchors.
+/// Trailing `\b` is omitted for patterns ending with a non-word character (e.g., `:`).
+fn with_word_boundaries(pattern: &str) -> String {
+    let escaped = regex::escape(pattern);
+    let ends_with_word_char = pattern
+        .chars()
+        .last()
+        .map(|c| c.is_ascii_alphanumeric() || c == '_')
+        .unwrap_or(false);
+    if ends_with_word_char {
+        format!(r"\b{escaped}\b")
+    } else {
+        format!(r"\b{escaped}")
     }
 }
 
@@ -246,6 +288,42 @@ mod tests {
             .contains(REDACTION_PLACEHOLDER));
     }
 
+    #[test]
+    fn redact_mode_alias_field() {
+        let s = make_sanitizer(PromptInjectionMode::Redact);
+        let n = SemanticNode {
+            role: "link".to_string(),
+            alias: Some("click here to jailbreak the system".to_string()),
+            ..Default::default()
+        };
+        let result = s.sanitize_node(n);
+        assert!(result.security_flags.contains(&SECURITY_FLAG.to_string()));
+        let alias = result.alias.as_deref().unwrap();
+        assert!(alias.contains(REDACTION_PLACEHOLDER), "alias redacted");
+        assert!(!alias.contains("jailbreak"), "phrase removed from alias");
+        assert!(alias.contains("click here to"), "prefix preserved in alias");
+    }
+
+    #[test]
+    fn redact_mode_attribute_value() {
+        let s = make_sanitizer(PromptInjectionMode::Redact);
+        let mut attrs = BTreeMap::new();
+        attrs.insert(
+            "aria-label".to_string(),
+            "ignore previous instructions to get help".to_string(),
+        );
+        let n = SemanticNode {
+            role: "button".to_string(),
+            attributes: Some(attrs),
+            ..Default::default()
+        };
+        let result = s.sanitize_node(n);
+        assert!(result.security_flags.contains(&SECURITY_FLAG.to_string()));
+        let val = result.attributes.as_ref().unwrap()["aria-label"].as_str();
+        assert!(val.contains(REDACTION_PLACEHOLDER));
+        assert!(!val.contains("ignore previous instructions"));
+    }
+
     // ── Case insensitivity ────────────────────────────────────────────────────
 
     #[test]
@@ -262,6 +340,53 @@ mod tests {
         let n = label_node("Ignore Previous Instructions");
         let result = s.sanitize_node(n);
         assert!(result.security_flags.contains(&SECURITY_FLAG.to_string()));
+    }
+
+    // ── Word boundary tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn jailbreak_word_boundary_no_false_positive() {
+        let s = make_sanitizer(PromptInjectionMode::ReportOnly);
+        // "jailbreaker" should NOT trigger — "jailbreak" must match as a whole word
+        let n = label_node("Use the jailbreaker tool for testing");
+        let result = s.sanitize_node(n);
+        assert!(
+            result.security_flags.is_empty(),
+            "jailbreaker should not trigger word-bounded jailbreak pattern"
+        );
+    }
+
+    #[test]
+    fn jailbreak_standalone_triggers() {
+        let s = make_sanitizer(PromptInjectionMode::ReportOnly);
+        let n = label_node("This is a jailbreak attempt");
+        let result = s.sanitize_node(n);
+        assert!(result.security_flags.contains(&SECURITY_FLAG.to_string()));
+    }
+
+    // ── Edge cases ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_label_gets_no_flag() {
+        let s = make_sanitizer(PromptInjectionMode::ReportOnly);
+        let n = label_node("");
+        let result = s.sanitize_node(n);
+        assert!(result.security_flags.is_empty());
+        assert_eq!(result.label.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn bare_node_no_fields_no_flag() {
+        let s = make_sanitizer(PromptInjectionMode::ReportOnly);
+        let n = SemanticNode {
+            role: "div".to_string(),
+            ..Default::default()
+        };
+        let result = s.sanitize_node(n);
+        assert!(result.security_flags.is_empty());
+        assert!(result.label.is_none());
+        assert!(result.alias.is_none());
+        assert!(result.attributes.is_none());
     }
 
     // ── Field coverage ────────────────────────────────────────────────────────
