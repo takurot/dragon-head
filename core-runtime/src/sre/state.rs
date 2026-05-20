@@ -284,6 +284,7 @@ impl SemanticState {
 
         Self::hash_optional_string(hasher, b"alias\0", node.alias.as_deref());
 
+        // Included so that when a classifier sets flags, consumers receive a fresh delta.
         hasher.update(b"security_flags\0");
         hasher.update((node.security_flags.len() as u64).to_le_bytes());
         for flag in &node.security_flags {
@@ -435,4 +436,49 @@ fn should_send_delta(
 
     let patch_ratio = delta.patch_size_bytes() as f32 / full_payload_bytes as f32;
     patch_ratio <= policy.max_patch_bytes_ratio
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sre::profile::LoadProfile;
+
+    fn simple_node(role: &str) -> SemanticNode {
+        SemanticNode {
+            role: role.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn state_hash_differs_when_security_flags_differ() {
+        let node_no_flags = simple_node("button");
+        let mut node_with_flags = node_no_flags.clone();
+        node_with_flags.security_flags = vec!["prompt_injection_risk".to_string()];
+
+        let state_a = SemanticState::new(node_no_flags, LoadProfile::Minimal);
+        let state_b = SemanticState::new(node_with_flags, LoadProfile::Minimal);
+
+        assert_ne!(
+            state_a.state_hash(),
+            state_b.state_hash(),
+            "nodes differing only in security_flags must produce different state hashes"
+        );
+    }
+
+    #[test]
+    fn state_hash_equal_for_same_security_flags() {
+        let mut node_a = simple_node("button");
+        node_a.security_flags = vec!["risk_a".to_string()];
+        let node_b = node_a.clone();
+
+        let state_a = SemanticState::new(node_a, LoadProfile::Minimal);
+        let state_b = SemanticState::new(node_b, LoadProfile::Minimal);
+
+        assert_eq!(
+            state_a.state_hash(),
+            state_b.state_hash(),
+            "identical nodes with identical security_flags must produce the same hash"
+        );
+    }
 }
