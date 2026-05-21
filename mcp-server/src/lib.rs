@@ -3,7 +3,8 @@ pub mod doctor;
 use anyhow::{Context, Result};
 use core_runtime::{
     sre::{LoadProfile, SemanticNode},
-    ActionError, ApprovalScope, DeltaPolicy, PageSession, SemanticState, SemanticTarget,
+    ActionError, ApprovalScope, DeltaPolicy, PageSession, PromptInjectionMode,
+    PromptInjectionSanitizer, PromptInjectionSanitizerConfig, SemanticState, SemanticTarget,
     SemanticWaitState, StateUpdate, VerifyError,
 };
 use plugin_host::{ExtractionRule, SchemaRegistry};
@@ -762,6 +763,8 @@ pub struct CoreRuntimeBackend {
     skills: HashMap<String, SkillDefinition>,
     last_skill_delta: SkillUsageDelta,
     schema_registry: SchemaRegistry,
+    /// Prompt-injection sanitizer applied before any SemanticState is exposed to the LLM.
+    injection_sanitizer: PromptInjectionSanitizer,
 }
 
 impl CoreRuntimeBackend {
@@ -774,6 +777,9 @@ impl CoreRuntimeBackend {
             skills: HashMap::new(),
             last_skill_delta: SkillUsageDelta::default(),
             schema_registry: SchemaRegistry::new(),
+            injection_sanitizer: PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
+                mode: PromptInjectionMode::ReportOnly,
+            }),
         }
     }
 
@@ -804,7 +810,8 @@ impl CoreRuntimeBackend {
             }
         }
 
-        let state = self.page.capture_semantic_state(LoadProfile::Interactive)?;
+        let raw_state = self.page.capture_semantic_state(LoadProfile::Interactive)?;
+        let state = raw_state.sanitized_with(&self.injection_sanitizer);
         let state_copy = state.clone();
         let payload = self.build_external_state(state)?;
 
@@ -916,7 +923,8 @@ impl McpBackend for CoreRuntimeBackend {
                         json!({ "type": "no_change", "hash": state_hash })
                     }
                     StateUpdate::Full { state } => {
-                        let ext = self.build_external_state(state.clone())?;
+                        let sanitized = state.clone().sanitized_with(&self.injection_sanitizer);
+                        let ext = self.build_external_state(sanitized)?;
                         // Keep state_cache in sync so a subsequent Full call is consistent.
                         self.state_cache = Some(ext.clone());
                         json!({

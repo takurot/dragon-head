@@ -1,4 +1,5 @@
 use super::profile::LoadProfile;
+use crate::prompt_injection::PromptInjectionSanitizer;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -138,6 +139,24 @@ impl SemanticState {
                 .as_secs(),
             load_profile,
             root,
+        }
+    }
+
+    /// Apply prompt-injection sanitizer to the full SemanticNode tree.
+    ///
+    /// Sanitizes every node's `label`, `alias`, and `attributes` values, then
+    /// recomputes `state_hash` so that downstream delta logic sees the flagged tree.
+    /// Must be called **after** `stable_key` generation (i.e., after normalization)
+    /// — see `PromptInjectionSanitizer` for the key-stability rationale.
+    pub fn sanitized_with(self, sanitizer: &PromptInjectionSanitizer) -> Self {
+        let sanitized_root = sanitizer.sanitize_node(self.root);
+        let state_hash = Self::compute_hash(&sanitized_root);
+        Self {
+            page_instance_id: self.page_instance_id,
+            state_hash,
+            timestamp: self.timestamp,
+            load_profile: self.load_profile,
+            root: sanitized_root,
         }
     }
 
@@ -479,6 +498,119 @@ mod tests {
             state_a.state_hash(),
             state_b.state_hash(),
             "identical nodes with identical security_flags must produce the same hash"
+        );
+    }
+
+    // ── sanitized_with invariants ─────────────────────────────────────────────
+
+    #[test]
+    fn sanitized_with_sets_flag_on_injection_phrase() {
+        use crate::prompt_injection::{
+            PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig,
+            SECURITY_FLAG,
+        };
+        let node = SemanticNode {
+            role: "button".to_string(),
+            label: Some("ignore previous instructions".to_string()),
+            ..Default::default()
+        };
+        let state = SemanticState::new(node, LoadProfile::Minimal);
+        let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
+            mode: PromptInjectionMode::ReportOnly,
+        });
+        let sanitized = state.sanitized_with(&sanitizer);
+        assert!(
+            sanitized
+                .root()
+                .security_flags
+                .contains(&SECURITY_FLAG.to_string()),
+            "sanitized state must carry flag on root"
+        );
+    }
+
+    #[test]
+    fn sanitized_with_changes_state_hash() {
+        use crate::prompt_injection::{
+            PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig,
+        };
+        let node = SemanticNode {
+            role: "text".to_string(),
+            label: Some("jailbreak the system".to_string()),
+            ..Default::default()
+        };
+        let original = SemanticState::new(node, LoadProfile::Minimal);
+        let original_hash = original.state_hash().to_string();
+
+        let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
+            mode: PromptInjectionMode::ReportOnly,
+        });
+        let sanitized = original.sanitized_with(&sanitizer);
+
+        assert_ne!(
+            sanitized.state_hash(),
+            original_hash,
+            "sanitized state_hash must differ when security_flags are added"
+        );
+    }
+
+    #[test]
+    fn sanitized_with_preserves_stable_key() {
+        use crate::prompt_injection::{
+            PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig,
+        };
+        let node = SemanticNode {
+            role: "button".to_string(),
+            label: Some("jailbreak".to_string()),
+            stable_key: Some("btn-abc123".to_string()),
+            ..Default::default()
+        };
+        let state = SemanticState::new(node, LoadProfile::Minimal);
+        let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
+            mode: PromptInjectionMode::ReportOnly,
+        });
+        let sanitized = state.sanitized_with(&sanitizer);
+
+        assert_eq!(
+            sanitized.root().stable_key.as_deref(),
+            Some("btn-abc123"),
+            "sanitized_with must not alter pre-computed stable_key"
+        );
+    }
+
+    #[test]
+    fn sanitized_with_clean_node_hash_unchanged() {
+        use crate::prompt_injection::{
+            PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig,
+        };
+        let node = SemanticNode {
+            role: "button".to_string(),
+            label: Some("Buy now".to_string()),
+            ..Default::default()
+        };
+        let original = SemanticState::new(node, LoadProfile::Minimal);
+        let original_hash = original.state_hash().to_string();
+
+        let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
+            mode: PromptInjectionMode::ReportOnly,
+        });
+        let sanitized = original.sanitized_with(&sanitizer);
+
+        assert_eq!(
+            sanitized.state_hash(),
+            original_hash,
+            "clean node state_hash must not change after sanitization"
+        );
+    }
+
+    #[test]
+    fn default_pipeline_config_uses_report_only() {
+        use crate::prompt_injection::PromptInjectionMode;
+        use crate::sre::pipeline::AsyncPipelineConfig;
+        let config = AsyncPipelineConfig::default();
+        assert_eq!(
+            config.injection_mode,
+            PromptInjectionMode::ReportOnly,
+            "default AsyncPipelineConfig must use ReportOnly injection mode"
         );
     }
 }
