@@ -12,6 +12,9 @@ use thiserror::Error;
 
 use super::{FastSemanticState, FullSemanticState, SemanticState};
 use crate::privacy;
+use crate::prompt_injection::{
+    PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig,
+};
 
 const SRE_QUEUE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -22,6 +25,9 @@ pub struct AsyncPipelineConfig {
     pub audit_queue_capacity: usize,
     pub full_stage_delay: Duration,
     pub audit_stage_delay: Duration,
+    /// Prompt-injection sanitization mode applied to every SemanticNode tree before
+    /// LLM-visible strings are extracted. Defaults to `ReportOnly`.
+    pub injection_mode: PromptInjectionMode,
 }
 
 impl Default for AsyncPipelineConfig {
@@ -32,6 +38,7 @@ impl Default for AsyncPipelineConfig {
             audit_queue_capacity: 128,
             full_stage_delay: Duration::ZERO,
             audit_stage_delay: Duration::ZERO,
+            injection_mode: PromptInjectionMode::ReportOnly,
         }
     }
 }
@@ -131,7 +138,19 @@ impl AsyncPipeline {
 
         let metrics = Arc::new(PipelineMetricsInner::default());
 
-        spawn_render_worker(render_rx, sre_fast_tx, sre_full_tx, Arc::clone(&metrics));
+        let sanitizer = Arc::new(PromptInjectionSanitizer::new(
+            PromptInjectionSanitizerConfig {
+                mode: config.injection_mode,
+            },
+        ));
+
+        spawn_render_worker(
+            render_rx,
+            sre_fast_tx,
+            sre_full_tx,
+            Arc::clone(&metrics),
+            sanitizer,
+        );
         spawn_sre_worker(
             sre_fast_rx,
             sre_full_rx,
@@ -252,11 +271,15 @@ fn spawn_render_worker(
     sre_fast_tx: Sender<SreTask>,
     sre_full_tx: Sender<SreTask>,
     metrics: Arc<PipelineMetricsInner>,
+    sanitizer: Arc<PromptInjectionSanitizer>,
 ) {
     thread::spawn(move || {
         while let Ok(task) = render_rx.recv() {
             metrics.render_processed.fetch_add(1, Ordering::Relaxed);
-            let shared_state = Arc::new(task.state);
+            // Apply injection sanitizer ONCE before sharing the state between
+            // Fast and Full workers so all LLM-visible strings are scanned.
+            let sanitized = task.state.sanitized_with(&sanitizer);
+            let shared_state = Arc::new(sanitized);
 
             if sre_fast_tx
                 .send(SreTask::Fast {

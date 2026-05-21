@@ -1,4 +1,5 @@
 use super::profile::LoadProfile;
+use crate::prompt_injection::PromptInjectionSanitizer;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -138,6 +139,24 @@ impl SemanticState {
                 .as_secs(),
             load_profile,
             root,
+        }
+    }
+
+    /// Apply prompt-injection sanitizer to the full SemanticNode tree.
+    ///
+    /// Sanitizes every node's `label`, `alias`, and `attributes` values, then
+    /// recomputes `state_hash` so that downstream delta logic sees the flagged tree.
+    /// Must be called **after** `stable_key` generation (i.e., after normalization)
+    /// — see `PromptInjectionSanitizer` for the key-stability rationale.
+    pub fn sanitized_with(self, sanitizer: &PromptInjectionSanitizer) -> Self {
+        let sanitized_root = sanitizer.sanitize_node(self.root);
+        let state_hash = Self::compute_hash(&sanitized_root);
+        Self {
+            page_instance_id: self.page_instance_id,
+            state_hash,
+            timestamp: self.timestamp,
+            load_profile: self.load_profile,
+            root: sanitized_root,
         }
     }
 
