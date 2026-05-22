@@ -417,6 +417,146 @@ fn test_full_delivery_seeds_previous_state_for_subsequent_delta() -> Result<()> 
     Ok(())
 }
 
+// ── security_flags in get_state output ───────────────────────────────────────
+
+/// Backend that returns a state containing an element with security_flags set.
+struct SecurityFlagsMockBackend {
+    include_flags: bool,
+}
+
+impl McpBackend for SecurityFlagsMockBackend {
+    fn get_state(&mut self, _arguments: Value) -> Result<Value> {
+        let mut element = json!({
+            "id": 1,
+            "stable_key": "key-btn-flagged",
+            "alias": "btn_flagged",
+            "role": "button",
+            "name": "Click",
+            "attributes": {},
+            "bbox": [0.0, 0.0, 100.0, 50.0],
+            "policy_flags": []
+        });
+        if self.include_flags {
+            element["security_flags"] = json!(["possible_prompt_injection"]);
+        }
+
+        Ok(json!({
+            "metadata": {
+                "url": "https://example.com",
+                "page_instance_id": "pid-1",
+                "state_hash": "hash-abc",
+                "load_profile": "interactive",
+                "timestamp": 1_000_000u64
+            },
+            "interactive_elements": [element]
+        }))
+    }
+
+    fn act(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"status": "ok"}))
+    }
+    fn verify(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"matched": true}))
+    }
+    fn get_visual(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"image_sha256": "abc"}))
+    }
+    fn ask_human(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"approved": true}))
+    }
+    fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"status": "completed"}))
+    }
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"rule": "mock", "result": null}))
+    }
+}
+
+/// get_state JSON output includes security_flags when the element is flagged.
+#[test]
+fn test_get_state_json_includes_security_flags_for_flagged_element() -> Result<()> {
+    let mut server = McpServer::new(SecurityFlagsMockBackend {
+        include_flags: true,
+    });
+    let result = server.call_tool("get_state", json!({}))?;
+
+    let elements = result["interactive_elements"]
+        .as_array()
+        .expect("interactive_elements must be array");
+    assert_eq!(elements.len(), 1);
+
+    let flags = &elements[0]["security_flags"];
+    assert!(
+        flags.is_array(),
+        "security_flags must be array when element is flagged: {result}"
+    );
+    assert_eq!(
+        flags[0],
+        json!("possible_prompt_injection"),
+        "security_flags must contain the expected flag"
+    );
+
+    Ok(())
+}
+
+/// get_state JSON output omits security_flags entirely for clean (unflagged) elements.
+/// This ensures backward compatibility with clients that don't expect the field.
+#[test]
+fn test_get_state_json_omits_security_flags_for_clean_element() -> Result<()> {
+    let mut server = McpServer::new(SecurityFlagsMockBackend {
+        include_flags: false,
+    });
+    let result = server.call_tool("get_state", json!({}))?;
+
+    let elements = result["interactive_elements"]
+        .as_array()
+        .expect("interactive_elements must be array");
+    assert_eq!(elements.len(), 1);
+
+    assert!(
+        elements[0].get("security_flags").is_none(),
+        "security_flags must be omitted when element has no flags (backward compat): {result}"
+    );
+
+    Ok(())
+}
+
+// NOTE: Markdown rendering tests (security_flags in markdown output, sanitization of
+// malicious flag characters, multi-flag comma-join) live in mcp-server/src/lib.rs unit
+// tests for render_state_markdown (render_state_markdown_includes_security_flags_when_present,
+// render_state_markdown_omits_security_flags_line_when_empty, etc.).  A mock-based test here
+// would only exercise the mock's own output, not render_state_markdown itself.
+
+/// policy_flags and security_flags remain separate in JSON output.
+#[test]
+fn test_get_state_json_keeps_policy_and_security_flags_separate() -> Result<()> {
+    let mut server = McpServer::new(SecurityFlagsMockBackend {
+        include_flags: true,
+    });
+    let result = server.call_tool("get_state", json!({}))?;
+
+    let elem = &result["interactive_elements"][0];
+    assert_eq!(
+        elem["policy_flags"],
+        json!([]),
+        "policy_flags must be empty for this element"
+    );
+    assert_eq!(
+        elem["security_flags"],
+        json!(["possible_prompt_injection"]),
+        "security_flags must carry the expected flag"
+    );
+    // Verify they are stored under distinct keys in the JSON object.
+    assert!(
+        elem.as_object()
+            .map(|o| o.contains_key("policy_flags") && o.contains_key("security_flags"))
+            .unwrap_or(false),
+        "both policy_flags and security_flags must be present as separate top-level keys"
+    );
+
+    Ok(())
+}
+
 /// full delivery followed by delta delivery with a changed state must return a proper patch.
 #[test]
 fn test_full_then_delta_with_changed_state_returns_patch() -> Result<()> {
