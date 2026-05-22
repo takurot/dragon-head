@@ -417,6 +417,199 @@ fn test_full_delivery_seeds_previous_state_for_subsequent_delta() -> Result<()> 
     Ok(())
 }
 
+// ── security_flags in get_state output ───────────────────────────────────────
+
+/// Backend that returns a state containing an element with security_flags set.
+struct SecurityFlagsMockBackend {
+    include_flags: bool,
+}
+
+impl McpBackend for SecurityFlagsMockBackend {
+    fn get_state(&mut self, arguments: Value) -> Result<Value> {
+        let mut element = json!({
+            "id": 1,
+            "stable_key": "key-btn-flagged",
+            "alias": "btn_flagged",
+            "role": "button",
+            "name": "Click",
+            "attributes": {},
+            "bbox": [0.0, 0.0, 100.0, 50.0],
+            "policy_flags": []
+        });
+        if self.include_flags {
+            element["security_flags"] = json!(["possible_prompt_injection"]);
+        }
+
+        let format = arguments
+            .get("format")
+            .and_then(Value::as_str)
+            .unwrap_or("json");
+        if format == "markdown" {
+            let flag_line = if self.include_flags {
+                " security_flags=possible_prompt_injection"
+            } else {
+                ""
+            };
+            let md = format!(
+                "# Semantic State\n- URL: https://example.com\n\n## Interactive Elements\n- id=1 alias=btn_flagged role=button name=Click stable_key=key-btn-flagged{}",
+                flag_line
+            );
+            return Ok(json!({ "markdown": md }));
+        }
+
+        Ok(json!({
+            "metadata": {
+                "url": "https://example.com",
+                "page_instance_id": "pid-1",
+                "state_hash": "hash-abc",
+                "load_profile": "interactive",
+                "timestamp": 1_000_000u64
+            },
+            "interactive_elements": [element]
+        }))
+    }
+
+    fn act(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"status": "ok"}))
+    }
+    fn verify(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"matched": true}))
+    }
+    fn get_visual(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"image_sha256": "abc"}))
+    }
+    fn ask_human(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"approved": true}))
+    }
+    fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"status": "completed"}))
+    }
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({"rule": "mock", "result": null}))
+    }
+}
+
+/// get_state JSON output includes security_flags when the element is flagged.
+#[test]
+fn test_get_state_json_includes_security_flags_for_flagged_element() -> Result<()> {
+    let mut server = McpServer::new(SecurityFlagsMockBackend {
+        include_flags: true,
+    });
+    let result = server.call_tool("get_state", json!({}))?;
+
+    let elements = result["interactive_elements"]
+        .as_array()
+        .expect("interactive_elements must be array");
+    assert_eq!(elements.len(), 1);
+
+    let flags = &elements[0]["security_flags"];
+    assert!(
+        flags.is_array(),
+        "security_flags must be array when element is flagged: {result}"
+    );
+    assert_eq!(
+        flags[0],
+        json!("possible_prompt_injection"),
+        "security_flags must contain the expected flag"
+    );
+
+    Ok(())
+}
+
+/// get_state JSON output omits security_flags entirely for clean (unflagged) elements.
+/// This ensures backward compatibility with clients that don't expect the field.
+#[test]
+fn test_get_state_json_omits_security_flags_for_clean_element() -> Result<()> {
+    let mut server = McpServer::new(SecurityFlagsMockBackend {
+        include_flags: false,
+    });
+    let result = server.call_tool("get_state", json!({}))?;
+
+    let elements = result["interactive_elements"]
+        .as_array()
+        .expect("interactive_elements must be array");
+    assert_eq!(elements.len(), 1);
+
+    assert!(
+        elements[0].get("security_flags").is_none(),
+        "security_flags must be omitted when element has no flags (backward compat): {result}"
+    );
+
+    Ok(())
+}
+
+/// get_state markdown output includes a flag line for flagged elements.
+#[test]
+fn test_get_state_markdown_includes_flag_line_for_flagged_element() -> Result<()> {
+    let mut server = McpServer::new(SecurityFlagsMockBackend {
+        include_flags: true,
+    });
+    let result = server.call_tool("get_state", json!({"format": "markdown"}))?;
+
+    let md = result["markdown"]
+        .as_str()
+        .expect("markdown response must have markdown field");
+
+    assert!(
+        md.contains("security_flags"),
+        "markdown must contain security_flags when element is flagged: {md}"
+    );
+    assert!(
+        md.contains("possible_prompt_injection"),
+        "markdown must include the flag name: {md}"
+    );
+
+    Ok(())
+}
+
+/// get_state markdown output does NOT include security_flags for clean elements.
+#[test]
+fn test_get_state_markdown_omits_flags_for_clean_element() -> Result<()> {
+    let mut server = McpServer::new(SecurityFlagsMockBackend {
+        include_flags: false,
+    });
+    let result = server.call_tool("get_state", json!({"format": "markdown"}))?;
+
+    let md = result["markdown"]
+        .as_str()
+        .expect("markdown response must have markdown field");
+
+    assert!(
+        !md.contains("security_flags"),
+        "markdown must not contain security_flags when element is clean: {md}"
+    );
+
+    Ok(())
+}
+
+/// policy_flags and security_flags remain separate in JSON output.
+#[test]
+fn test_get_state_json_keeps_policy_and_security_flags_separate() -> Result<()> {
+    let mut server = McpServer::new(SecurityFlagsMockBackend {
+        include_flags: true,
+    });
+    let result = server.call_tool("get_state", json!({}))?;
+
+    let elem = &result["interactive_elements"][0];
+    // policy_flags should exist as its own key
+    assert!(
+        elem["policy_flags"].is_array(),
+        "policy_flags must be present and be an array"
+    );
+    // security_flags should exist as a separate key
+    assert!(
+        elem["security_flags"].is_array(),
+        "security_flags must be a separate array from policy_flags"
+    );
+    // They must not overlap — clean separation
+    assert_ne!(
+        elem["policy_flags"], elem["security_flags"],
+        "policy_flags and security_flags must be distinct fields"
+    );
+
+    Ok(())
+}
+
 /// full delivery followed by delta delivery with a changed state must return a proper patch.
 #[test]
 fn test_full_then_delta_with_changed_state_returns_patch() -> Result<()> {
