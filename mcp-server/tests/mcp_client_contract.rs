@@ -425,7 +425,7 @@ struct SecurityFlagsMockBackend {
 }
 
 impl McpBackend for SecurityFlagsMockBackend {
-    fn get_state(&mut self, arguments: Value) -> Result<Value> {
+    fn get_state(&mut self, _arguments: Value) -> Result<Value> {
         let mut element = json!({
             "id": 1,
             "stable_key": "key-btn-flagged",
@@ -438,23 +438,6 @@ impl McpBackend for SecurityFlagsMockBackend {
         });
         if self.include_flags {
             element["security_flags"] = json!(["possible_prompt_injection"]);
-        }
-
-        let format = arguments
-            .get("format")
-            .and_then(Value::as_str)
-            .unwrap_or("json");
-        if format == "markdown" {
-            let flag_line = if self.include_flags {
-                " security_flags=possible_prompt_injection"
-            } else {
-                ""
-            };
-            let md = format!(
-                "# Semantic State\n- URL: https://example.com\n\n## Interactive Elements\n- id=1 alias=btn_flagged role=button name=Click stable_key=key-btn-flagged{}",
-                flag_line
-            );
-            return Ok(json!({ "markdown": md }));
         }
 
         Ok(json!({
@@ -538,49 +521,11 @@ fn test_get_state_json_omits_security_flags_for_clean_element() -> Result<()> {
     Ok(())
 }
 
-/// get_state markdown output includes a flag line for flagged elements.
-#[test]
-fn test_get_state_markdown_includes_flag_line_for_flagged_element() -> Result<()> {
-    let mut server = McpServer::new(SecurityFlagsMockBackend {
-        include_flags: true,
-    });
-    let result = server.call_tool("get_state", json!({"format": "markdown"}))?;
-
-    let md = result["markdown"]
-        .as_str()
-        .expect("markdown response must have markdown field");
-
-    assert!(
-        md.contains("security_flags"),
-        "markdown must contain security_flags when element is flagged: {md}"
-    );
-    assert!(
-        md.contains("possible_prompt_injection"),
-        "markdown must include the flag name: {md}"
-    );
-
-    Ok(())
-}
-
-/// get_state markdown output does NOT include security_flags for clean elements.
-#[test]
-fn test_get_state_markdown_omits_flags_for_clean_element() -> Result<()> {
-    let mut server = McpServer::new(SecurityFlagsMockBackend {
-        include_flags: false,
-    });
-    let result = server.call_tool("get_state", json!({"format": "markdown"}))?;
-
-    let md = result["markdown"]
-        .as_str()
-        .expect("markdown response must have markdown field");
-
-    assert!(
-        !md.contains("security_flags"),
-        "markdown must not contain security_flags when element is clean: {md}"
-    );
-
-    Ok(())
-}
+// NOTE: Markdown rendering tests (security_flags in markdown output, sanitization of
+// malicious flag characters, multi-flag comma-join) live in mcp-server/src/lib.rs unit
+// tests for render_state_markdown (render_state_markdown_includes_security_flags_when_present,
+// render_state_markdown_omits_security_flags_line_when_empty, etc.).  A mock-based test here
+// would only exercise the mock's own output, not render_state_markdown itself.
 
 /// policy_flags and security_flags remain separate in JSON output.
 #[test]
@@ -591,20 +536,22 @@ fn test_get_state_json_keeps_policy_and_security_flags_separate() -> Result<()> 
     let result = server.call_tool("get_state", json!({}))?;
 
     let elem = &result["interactive_elements"][0];
-    // policy_flags should exist as its own key
-    assert!(
-        elem["policy_flags"].is_array(),
-        "policy_flags must be present and be an array"
+    assert_eq!(
+        elem["policy_flags"],
+        json!([]),
+        "policy_flags must be empty for this element"
     );
-    // security_flags should exist as a separate key
-    assert!(
-        elem["security_flags"].is_array(),
-        "security_flags must be a separate array from policy_flags"
+    assert_eq!(
+        elem["security_flags"],
+        json!(["possible_prompt_injection"]),
+        "security_flags must carry the expected flag"
     );
-    // They must not overlap — clean separation
-    assert_ne!(
-        elem["policy_flags"], elem["security_flags"],
-        "policy_flags and security_flags must be distinct fields"
+    // Verify they are stored under distinct keys in the JSON object.
+    assert!(
+        elem.as_object()
+            .map(|o| o.contains_key("policy_flags") && o.contains_key("security_flags"))
+            .unwrap_or(false),
+        "both policy_flags and security_flags must be present as separate top-level keys"
     );
 
     Ok(())

@@ -79,9 +79,10 @@ fn test_schema_security_flags_property_shape() {
         json!("string"),
         "security_flags items must be strings"
     );
+    let description = sf["description"].as_str().unwrap_or("");
     assert!(
-        sf["description"].is_string(),
-        "security_flags must have a description"
+        !description.is_empty(),
+        "security_flags must have a non-empty description"
     );
 }
 

@@ -2264,4 +2264,36 @@ mod tests {
             "comma in flag must be stripped — raw comma-separated form must not appear: {md}"
         );
     }
+
+    #[test]
+    fn render_state_markdown_joins_multiple_flags_with_comma() {
+        let payload = ExternalSemanticState {
+            metadata: StateMetadata {
+                url: "https://example.com".to_string(),
+                page_instance_id: "pid".to_string(),
+                state_hash: "hash".to_string(),
+                load_profile: "interactive".to_string(),
+                timestamp: 0,
+            },
+            interactive_elements: vec![ExternalInteractiveElement {
+                id: 1,
+                stable_key: "k".to_string(),
+                alias: "a".to_string(),
+                role: "button".to_string(),
+                name: "N".to_string(),
+                attributes: BTreeMap::new(),
+                bbox: [0.0, 0.0, 0.0, 0.0],
+                policy_flags: vec![],
+                security_flags: vec![
+                    "possible_prompt_injection".to_string(),
+                    "data_exfil_risk".to_string(),
+                ],
+            }],
+        };
+        let md = render_state_markdown(&payload);
+        assert!(
+            md.contains("security_flags=possible_prompt_injection,data_exfil_risk"),
+            "multiple flags must be comma-joined in markdown: {md}"
+        );
+    }
 }
