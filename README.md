@@ -206,20 +206,22 @@ cargo clippy --workspace -- -D warnings
 
 Dragon Head applies a prompt-injection sanitizer to every `SemanticNode` in the
 page state before the LLM sees it. This is a defense-in-depth measure (SPEC
-[SEC-03](docs/SPEC.md#sec-03-prompt-injection-sanitization)) — it reduces
-exposure but does not guarantee complete prevention of indirect prompt injection.
+[SEC-03](docs/SPEC.md)) — it reduces exposure but does not guarantee complete
+prevention of indirect prompt injection.
 
 ### Modes
 
 | Mode | Behaviour |
 | --- | --- |
-| `ReportOnly` **(default)** | Page text is unchanged. Nodes containing known injection patterns receive `security_flags: ["possible_prompt_injection"]` so the LLM can reason about risk without content being altered. |
+| `ReportOnly` **(default, MCP binary)** | Page text is unchanged. Nodes containing known injection patterns receive `security_flags: ["possible_prompt_injection"]` so the LLM can reason about risk without content being altered. |
 | `Redact` | Matched phrases are replaced with `[REDACTED_SECURITY]`. The same `security_flags` flag is also set on the node. |
 | `Off` | No detection or modification is performed. |
 
-The default mode is `ReportOnly`. Switch to `Redact` only if you want to actively
-suppress known phrases from reaching the LLM; note that doing so changes page
-content and may break downstream actions that rely on the original text.
+The `dragon-head-mcp` binary runs in `ReportOnly` mode. `Redact` and `Off` are
+available when embedding the `core-runtime` library directly and constructing
+`PromptInjectionSanitizerConfig { mode: PromptInjectionMode::Redact }`. Note
+that `Redact` mode changes page text, which may break downstream actions that
+rely on the original content.
 
 ### Reading `security_flags`
 
