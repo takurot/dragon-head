@@ -94,7 +94,7 @@ Skill("plan")
 
 実装完了後、PR作成前に以下のローカル検証を**必ず**実行します。
 
-### 3.1 テスト全実行
+### 4.1 テスト全実行
 - Unit Test, Integration Test, E2E Test (関連する場合) を全て実行する。
   ```bash
   cargo test --workspace
@@ -102,23 +102,26 @@ Skill("plan")
   just test-all  # (もし定義されていれば)
   ```
 
-### 3.2 静的解析 (Lint & Format)
+### 4.2 静的解析 (Lint & Format)
 - コードスタイルと潜在的なバグを修正する。
   ```bash
   cargo fmt --all -- --check
   cargo clippy --workspace -- -D warnings
   ```
-  - **重要**: Clipyの警告はすべて修正する（`-D warnings` でエラー化するため）。
+  - **重要**: Clippy の警告はすべて修正する（`-D warnings` でエラー化するため）。
 
-### 3.3 回帰テスト・ベンチマーク (Regression & NFR)
+### 4.3 回帰テスト・ベンチマーク (Regression & NFR)
 - `docs/PLAN.md` の「CIタスク」や「Exit Criteria」に含まれる特定の検証項目（TTFT計測など）を手動で実行し、結果を記録する。
 
 ## 5. gstack Review → QA ゲート
 
-ローカル検証が通った後、コミット前に gstack skills を使って **review → qa** の順で追加検証を行います。ここで見つかった問題は修正し、該当テストを追加または更新してから、再度 `3. 品質保証` へ戻ります。
+ローカル検証が通った後、コミット前に gstack skills を使って **review → qa** の順で追加検証を行います。ここで見つかった問題は修正し、該当テストを追加または更新してから、再度 `4. 品質保証` へ戻ります。
 
-### 4.1 Pre-landing Review
-- `gstack-review` を使い、base branch との差分を pre-landing review する。
+### 5.1 Pre-landing Review
+- 以下のコマンドで `gstack-review` を実行し、base branch との差分を pre-landing review する:
+  ```
+  Skill("gstack-review")
+  ```
 - 重点観点:
   - 仕様・`docs/PLAN.md` の Exit Criteria とのズレ
   - Rust workspace / crate 境界の崩れ
@@ -127,8 +130,11 @@ Skill("plan")
   - 不要な scope creep や関連しない変更
 - P1/P2 相当の指摘は必ず修正する。修正後は関連テストを再実行し、必要なら `gstack-review` を再実行する。
 
-### 4.2 QA
-- `gstack-qa` を使い、実装した機能をユーザー視点で QA する。
+### 5.2 QA
+- 以下のコマンドで `gstack-qa` を実行し、実装した機能をユーザー視点で QA する:
+  ```
+  Skill("gstack-qa")
+  ```
 - runnable な browser-facing target、MCP server、demo、fixture viewer、examples がある場合:
   - 実際に起動して主要フローを操作する。
   - 失敗、表示崩れ、エラー応答、ログ、artifact を確認する。
@@ -140,9 +146,9 @@ Skill("plan")
   1. 最小修正を行う。
   2. 再現テストまたは回帰テストを追加する。
   3. `cargo test` / 対象テスト / lint を再実行する。
-  4. `gstack-review` → `gstack-qa` を再実行し、未解決の重大指摘がないことを確認する。
+  4. `Skill("gstack-review")` → `Skill("gstack-qa")` を再実行し、未解決の重大指摘がないことを確認する。
 
-### 4.3 記録
+### 5.3 記録
 - PR本文に以下を記録する。
   - `gstack-review` の結果概要と未解決事項の有無
   - `gstack-qa` / `gstack-qa-only` の対象、実行観点、結果
@@ -228,7 +234,7 @@ gh pr merge <PR番号> --squash --delete-branch
 
 マージ完了後、セッションで得た再利用可能な知見を `/learn` スキルで自動保存します。
 
-### 9.1 非インタラクティブ実行
+### 10.1 非インタラクティブ実行
 
 `/learn` をそのまま呼ぶとユーザー確認を求めるインタラクティブモードになります。エージェントからは **`--auto` 引数を渡して確認ステップをスキップ**します:
 
@@ -239,7 +245,7 @@ Skill("learn", args="--auto")
 `--auto` を渡した場合のスキップ対象:
 - Step 4「Ask user to confirm before saving」→ 確認なしで即保存
 
-### 9.2 抽出対象の優先順位
+### 10.2 抽出対象の優先順位
 
 このセッションで以下が発生していた場合に限り保存する（トリビアルな修正は除外）:
 
@@ -248,7 +254,7 @@ Skill("learn", args="--auto")
 3. **ワークアラウンド** — ライブラリのバグ、API 制限、バージョン固有の問題
 4. **プロジェクト固有パターン** — crate 境界の慣習、trust boundary の扱い、PR テンプレート規約
 
-### 9.3 保存先と MEMORY.md 更新
+### 10.3 保存先と MEMORY.md 更新
 
 `/learn --auto` の実行後、`~/.claude/skills/learned/<pattern-name>.md` に保存されたファイルを確認し、`MEMORY.md` のインデックスに1行追加する:
 
@@ -258,5 +264,5 @@ ls -t ~/.claude/skills/learned/ | head -5
 ```
 
 ---
-**Note to AI Agent**: このプロンプトに従ってタスクを実行する際は、**「(Issue 番号が指定された場合は `gh issue view` でコンテキスト取得) → ブランチ作成 → `/plan` スキルで実装プランを確定 → TDD実装（適切なSkills使用）→ Lint/Format → gstack-review → gstack-qa → 必要な修正 → Commit → Push → PR作成（`Closes #<ISSUE>` を含む）→ Codex コードレビュー依頼 → 指摘をPRに投稿 → 指摘対処 → CI オールグリーン → マージ → `Skill("learn", args="--auto")` でセッション学習を保存」までの工程を自律的に（ユーザ承認を挟まずに）実行すること**。
+**Note to AI Agent**: このプロンプトに従ってタスクを実行する際は、**「(Issue 番号が指定された場合は `gh issue view` でコンテキスト取得) → ブランチ作成 → `/plan` スキルで実装プランを確定 → TDD実装（適切なSkills使用）→ Lint/Format → gstack-review → gstack-qa → 必要な修正 → Commit → Push → PR作成（ISSUE がある場合は `Closes #<ISSUE>` を含む）→ Codex コードレビュー依頼 → 指摘をPRに投稿 → 指摘対処 → CI オールグリーン → マージ → `Skill("learn", args="--auto")` でセッション学習を保存」までの工程を自律的に（ユーザ承認を挟まずに）実行すること**。
 解決不能なエラーが発生した場合、または P1 指摘が対処不能な場合のみユーザに報告し、レビューを依頼すること。
