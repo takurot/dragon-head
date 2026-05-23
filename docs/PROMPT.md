@@ -42,11 +42,9 @@ Issue の要件・仕様・議論に基づき、`docs/PLAN.md` の Exit Criteria
 
 ### 2.1 プランニングの実行
 
-```
-Skill("plan")
-```
+`EnterPlanMode` ツールを呼び出してプランモードに入る（Claude Code の `/plan` コマンドに相当）。
 
-`/plan` スキルに以下のコンテキストを渡して実行する:
+プランモード内で以下のコンテキストをもとに実装計画を立案する:
 - `PLAN_TASK` の内容
 - `docs/PLAN.md` の対象タスクの「実装タスク」「テストタスク」「Exit Criteria」
 - `docs/SPEC.md` の関連セクション
@@ -264,5 +262,5 @@ ls -t ~/.claude/skills/learned/ | head -5
 ```
 
 ---
-**Note to AI Agent**: このプロンプトに従ってタスクを実行する際は、**「(Issue 番号が指定された場合は `gh issue view` でコンテキスト取得) → ブランチ作成 → `/plan` スキルで実装プランを確定 → TDD実装（適切なSkills使用）→ Lint/Format → gstack-review → gstack-qa → 必要な修正 → Commit → Push → PR作成（ISSUE がある場合は `Closes #<ISSUE>` を含む）→ Codex コードレビュー依頼 → 指摘をPRに投稿 → 指摘対処 → CI オールグリーン → マージ → `Skill("learn", args="--auto")` でセッション学習を保存」までの工程を自律的に（ユーザ承認を挟まずに）実行すること**。
+**Note to AI Agent**: このプロンプトに従ってタスクを実行する際は、**「(Issue 番号が指定された場合は `gh issue view` でコンテキスト取得) → ブランチ作成 → `EnterPlanMode` でプランモードに入り実装プランを確定 → TDD実装（適切なSkills使用）→ Lint/Format → gstack-review → gstack-qa → 必要な修正 → Commit → Push → PR作成（ISSUE がある場合は `Closes #<ISSUE>` を含む）→ Codex コードレビュー依頼 → 指摘をPRに投稿 → 指摘対処 → CI オールグリーン → マージ → `Skill("learn", args="--auto")` でセッション学習を保存」までの工程を自律的に（ユーザ承認を挟まずに）実行すること**。
 解決不能なエラーが発生した場合、または P1 指摘が対処不能な場合のみユーザに報告し、レビューを依頼すること。
