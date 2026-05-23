@@ -36,7 +36,44 @@ Issue の要件・仕様・議論に基づき、`docs/PLAN.md` の Exit Criteria
   git checkout -b issue/<ISSUE>-PR-XX-description
   ```
 
-## 2. 実装サイクル (Implementation Cycle - TDD)
+## 2. 実装プランニング (Implementation Planning)
+
+実装に入る前に、`/plan` スキルを使って実装計画を立案します。コーディングを始めるのはプランが確定してからです。
+
+### 2.1 プランニングの実行
+
+```
+Skill("plan")
+```
+
+`/plan` スキルに以下のコンテキストを渡して実行する:
+- `PLAN_TASK` の内容
+- `docs/PLAN.md` の対象タスクの「実装タスク」「テストタスク」「Exit Criteria」
+- `docs/SPEC.md` の関連セクション
+- `ISSUE` がある場合はその内容
+
+### 2.2 プランに含めるべき項目
+
+プランニング完了時点で以下が明確になっていること:
+
+| 項目 | 内容 |
+|------|------|
+| **変更対象ファイル** | 新規作成・修正するファイルと crate の一覧 |
+| **実装ステップ** | 順序付きのタスク分解（依存関係を考慮） |
+| **テスト戦略** | Unit / Integration / E2E の対象と配置 |
+| **依存・リスク** | 外部 crate、trait 境界、breaking change の有無 |
+| **Exit Criteria の対応** | `docs/PLAN.md` の各 Exit Criteria をどの実装・テストが担保するか |
+
+### 2.3 プラン確定の判断基準
+
+以下をすべて満たしたらプランを確定し、セクション 3 へ進む:
+
+- [ ] 実装ステップが具体的なファイル名・関数名レベルまで落とされている
+- [ ] テストケースの雛形が頭の中（またはメモ）にある
+- [ ] Exit Criteria との対応が取れている
+- [ ] 不明点・前提条件の曖昧さがない（あればここで質問する）
+
+## 3. 実装サイクル (Implementation Cycle - TDD)
 
 **厳格な TDD (Test-Driven Development)** サイクルを守って実装を進めます。
 
@@ -53,7 +90,7 @@ Issue の要件・仕様・議論に基づき、`docs/PLAN.md` の Exit Criteria
     - コードの可読性、構造、パフォーマンスを改善する。
     - 再度テストを実行し、破壊していないことを確認する。
 
-## 3. 品質保証 (Quality Assurance)
+## 4. 品質保証 (Quality Assurance)
 
 実装完了後、PR作成前に以下のローカル検証を**必ず**実行します。
 
@@ -76,7 +113,7 @@ Issue の要件・仕様・議論に基づき、`docs/PLAN.md` の Exit Criteria
 ### 3.3 回帰テスト・ベンチマーク (Regression & NFR)
 - `docs/PLAN.md` の「CIタスク」や「Exit Criteria」に含まれる特定の検証項目（TTFT計測など）を手動で実行し、結果を記録する。
 
-## 4. gstack Review → QA ゲート
+## 5. gstack Review → QA ゲート
 
 ローカル検証が通った後、コミット前に gstack skills を使って **review → qa** の順で追加検証を行います。ここで見つかった問題は修正し、該当テストを追加または更新してから、再度 `3. 品質保証` へ戻ります。
 
@@ -112,7 +149,7 @@ Issue の要件・仕様・議論に基づき、`docs/PLAN.md` の Exit Criteria
   - 追加で実行した `gstack-browse` / `gstack-benchmark` / `gstack-health` があれば、その結果
   - 修正した review / QA 指摘と、それを担保するテスト
 
-## 5. ドキュメント更新 (Documentation)
+## 6. ドキュメント更新 (Documentation)
 
 コード以外の成果物を同期します。
 
@@ -120,7 +157,7 @@ Issue の要件・仕様・議論に基づき、`docs/PLAN.md` の Exit Criteria
 - **SPEC.md 更新**: 実装中に仕様の微修正が必要になった場合、`SPEC.md` に反映する。
 - **README/CHANGELOG**: 必要に応じて更新する。
 
-## 6. PR作成と最終確認 (Finalization)
+## 7. PR作成と最終確認 (Finalization)
 
 全てのチェックが完了したら、変更をプッシュしPRを作成します。
 
@@ -145,7 +182,7 @@ Issue の要件・仕様・議論に基づき、`docs/PLAN.md` の Exit Criteria
 4.  **CI 確認**:
     - GitHub Actions のステータスを監視し、失敗した場合は即座に修正コミットを追加する。
 
-## 7. Codex コードレビューとフィードバック対処 (Codex Review Loop)
+## 8. Codex コードレビューとフィードバック対処 (Codex Review Loop)
 
 PR 作成完了後、以下の手順で Codex レビューを実施します。
 
@@ -172,7 +209,7 @@ PR 作成完了後、以下の手順で Codex レビューを実施します。
      ```
    - 解決不能な P1 指摘がある場合のみユーザに報告する。
 
-## 8. マージ判定 (Merge Gate)
+## 9. マージ判定 (Merge Gate)
 
 以下の全条件を満たしたときのみマージを実行します。
 
@@ -187,7 +224,7 @@ PR 作成完了後、以下の手順で Codex レビューを実施します。
 gh pr merge <PR番号> --squash --delete-branch
 ```
 
-## 9. セッション学習の保存 (Post-merge Learning)
+## 10. セッション学習の保存 (Post-merge Learning)
 
 マージ完了後、セッションで得た再利用可能な知見を `/learn` スキルで自動保存します。
 
@@ -221,5 +258,5 @@ ls -t ~/.claude/skills/learned/ | head -5
 ```
 
 ---
-**Note to AI Agent**: このプロンプトに従ってタスクを実行する際は、**「(Issue 番号が指定された場合は `gh issue view` でコンテキスト取得) → ブランチ作成 → プランニング → TDD実装（適切なSkills使用）→ Lint/Format → gstack-review → gstack-qa → 必要な修正 → Commit → Push → PR作成（`Closes #<ISSUE>` を含む）→ Codex コードレビュー依頼 → 指摘をPRに投稿 → 指摘対処 → CI オールグリーン → マージ → `Skill("learn", args="--auto")` でセッション学習を保存」までの工程を自律的に（ユーザ承認を挟まずに）実行すること**。
+**Note to AI Agent**: このプロンプトに従ってタスクを実行する際は、**「(Issue 番号が指定された場合は `gh issue view` でコンテキスト取得) → ブランチ作成 → `/plan` スキルで実装プランを確定 → TDD実装（適切なSkills使用）→ Lint/Format → gstack-review → gstack-qa → 必要な修正 → Commit → Push → PR作成（`Closes #<ISSUE>` を含む）→ Codex コードレビュー依頼 → 指摘をPRに投稿 → 指摘対処 → CI オールグリーン → マージ → `Skill("learn", args="--auto")` でセッション学習を保存」までの工程を自律的に（ユーザ承認を挟まずに）実行すること**。
 解決不能なエラーが発生した場合、または P1 指摘が対処不能な場合のみユーザに報告し、レビューを依頼すること。
