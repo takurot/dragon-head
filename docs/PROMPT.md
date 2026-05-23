@@ -128,14 +128,17 @@ Issue の要件・仕様・議論に基づき、`docs/PLAN.md` の Exit Criteria
     - トラブルシューティング: 新規ファイル追加時は必ず `git add <file>` を忘れないこと（CIエラーの主因）。
     - コミットメッセージは [Conventional Commits](https://www.conventionalcommits.org/) に従う。
     - 例: `feat(core): implement basic SRE logic (PR-02)`
-2.  **Push**:
+2.  **Push** (ブランチ名は作成時と同じものを使う):
     ```bash
+    # ISSUE なし
     git push origin feature/PR-XX-description
+    # ISSUE あり
+    git push origin issue/<ISSUE>-PR-XX-description
     ```
 3.  **PR 作成**:
     - タイトル: `[PR-XX] 実装の概要` (`ISSUE` がある場合: `[ISSUE-<N>] 実装の概要`)
     - 本文:
-      - 関連 Issue へのリンク (`Closes #<ISSUE>` を含める)
+      - ISSUE がある場合: `Closes #<ISSUE>` を含める。ISSUE がない場合は関連 Spec/Plan へのリンクを記載する。
       - `docs/PLAN.md` の「Exit Criteria」達成状況
       - 実施したテスト結果のスクリーンショットやログ
       - `gstack-review` → `gstack-qa` の実行結果と、未解決事項がないこと
@@ -147,8 +150,12 @@ Issue の要件・仕様・議論に基づき、`docs/PLAN.md` の Exit Criteria
 PR 作成完了後、以下の手順で Codex レビューを実施します。
 
 1. **Codex コードレビュー依頼**:
-   - `/codex:rescue` または `codex:codex-review` を使い、作成した PR のコードを Codex にレビュー依頼する。
-   - レビュー対象: 実装コード全体、テスト、PR diff。
+   - 以下のコマンドで Codex にブランチ差分のレビューを依頼する:
+     ```bash
+     node ~/.claude/plugins/cache/openai-codex/codex/1.0.1/scripts/codex-companion.mjs \
+       review --base main --scope branch --wait
+     ```
+   - レビュー対象: `main` との diff 全体（実装コード・テスト・ドキュメント）。
 
 2. **指摘の PR 投稿**:
    - Codex から返ってきたレビュー結果（P1/P2 相当の指摘）を、GitHub PR にインラインコメントまたはレビューコメントとして投稿する。
