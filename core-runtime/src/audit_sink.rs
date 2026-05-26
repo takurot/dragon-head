@@ -385,8 +385,9 @@ impl<S: AuditSink> AuditSink for MeteredSink<S> {
                 self.events_written
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if let Ok(serialized) = serde_json::to_string(event) {
+                    // +1 for the trailing '\n' that RollingFileSink appends to every line.
                     self.bytes_written.fetch_add(
-                        serialized.len() as u64,
+                        serialized.len() as u64 + 1,
                         std::sync::atomic::Ordering::Relaxed,
                     );
                 }
@@ -402,6 +403,16 @@ impl<S: AuditSink> AuditSink for MeteredSink<S> {
 
     fn name(&self) -> &str {
         self.inner.name()
+    }
+}
+
+impl<S: AuditSink> AuditSink for std::sync::Arc<S> {
+    fn write(&self, event: &AuditEvent) -> Result<(), AuditSinkError> {
+        (**self).write(event)
+    }
+
+    fn name(&self) -> &str {
+        (**self).name()
     }
 }
 

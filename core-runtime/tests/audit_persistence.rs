@@ -138,16 +138,8 @@ fn metered_sink_retention_metrics_are_accurate() {
     let metered = std::sync::Arc::new(MeteredSink::new(inner));
     let metered_clone = std::sync::Arc::clone(&metered);
 
-    let logger = AuditLogger::with_sinks(
-        vec![Box::new({
-            // Adapter: MeteredSink<RollingFileSink> needs to be boxed as dyn AuditSink.
-            // We use a wrapper since Arc<MeteredSink> doesn't impl AuditSink directly.
-            MeteredSinkAdapter {
-                inner: metered_clone,
-            }
-        })],
-        None,
-    );
+    // Arc<MeteredSink<RollingFileSink>>: AuditSink via blanket impl in audit_sink.rs.
+    let logger = AuditLogger::with_sinks(vec![Box::new(metered_clone)], None);
 
     const N: u32 = 20;
     for i in 0..N {
@@ -225,28 +217,27 @@ fn metered_sink_tracks_bytes_written() {
     );
 }
 
-/// AuditLogger::from_env() without AUDIT_LOG_DIR has no persistent metrics.
+/// AuditLogger::from_env_with() without AUDIT_LOG_DIR has no persistent metrics.
 #[test]
 fn audit_logger_from_env_without_dir_has_no_persistent_metrics() {
-    // Ensure env var is not set for this test.
-    std::env::remove_var("AUDIT_LOG_DIR");
-    let logger = core_runtime::audit::AuditLogger::from_env();
+    // Use from_env_with to avoid set_var (thread-unsafe per project rule #11).
+    let logger = core_runtime::audit::AuditLogger::from_env_with(|_| None);
     assert!(
         logger.persistent_metrics().is_none(),
         "no persistent metrics expected when AUDIT_LOG_DIR is unset"
     );
 }
 
-/// AuditLogger::from_env() with AUDIT_LOG_DIR creates a persistent sink and tracks metrics.
+/// AuditLogger::from_env_with() with AUDIT_LOG_DIR creates a persistent sink and tracks metrics.
 #[test]
 fn audit_logger_from_env_persistent_metrics_reflect_persisted_events() {
     let dir = tempdir().unwrap();
-    // SAFETY: test-only env mutation; test runner is single-threaded per process boundary.
-    // Each cargo test process forks a new thread; CI runs tests in separate processes.
-    // Use a unique env var key scoped to this test to avoid cross-test contamination.
-    std::env::set_var("AUDIT_LOG_DIR", dir.path());
-    let logger = core_runtime::audit::AuditLogger::from_env();
-    std::env::remove_var("AUDIT_LOG_DIR");
+    let dir_str = dir.path().to_string_lossy().into_owned();
+
+    let logger = core_runtime::audit::AuditLogger::from_env_with(|key| match key {
+        "AUDIT_LOG_DIR" => Some(dir_str.clone()),
+        _ => None,
+    });
 
     assert!(
         logger.persistent_metrics().is_some(),
@@ -266,10 +257,15 @@ fn audit_logger_from_env_persistent_metrics_reflect_persisted_events() {
         events, N as u64,
         "persistent_metrics must count every written event"
     );
-    assert!(bytes > 0, "persistent_metrics must report non-zero bytes");
+    // Each serialized ToolCall event is ~40-100 bytes + 1 newline; 5 events must exceed 0.
+    let expected_min_bytes = N as u64 * 40;
+    assert!(
+        bytes >= expected_min_bytes,
+        "persistent_metrics bytes ({bytes}) must be >= {expected_min_bytes}"
+    );
 }
 
-/// AuditLogger::from_env() without persistent sink returns None from persistent_metrics.
+/// AuditLogger::new() without persistent sink returns None from persistent_metrics.
 #[test]
 fn audit_logger_new_returns_no_persistent_metrics() {
     let logger = core_runtime::audit::AuditLogger::new();
@@ -277,22 +273,4 @@ fn audit_logger_new_returns_no_persistent_metrics() {
         logger.persistent_metrics().is_none(),
         "AuditLogger::new() must not have persistent metrics"
     );
-}
-
-// ---------------------------------------------------------------------------
-// Helper: Arc<MeteredSink> adapter for dyn AuditSink
-// ---------------------------------------------------------------------------
-
-struct MeteredSinkAdapter {
-    inner: std::sync::Arc<MeteredSink<RollingFileSink>>,
-}
-
-impl AuditSink for MeteredSinkAdapter {
-    fn write(&self, event: &AuditEvent) -> Result<(), core_runtime::audit_sink::AuditSinkError> {
-        self.inner.write(event)
-    }
-
-    fn name(&self) -> &str {
-        "MeteredSinkAdapter"
-    }
 }

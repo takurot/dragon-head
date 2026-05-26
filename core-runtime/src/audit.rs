@@ -128,17 +128,30 @@ impl AuditLogger {
     /// Construction errors (bad dir, permission denied) are logged to stderr and fall back to
     /// no-persistent-sink mode so the production binary never panics on audit misconfiguration.
     pub fn from_env() -> Self {
-        let Some(dir) = env::var("AUDIT_LOG_DIR").ok().filter(|s| !s.is_empty()) else {
+        Self::from_env_with(|key| env::var(key).ok())
+    }
+
+    /// Testable variant of [`from_env`] — accepts an env-lookup closure instead of reading
+    /// `std::env` directly.  This avoids `set_var`/`remove_var` in tests, which are unsound
+    /// under parallel test runners (project rule #11).
+    pub fn from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let Some(dir) = lookup("AUDIT_LOG_DIR").filter(|s| !s.is_empty()) else {
             return Self::new();
         };
 
-        let max_bytes: u64 = env::var("AUDIT_LOG_MAX_BYTES")
-            .ok()
-            .and_then(|s| s.parse().ok())
+        let max_bytes: u64 = lookup("AUDIT_LOG_MAX_BYTES")
+            .and_then(|s| {
+                s.parse().ok().or_else(|| {
+                    eprintln!(
+                        "[AUDIT][WARN] AUDIT_LOG_MAX_BYTES='{s}' is not a valid integer; using 10 MiB default."
+                    );
+                    None
+                })
+            })
             .unwrap_or(10 * 1024 * 1024); // 10 MiB default
 
-        let durability = match env::var("AUDIT_DURABILITY").as_deref() {
-            Ok("sync") => DurabilityMode::Sync,
+        let durability = match lookup("AUDIT_DURABILITY").as_deref() {
+            Some("sync") => DurabilityMode::Sync,
             _ => DurabilityMode::Flush,
         };
 
@@ -154,23 +167,14 @@ impl AuditLogger {
 
         let metered = Arc::new(MeteredSink::new(sink));
         let handle = PersistentSinkHandle(Arc::clone(&metered));
-
-        // The sink must implement `AuditSink + Send + Sync`. We forward through the Arc.
-        struct ArcSinkAdapter(Arc<MeteredSink<RollingFileSink>>);
-        impl AuditSink for ArcSinkAdapter {
-            fn write(&self, event: &AuditEvent) -> Result<(), crate::audit_sink::AuditSinkError> {
-                self.0.write(event)
-            }
-            fn name(&self) -> &str {
-                "PersistentRollingFileSink"
-            }
-        }
-
-        Self::with_sinks(vec![Box::new(ArcSinkAdapter(metered))], Some(handle))
+        // Arc<MeteredSink<RollingFileSink>>: AuditSink via the blanket impl in audit_sink.rs.
+        Self::with_sinks(vec![Box::new(metered)], Some(handle))
     }
 
     /// Create a logger that fans every sanitized event out to `sinks` in
     /// addition to the in-memory buffer and optional stdout output.
+    ///
+    /// For external callers that need custom sinks without a persistent-sink metrics handle.
     pub fn with_sinks(
         sinks: Vec<Box<dyn AuditSink>>,
         persistent: Option<PersistentSinkHandle>,
