@@ -344,10 +344,11 @@ fn post_once(url: &str, body: &str) -> Result<(), String> {
 // SinkMetrics (observable statistics)
 // ---------------------------------------------------------------------------
 
-/// Wraps any `AuditSink` and counts events written and errors.
+/// Wraps any `AuditSink` and counts events written, bytes written, and errors.
 pub struct MeteredSink<S: AuditSink> {
     inner: S,
     events_written: std::sync::atomic::AtomicU64,
+    bytes_written: std::sync::atomic::AtomicU64,
     errors: std::sync::atomic::AtomicU64,
 }
 
@@ -356,12 +357,19 @@ impl<S: AuditSink> MeteredSink<S> {
         Self {
             inner,
             events_written: std::sync::atomic::AtomicU64::new(0),
+            bytes_written: std::sync::atomic::AtomicU64::new(0),
             errors: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
     pub fn events_written(&self) -> u64 {
         self.events_written
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Total bytes of serialized events successfully written.
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -376,6 +384,12 @@ impl<S: AuditSink> AuditSink for MeteredSink<S> {
             Ok(()) => {
                 self.events_written
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if let Ok(serialized) = serde_json::to_string(event) {
+                    self.bytes_written.fetch_add(
+                        serialized.len() as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
                 Ok(())
             }
             Err(e) => {

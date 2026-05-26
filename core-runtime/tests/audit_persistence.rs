@@ -71,7 +71,7 @@ fn wait_for_sink_events(
 fn audit_logger_with_rolling_file_sink_persists_events() {
     let dir = tempdir().unwrap();
     let sink = RollingFileSink::new(dir.path(), "audit", 0).unwrap();
-    let logger = AuditLogger::with_sinks(vec![Box::new(sink)]);
+    let logger = AuditLogger::with_sinks(vec![Box::new(sink)], None);
 
     logger.log(tool_call(1));
     logger.log(policy_event(2));
@@ -91,7 +91,7 @@ fn audit_logger_with_rolling_file_sink_persists_events() {
 fn audit_logger_no_event_loss_under_burst() {
     let dir = tempdir().unwrap();
     let sink = RollingFileSink::new(dir.path(), "burst", 0).unwrap();
-    let logger = AuditLogger::with_sinks(vec![Box::new(sink)]);
+    let logger = AuditLogger::with_sinks(vec![Box::new(sink)], None);
 
     const N: u32 = 200;
     for i in 0..N {
@@ -113,7 +113,7 @@ fn audit_logger_rotated_files_all_contain_valid_ndjson() {
     let dir = tempdir().unwrap();
     // Very small rotation limit forces multiple files.
     let sink = RollingFileSink::new(dir.path(), "rot", 64).unwrap();
-    let logger = AuditLogger::with_sinks(vec![Box::new(sink)]);
+    let logger = AuditLogger::with_sinks(vec![Box::new(sink)], None);
 
     const N: u32 = 50;
     for i in 0..N {
@@ -138,13 +138,16 @@ fn metered_sink_retention_metrics_are_accurate() {
     let metered = std::sync::Arc::new(MeteredSink::new(inner));
     let metered_clone = std::sync::Arc::clone(&metered);
 
-    let logger = AuditLogger::with_sinks(vec![Box::new({
-        // Adapter: MeteredSink<RollingFileSink> needs to be boxed as dyn AuditSink.
-        // We use a wrapper since Arc<MeteredSink> doesn't impl AuditSink directly.
-        MeteredSinkAdapter {
-            inner: metered_clone,
-        }
-    })]);
+    let logger = AuditLogger::with_sinks(
+        vec![Box::new({
+            // Adapter: MeteredSink<RollingFileSink> needs to be boxed as dyn AuditSink.
+            // We use a wrapper since Arc<MeteredSink> doesn't impl AuditSink directly.
+            MeteredSinkAdapter {
+                inner: metered_clone,
+            }
+        })],
+        None,
+    );
 
     const N: u32 = 20;
     for i in 0..N {
@@ -182,7 +185,7 @@ fn audit_logger_without_sinks_still_buffers_in_memory() {
 fn audit_logger_sink_receives_redacted_events() {
     let dir = tempdir().unwrap();
     let sink = RollingFileSink::new(dir.path(), "pii", 0).unwrap();
-    let logger = AuditLogger::with_sinks(vec![Box::new(sink)]);
+    let logger = AuditLogger::with_sinks(vec![Box::new(sink)], None);
 
     logger.log(AuditEvent::ToolCall {
         tool_name: "fill".into(),
@@ -199,6 +202,81 @@ fn audit_logger_sink_receives_redacted_events() {
         "email must be redacted before reaching the sink"
     );
     assert_eq!(args["selector"].as_str().unwrap_or(""), "#email");
+}
+
+// ---------------------------------------------------------------------------
+// ISSUE-106: bytes tracking and production constructor tests
+// ---------------------------------------------------------------------------
+
+/// MeteredSink tracks bytes written to the persistent sink.
+#[test]
+fn metered_sink_tracks_bytes_written() {
+    let dir = tempdir().unwrap();
+    let inner = RollingFileSink::new(dir.path(), "bytes", 0).unwrap();
+    let sink = MeteredSink::new(inner);
+
+    sink.write(&tool_call(1)).unwrap();
+    sink.write(&tool_call(2)).unwrap();
+
+    assert_eq!(sink.events_written(), 2);
+    assert!(
+        sink.bytes_written() > 0,
+        "bytes_written must reflect serialized event size"
+    );
+}
+
+/// AuditLogger::from_env() without AUDIT_LOG_DIR has no persistent metrics.
+#[test]
+fn audit_logger_from_env_without_dir_has_no_persistent_metrics() {
+    // Ensure env var is not set for this test.
+    std::env::remove_var("AUDIT_LOG_DIR");
+    let logger = core_runtime::audit::AuditLogger::from_env();
+    assert!(
+        logger.persistent_metrics().is_none(),
+        "no persistent metrics expected when AUDIT_LOG_DIR is unset"
+    );
+}
+
+/// AuditLogger::from_env() with AUDIT_LOG_DIR creates a persistent sink and tracks metrics.
+#[test]
+fn audit_logger_from_env_persistent_metrics_reflect_persisted_events() {
+    let dir = tempdir().unwrap();
+    // SAFETY: test-only env mutation; test runner is single-threaded per process boundary.
+    // Each cargo test process forks a new thread; CI runs tests in separate processes.
+    // Use a unique env var key scoped to this test to avoid cross-test contamination.
+    std::env::set_var("AUDIT_LOG_DIR", dir.path());
+    let logger = core_runtime::audit::AuditLogger::from_env();
+    std::env::remove_var("AUDIT_LOG_DIR");
+
+    assert!(
+        logger.persistent_metrics().is_some(),
+        "persistent_metrics must be Some when AUDIT_LOG_DIR is set"
+    );
+
+    const N: u32 = 5;
+    for i in 0..N {
+        logger.log(tool_call(i));
+    }
+
+    // Wait for async sink worker to drain.
+    let _ = wait_for_sink_events(dir.path(), N as usize, Duration::from_secs(3));
+
+    let (events, bytes) = logger.persistent_metrics().unwrap();
+    assert_eq!(
+        events, N as u64,
+        "persistent_metrics must count every written event"
+    );
+    assert!(bytes > 0, "persistent_metrics must report non-zero bytes");
+}
+
+/// AuditLogger::from_env() without persistent sink returns None from persistent_metrics.
+#[test]
+fn audit_logger_new_returns_no_persistent_metrics() {
+    let logger = core_runtime::audit::AuditLogger::new();
+    assert!(
+        logger.persistent_metrics().is_none(),
+        "AuditLogger::new() must not have persistent metrics"
+    );
 }
 
 // ---------------------------------------------------------------------------

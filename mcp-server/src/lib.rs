@@ -1174,6 +1174,15 @@ impl McpBackend for CoreRuntimeBackend {
     }
 
     fn audit_retention_snapshot(&self) -> Option<AuditRetentionSnapshot> {
+        // Prefer persistent sink metrics (storage-backed) when available.
+        if let Some((retained_events, retained_bytes)) = self.page.persistent_audit_metrics() {
+            return Some(AuditRetentionSnapshot {
+                retained_events,
+                retained_bytes,
+            });
+        }
+
+        // Fall back to in-memory retained events when no persistent sink is configured.
         let events = self.page.audit_events();
         let retained_bytes = events
             .iter()

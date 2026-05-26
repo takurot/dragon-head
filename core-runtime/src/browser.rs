@@ -253,7 +253,7 @@ impl BrowserClient {
             policy_engine: Arc::new(Mutex::new(PolicyEngine::default())),
             policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
             navigation_epoch: Arc::new(AtomicU64::new(0)),
-            audit_logger: Arc::new(AuditLogger::new()),
+            audit_logger: Arc::new(AuditLogger::from_env()),
             semantic_capture_cache: Arc::new(Mutex::new(SemanticCaptureCache::default())),
             vault: Arc::clone(&self.vault),
             plugin_hooks: Arc::clone(&self.plugin_hooks),
@@ -316,6 +316,12 @@ impl PageSession {
 
     pub fn clear_audit_events(&self) {
         self.audit_logger.clear_recent_events();
+    }
+
+    /// Returns `(events_written, bytes_written)` from the persistent rolling-file sink,
+    /// or `None` when no persistent sink is configured (e.g. `AUDIT_LOG_DIR` is unset).
+    pub fn persistent_audit_metrics(&self) -> Option<(u64, u64)> {
+        self.audit_logger.persistent_metrics()
     }
 
     pub fn navigate(&self, url: &str) -> Result<()> {
