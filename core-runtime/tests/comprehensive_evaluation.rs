@@ -537,6 +537,16 @@ fn scenario_injection_report_only() -> anyhow::Result<Value> {
         "ReportOnly must set security_flags; flags: {:?}",
         button.security_flags
     );
+    let aria_label = button
+        .attributes
+        .as_ref()
+        .and_then(|a| a.get("aria-label"))
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        aria_label.contains("ignore previous instructions"),
+        "ReportOnly must not modify aria-label attribute; got: {aria_label}"
+    );
 
     Ok(json!({
         "mode": "report_only",
@@ -593,6 +603,20 @@ fn scenario_injection_redact() -> anyhow::Result<Value> {
         button.security_flags.contains(&SECURITY_FLAG.to_string()),
         "Redact must set security_flags; flags: {:?}",
         button.security_flags
+    );
+    let aria_label = button
+        .attributes
+        .as_ref()
+        .and_then(|a| a.get("aria-label"))
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        aria_label.contains(REDACTION_PLACEHOLDER),
+        "Redact must also replace injection phrase in aria-label attribute; got: {aria_label}"
+    );
+    assert!(
+        !aria_label.contains("system prompt:"),
+        "Redact must remove injection phrase from aria-label attribute; got: {aria_label}"
     );
 
     Ok(json!({
@@ -655,6 +679,16 @@ fn scenario_injection_pii_composition() -> anyhow::Result<Value> {
     assert!(
         label.contains("jailbreak"),
         "ReportOnly + PiiRedactor must preserve the injection phrase text; got: {label}"
+    );
+    let aria_label = button
+        .attributes
+        .as_ref()
+        .and_then(|a| a.get("aria-label"))
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        !aria_label.contains("alice@example.com"),
+        "PiiRedactor must mask email in aria-label attribute; got: {aria_label}"
     );
 
     Ok(json!({
