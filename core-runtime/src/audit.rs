@@ -1,4 +1,4 @@
-use crate::audit_sink::AuditSink;
+use crate::audit_sink::{AuditSink, DurabilityMode, MeteredSink, RollingFileSink};
 use crate::privacy;
 use crate::sre::SemanticState;
 use crossbeam_channel::{unbounded, Sender};
@@ -70,10 +70,30 @@ pub enum AuditEvent {
     },
 }
 
+/// Handle to the metrics of a persistent `MeteredSink<RollingFileSink>`.
+///
+/// Clone is cheap (`Arc` clone). Metrics are updated atomically by the audit worker thread.
+#[derive(Clone)]
+pub struct PersistentSinkHandle(Arc<MeteredSink<RollingFileSink>>);
+
+impl PersistentSinkHandle {
+    /// Events successfully written to the persistent sink.
+    pub fn events_written(&self) -> u64 {
+        self.0.events_written()
+    }
+
+    /// Serialized bytes successfully written to the persistent sink.
+    pub fn bytes_written(&self) -> u64 {
+        self.0.bytes_written()
+    }
+}
+
 #[derive(Clone)]
 pub struct AuditLogger {
     sender: Sender<AuditMessage>,
     recent_events: Arc<Mutex<VecDeque<AuditEvent>>>,
+    /// Present only when a persistent rolling-file sink was configured.
+    persistent: Option<PersistentSinkHandle>,
 }
 
 enum AuditMessage {
@@ -91,13 +111,74 @@ impl Default for AuditLogger {
 }
 
 impl AuditLogger {
+    /// Lightweight logger with no persistent sink.  Suitable for tests and development.
     pub fn new() -> Self {
-        Self::with_sinks(Vec::new())
+        Self::with_sinks(Vec::new(), None)
+    }
+
+    /// Production constructor that reads configuration from environment variables:
+    ///
+    /// | Variable              | Default          | Description                                         |
+    /// |-----------------------|------------------|-----------------------------------------------------|
+    /// | `AUDIT_LOG_DIR`       | *(unset)*        | Directory for rolling NDJSON files. If unset, no persistent sink is created. |
+    /// | `AUDIT_LOG_MAX_BYTES` | `10485760` (10 MiB) | Rotate log file after this many bytes. `0` = never rotate. |
+    /// | `AUDIT_DURABILITY`    | `flush`          | `flush` or `sync`. Use `sync` for crash-safe retention. |
+    ///
+    /// When `AUDIT_LOG_DIR` is unset the logger behaves identically to [`AuditLogger::new()`].
+    /// Construction errors (bad dir, permission denied) are logged to stderr and fall back to
+    /// no-persistent-sink mode so the production binary never panics on audit misconfiguration.
+    pub fn from_env() -> Self {
+        Self::from_env_with(|key| env::var(key).ok())
+    }
+
+    /// Testable variant of [`from_env`] — accepts an env-lookup closure instead of reading
+    /// `std::env` directly.  This avoids `set_var`/`remove_var` in tests, which are unsound
+    /// under parallel test runners (project rule #11).
+    pub fn from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let Some(dir) = lookup("AUDIT_LOG_DIR").filter(|s| !s.is_empty()) else {
+            return Self::new();
+        };
+
+        let max_bytes: u64 = lookup("AUDIT_LOG_MAX_BYTES")
+            .and_then(|s| {
+                s.parse().ok().or_else(|| {
+                    eprintln!(
+                        "[AUDIT][WARN] AUDIT_LOG_MAX_BYTES='{s}' is not a valid integer; using 10 MiB default."
+                    );
+                    None
+                })
+            })
+            .unwrap_or(10 * 1024 * 1024); // 10 MiB default
+
+        let durability = match lookup("AUDIT_DURABILITY").as_deref() {
+            Some("sync") => DurabilityMode::Sync,
+            _ => DurabilityMode::Flush,
+        };
+
+        let sink = match RollingFileSink::new(&dir, "audit", max_bytes) {
+            Ok(s) => s.with_durability(durability),
+            Err(e) => {
+                eprintln!(
+                    "[AUDIT][ERROR] Failed to create persistent sink at '{dir}': {e}. Falling back to in-memory only."
+                );
+                return Self::new();
+            }
+        };
+
+        let metered = Arc::new(MeteredSink::new(sink));
+        let handle = PersistentSinkHandle(Arc::clone(&metered));
+        // Arc<MeteredSink<RollingFileSink>>: AuditSink via the blanket impl in audit_sink.rs.
+        Self::with_sinks(vec![Box::new(metered)], Some(handle))
     }
 
     /// Create a logger that fans every sanitized event out to `sinks` in
     /// addition to the in-memory buffer and optional stdout output.
-    pub fn with_sinks(sinks: Vec<Box<dyn AuditSink>>) -> Self {
+    ///
+    /// For external callers that need custom sinks without a persistent-sink metrics handle.
+    pub fn with_sinks(
+        sinks: Vec<Box<dyn AuditSink>>,
+        persistent: Option<PersistentSinkHandle>,
+    ) -> Self {
         const MAX_RECENT_EVENTS: usize = 512;
 
         let (sender, receiver) = unbounded::<AuditMessage>();
@@ -155,7 +236,16 @@ impl AuditLogger {
         Self {
             sender,
             recent_events,
+            persistent,
         }
+    }
+
+    /// Returns `(events_written, bytes_written)` from the persistent sink, or `None` if no
+    /// persistent sink is configured.
+    pub fn persistent_metrics(&self) -> Option<(u64, u64)> {
+        self.persistent
+            .as_ref()
+            .map(|h| (h.events_written(), h.bytes_written()))
     }
 
     pub fn log(&self, event: AuditEvent) {
