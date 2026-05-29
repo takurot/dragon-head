@@ -50,7 +50,7 @@ fn print_client_with_snippet(name: &str, snippet: &str) {
             "Add to ~/Library/Application Support/Claude/claude_desktop_config.json"
         }
         "claude-code" => "Run: claude mcp add dragon-head -- dragon-head-mcp\nOr add to .mcp.json:",
-        "codex" => "Add to ~/.codex/config.json:",
+        "codex" => "Add to ~/.codex/config.toml (or project .codex/config.toml):",
         "generic" => "Any MCP client that accepts mcpServers:",
         _ => "Add to your MCP client config:",
     };
@@ -81,14 +81,12 @@ fn claude_code_snippet() -> String {
 }
 
 fn codex_snippet() -> String {
-    r#"{
-  "mcpServers": {
-    "dragon-head": {
-      "command": "dragon-head-mcp"
-    }
-  }
-}"#
-    .to_owned()
+    // Codex CLI uses TOML config (not JSON), with mcp_servers array entries.
+    r#"[[mcp_servers]]
+name = "dragon-head"
+command = "dragon-head-mcp"
+args = []"#
+        .to_owned()
 }
 
 fn generic_snippet() -> String {
@@ -128,9 +126,17 @@ mod tests {
     }
 
     #[test]
-    fn config_snippet_codex_has_command() {
+    fn config_snippet_codex_is_toml_with_command() {
         let s = config_snippet("codex").expect("codex is a known client");
-        assert_has_command(&s);
+        // Codex uses TOML, not JSON — verify it contains the required TOML fields.
+        assert!(
+            s.contains("mcp_servers"),
+            "codex snippet must use mcp_servers (TOML key)"
+        );
+        assert!(
+            s.contains("dragon-head-mcp"),
+            "codex snippet must reference dragon-head-mcp"
+        );
     }
 
     #[test]
@@ -150,9 +156,14 @@ mod tests {
     #[test]
     fn clients_constant_covers_all_known_names() {
         for &name in CLIENTS {
+            let s = config_snippet(name);
             assert!(
-                config_snippet(name).is_some(),
+                s.is_some(),
                 "CLIENTS lists '{name}' but config_snippet returns None for it"
+            );
+            assert!(
+                s.unwrap().contains("dragon-head-mcp"),
+                "snippet for '{name}' must reference dragon-head-mcp"
             );
         }
     }
