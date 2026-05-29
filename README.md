@@ -84,6 +84,21 @@ If Chrome is not found, install it or set `CHROME_PATH`:
 export CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
+## Generate MCP Client Config
+
+`--init` prints copy-paste JSON snippets for supported MCP clients:
+
+```bash
+# Print config for all supported clients
+dragon-head-mcp --init
+
+# Print config for a specific client
+dragon-head-mcp --init claude-desktop
+dragon-head-mcp --init claude-code
+dragon-head-mcp --init codex
+dragon-head-mcp --init generic
+```
+
 ## MCP Client Setup
 
 Dragon Head runs as a stdio MCP server. Your MCP client starts the command,
