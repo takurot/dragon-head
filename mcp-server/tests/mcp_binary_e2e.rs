@@ -73,6 +73,75 @@ fn mcp_handshake(
     Ok(())
 }
 
+fn build_binary() -> anyhow::Result<std::path::PathBuf> {
+    let build = escargot::CargoBuild::new()
+        .bin("dragon-head-mcp")
+        .package("mcp-server")
+        .current_release()
+        .run()?;
+    Ok(build.path().to_owned())
+}
+
+#[test]
+fn binary_init_no_arg_outputs_all_clients() -> anyhow::Result<()> {
+    let bin = build_binary()?;
+    let out = Command::new(&bin).arg("--init").output()?;
+    assert!(out.status.success(), "exit status: {}", out.status);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // All four client headings must appear
+    for client in ["claude-desktop", "claude-code", "codex", "generic"] {
+        assert!(
+            stdout.contains(client),
+            "output missing section for '{client}'"
+        );
+    }
+    // Each section must include the command key
+    assert!(
+        stdout.contains("dragon-head-mcp"),
+        "output must reference the binary name"
+    );
+    Ok(())
+}
+
+#[test]
+fn binary_init_claude_desktop_outputs_json() -> anyhow::Result<()> {
+    let bin = build_binary()?;
+    let out = Command::new(&bin)
+        .args(["--init", "claude-desktop"])
+        .output()?;
+    assert!(out.status.success(), "exit status: {}", out.status);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Must contain valid-looking JSON with the command
+    assert!(
+        stdout.contains("dragon-head-mcp"),
+        "stdout must contain the binary name"
+    );
+    assert!(
+        stdout.contains("mcpServers"),
+        "stdout must contain mcpServers key"
+    );
+    Ok(())
+}
+
+#[test]
+fn binary_init_unknown_client_exits_nonzero() -> anyhow::Result<()> {
+    let bin = build_binary()?;
+    let out = Command::new(&bin)
+        .args(["--init", "not-a-real-client"])
+        .output()?;
+    assert!(
+        !out.status.success(),
+        "unknown client should exit non-zero, got: {}",
+        out.status
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown client"),
+        "stderr should mention 'unknown client', got: {stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn test_mcp_binary_full_handshake_and_tools_list() -> anyhow::Result<()> {
     if should_skip() {
@@ -80,14 +149,9 @@ fn test_mcp_binary_full_handshake_and_tools_list() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let build = escargot::CargoBuild::new()
-        .bin("dragon-head-mcp")
-        .package("mcp-server")
-        .current_release()
-        .run()?;
-    let bin_path = build.path();
+    let bin_path = build_binary()?;
 
-    let mut child = Command::new(bin_path)
+    let mut child = Command::new(&bin_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -141,14 +205,9 @@ fn test_mcp_binary_full_handshake_and_tools_call() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let build = escargot::CargoBuild::new()
-        .bin("dragon-head-mcp")
-        .package("mcp-server")
-        .current_release()
-        .run()?;
-    let bin_path = build.path();
+    let bin_path = build_binary()?;
 
-    let mut child = Command::new(bin_path)
+    let mut child = Command::new(&bin_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
