@@ -76,6 +76,27 @@ jobs:
           *.png
           *.log
 
+  mcp-binary-e2e:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser
+    - name: Run MCP binary E2E tests (require Chrome)
+      env:
+        CHROME_PATH: /usr/bin/chromium-browser
+      run: cargo test -p mcp-server --test mcp_binary_e2e -- --ignored --nocapture
+    - name: Upload failure artifacts
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: mcp-binary-e2e-failures
+        path: |
+          *.png
+          *.log
+
   evaluation-bench-full:
     runs-on: ubuntu-latest
     env:
