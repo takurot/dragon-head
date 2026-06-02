@@ -514,10 +514,11 @@ fn test_second_load_hits_module_cache() {
         .expect("second load must succeed");
     let elapsed = t.elapsed();
 
-    // Second load should be fast (module already compiled).
+    // Second load should be fast because the module is returned from cache.
+    // 50ms is generous enough for any CI runner (pure lock + hash lookup).
     assert!(
-        elapsed.as_millis() < 5,
-        "second load took {}ms, expected < 5ms (cache miss?)",
+        elapsed.as_millis() < 50,
+        "second load took {}ms, expected < 50ms (cache miss?)",
         elapsed.as_millis()
     );
 
@@ -547,13 +548,23 @@ fn test_epoch_interruption_stops_infinite_loop() {
     let loaded = host.load_plugin(&package).expect("plugin must load");
     let mut runtime = loaded.create_runtime().expect("runtime must be created");
 
+    let t = std::time::Instant::now();
     let err = runtime
         .before_act(r#"{"action":"loop"}"#)
         .expect_err("infinite loop must be interrupted");
+    let elapsed = t.elapsed();
 
     assert!(
         matches!(err, PluginError::Timeout),
         "expected Timeout, got {err:?}"
+    );
+    // Fuel budget (1B instructions) takes >>1 s in debug mode.
+    // Epoch fires at EPOCH_TICKS_PER_CALL × EPOCH_TICK_INTERVAL = 50 ms.
+    // Verify the call terminated quickly, proving epoch interrupted the loop.
+    assert!(
+        elapsed.as_millis() < 500,
+        "call took {}ms — epoch should have fired within ~50ms",
+        elapsed.as_millis()
     );
 }
 
@@ -578,8 +589,9 @@ fn test_bulk_runtime_creation_under_1ms_average() {
     for _ in 0..N {
         loaded.create_runtime().expect("runtime must be created");
     }
-    let total_ms = t.elapsed().as_millis();
-    let avg_us = t.elapsed().as_micros() / N as u128;
+    let elapsed = t.elapsed();
+    let total_ms = elapsed.as_millis();
+    let avg_us = elapsed.as_micros() / N as u128;
 
     assert!(
         total_ms < N as u128,

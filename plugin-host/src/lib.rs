@@ -214,6 +214,9 @@ impl EpochDriver {
 
 impl Drop for EpochDriver {
     fn drop(&mut self) {
+        // SAFETY: Relaxed is sufficient — no data is guarded by this flag; it is a
+        // pure cancellation signal. The join() below provides the happens-before
+        // barrier that ensures the thread has stopped before Engine is dropped.
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             let _ = h.join();
@@ -279,33 +282,26 @@ impl PluginHost {
     }
 
     /// Return a cached compiled module, or compile and cache on first use.
+    ///
+    /// The lock is held across miss + compile + insert to prevent two concurrent
+    /// callers from both compiling the same module (expensive, redundant work).
     fn get_or_compile_module(&self, wasm_bytes: &[u8]) -> Result<Arc<Module>, PluginError> {
         let cache_key = hex::encode(Sha256::digest(wasm_bytes));
+        let mut cache = self
+            .module_cache
+            .lock()
+            .expect("module cache lock poisoned");
 
-        {
-            let cache = self
-                .module_cache
-                .lock()
-                .expect("module cache lock poisoned");
-            if let Some(module) = cache.get(&cache_key) {
-                return Ok(Arc::clone(module));
-            }
+        if let Some(module) = cache.get(&cache_key) {
+            return Ok(Arc::clone(module));
         }
 
-        let module =
-            Module::new(&self.engine, wasm_bytes).map_err(|err| PluginError::WasmValidation {
+        let module = Arc::new(Module::new(&self.engine, wasm_bytes).map_err(|err| {
+            PluginError::WasmValidation {
                 message: err.to_string(),
-            })?;
-        let module = Arc::new(module);
-
-        {
-            let mut cache = self
-                .module_cache
-                .lock()
-                .expect("module cache lock poisoned");
-            cache.insert(cache_key, Arc::clone(&module));
-        }
-
+            }
+        })?);
+        cache.insert(cache_key, Arc::clone(&module));
         Ok(module)
     }
 
@@ -447,6 +443,9 @@ impl PluginRuntime {
             .map_err(|err| PluginError::ExecutionFailed {
                 message: err.to_string(),
             })?;
+        // Set the epoch deadline before instantiation so that a Wasm `(start ...)` function
+        // is also subject to the wall-clock budget and does not trap with deadline=0.
+        store.set_epoch_deadline(EPOCH_TICKS_PER_CALL);
 
         let linker: Linker<PluginState> = Linker::new(&engine);
         let instance = linker.instantiate(&mut store, &module).map_err(|err| {
