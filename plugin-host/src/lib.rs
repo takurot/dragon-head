@@ -5,7 +5,10 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
 use thiserror::Error;
 use wasmtime::{Engine, Instance, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 
@@ -108,7 +111,7 @@ pub enum PluginError {
     ExecutionFailed { message: String },
     #[error("invalid wasm output: {message}")]
     InvalidOutput { message: String },
-    #[error("wasm execution timed out (fuel exhausted)")]
+    #[error("wasm execution timed out (fuel exhausted or epoch interrupted)")]
     Timeout,
     #[error("wasm memory limit exceeded")]
     MemoryExhausted,
@@ -177,10 +180,59 @@ impl KeyRegistry {
     }
 }
 
-#[derive(Debug, Clone)]
+// ---------------------------------------------------------------------------
+// EpochDriver — background thread that increments the wasmtime epoch counter.
+// ---------------------------------------------------------------------------
+
+/// How often the epoch counter advances. Each tick grants one unit of time budget.
+const EPOCH_TICK_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Number of epoch ticks allowed per Wasm call: 5 × 10 ms = 50 ms wall-clock budget.
+const EPOCH_TICKS_PER_CALL: u64 = 5;
+
+struct EpochDriver {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl EpochDriver {
+    fn start(engine: Arc<Engine>) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            while !stop_clone.load(Ordering::Relaxed) {
+                std::thread::sleep(EPOCH_TICK_INTERVAL);
+                engine.increment_epoch();
+            }
+        });
+        Self {
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for EpochDriver {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PluginHost — owns the shared Engine, module cache, and epoch driver.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
 pub struct PluginHost {
     engine: Arc<Engine>,
     key_registry: KeyRegistry,
+    /// Compiled modules keyed by SHA-256 hex of their Wasm bytes.
+    module_cache: Arc<Mutex<HashMap<String, Arc<Module>>>>,
+    /// Keeps the epoch-increment thread alive for the lifetime of the host.
+    _epoch_driver: Arc<EpochDriver>,
 }
 
 impl Default for PluginHost {
@@ -193,10 +245,14 @@ impl PluginHost {
     pub fn new(key_registry: KeyRegistry) -> Self {
         let mut config = wasmtime::Config::new();
         config.consume_fuel(true);
-        let engine = Engine::new(&config).expect("failed to create wasmtime engine");
+        config.epoch_interruption(true);
+        let engine = Arc::new(Engine::new(&config).expect("failed to create wasmtime engine"));
+        let epoch_driver = Arc::new(EpochDriver::start(Arc::clone(&engine)));
         Self {
-            engine: Arc::new(engine),
+            engine,
             key_registry,
+            module_cache: Arc::new(Mutex::new(HashMap::new())),
+            _epoch_driver: epoch_driver,
         }
     }
 
@@ -205,11 +261,7 @@ impl PluginHost {
         validate_sbom(&package.manifest.sbom)?;
         self.verify_signature(package)?;
 
-        let module = Module::new(&self.engine, &package.wasm_module).map_err(|err| {
-            PluginError::WasmValidation {
-                message: err.to_string(),
-            }
-        })?;
+        let module = self.get_or_compile_module(&package.wasm_module)?;
 
         for extension in &package.manifest.entry_points {
             if module.get_export(extension.export_name()).is_none() {
@@ -221,9 +273,40 @@ impl PluginHost {
 
         Ok(LoadedPlugin {
             manifest: package.manifest.clone(),
-            wasm_bytes: package.wasm_module.clone(),
+            module,
             engine: Arc::clone(&self.engine),
         })
+    }
+
+    /// Return a cached compiled module, or compile and cache on first use.
+    fn get_or_compile_module(&self, wasm_bytes: &[u8]) -> Result<Arc<Module>, PluginError> {
+        let cache_key = hex::encode(Sha256::digest(wasm_bytes));
+
+        {
+            let cache = self
+                .module_cache
+                .lock()
+                .expect("module cache lock poisoned");
+            if let Some(module) = cache.get(&cache_key) {
+                return Ok(Arc::clone(module));
+            }
+        }
+
+        let module =
+            Module::new(&self.engine, wasm_bytes).map_err(|err| PluginError::WasmValidation {
+                message: err.to_string(),
+            })?;
+        let module = Arc::new(module);
+
+        {
+            let mut cache = self
+                .module_cache
+                .lock()
+                .expect("module cache lock poisoned");
+            cache.insert(cache_key, Arc::clone(&module));
+        }
+
+        Ok(module)
     }
 
     fn verify_signature(&self, package: &PluginPackage) -> Result<(), PluginError> {
@@ -258,13 +341,25 @@ impl PluginHost {
     }
 }
 
-#[derive(Debug, Clone)]
+// ---------------------------------------------------------------------------
+// LoadedPlugin — verified plugin with a pre-compiled module ready for instantiation.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
 pub struct LoadedPlugin {
     manifest: PluginManifest,
-    /// Verified Wasm bytes — tied to the signature that was verified at load time.
-    wasm_bytes: Vec<u8>,
+    /// Pre-compiled module from verified Wasm bytes. Shared via Arc to avoid re-compilation.
+    module: Arc<Module>,
     /// Shared engine from the PluginHost that verified this plugin.
     engine: Arc<Engine>,
+}
+
+impl std::fmt::Debug for LoadedPlugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadedPlugin")
+            .field("manifest", &self.manifest)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LoadedPlugin {
@@ -274,8 +369,8 @@ impl LoadedPlugin {
 
     /// Create a `PluginRuntime` from this verified plugin.
     ///
-    /// Uses the same Wasm bytes that were verified against the manifest signature,
-    /// preventing signature bypass via a separate `wasm_bytes` argument.
+    /// Uses the pre-compiled module that was built from verified Wasm bytes,
+    /// preventing signature bypass and eliminating per-call compilation overhead.
     pub fn create_runtime(&self) -> Result<PluginRuntime, PluginError> {
         PluginRuntime::from_verified(self)
     }
@@ -336,18 +431,10 @@ impl PluginRuntime {
     /// Create a `PluginRuntime` from a verified [`LoadedPlugin`].
     ///
     /// Prefer [`LoadedPlugin::create_runtime`] over calling this directly.
-    /// Uses the Wasm bytes that were verified against the manifest signature.
+    /// Uses the pre-compiled module that is tied to the verified manifest signature.
     fn from_verified(plugin: &LoadedPlugin) -> Result<Self, PluginError> {
-        Self::new_inner(plugin, &plugin.wasm_bytes)
-    }
-
-    fn new_inner(plugin: &LoadedPlugin, wasm_bytes: &[u8]) -> Result<Self, PluginError> {
         let engine = Arc::clone(&plugin.engine);
-
-        let module =
-            Module::new(&engine, wasm_bytes).map_err(|err| PluginError::WasmValidation {
-                message: err.to_string(),
-            })?;
+        let module = Arc::clone(&plugin.module);
 
         let limits = StoreLimitsBuilder::new()
             .memory_size(MAX_MEMORY_BYTES)
@@ -424,12 +511,13 @@ impl PluginRuntime {
         let input_bytes = input.as_bytes();
         let input_len = input_bytes.len() as i32;
 
-        // Replenish fuel before every call so each execution gets a fresh budget.
+        // Replenish fuel and set the epoch deadline before every call.
         self.store
             .set_fuel(FUEL_PER_CALL)
             .map_err(|err| PluginError::ExecutionFailed {
                 message: err.to_string(),
             })?;
+        self.store.set_epoch_deadline(EPOCH_TICKS_PER_CALL);
 
         // Write input into Wasm linear memory at offset 0.
         {
@@ -463,10 +551,20 @@ impl PluginRuntime {
             (0, input_len, OUTPUT_OFFSET, OUTPUT_LEN_OFFSET),
         )
         .map_err(|err| {
+            // Use wasmtime's typed Trap enum for precise classification.
+            if let Some(trap) = err.downcast_ref::<wasmtime::Trap>() {
+                match trap {
+                    wasmtime::Trap::OutOfFuel | wasmtime::Trap::Interrupt => {
+                        return PluginError::Timeout;
+                    }
+                    wasmtime::Trap::MemoryOutOfBounds | wasmtime::Trap::HeapMisaligned => {
+                        return PluginError::MemoryExhausted;
+                    }
+                    _ => {}
+                }
+            }
             let msg = err.to_string();
-            if msg.contains("fuel") || msg.contains("interrupt") {
-                PluginError::Timeout
-            } else if msg.contains("memory") {
+            if msg.contains("memory") {
                 PluginError::MemoryExhausted
             } else {
                 PluginError::ExecutionFailed { message: msg }

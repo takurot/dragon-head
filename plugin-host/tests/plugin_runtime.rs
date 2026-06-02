@@ -445,6 +445,21 @@ fn test_connector_echoes_request() {
     assert_eq!(parsed["url"], "https://example.com");
 }
 
+/// WAT fixture with an infinite loop in before_act — used to test interruption.
+fn infinite_loop_wasm() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+            (memory (export "memory") 1)
+            (func (export "before_act")
+                  (param $in_ptr i32) (param $in_len i32)
+                  (param $out_ptr i32) (param $out_len_ptr i32)
+                (loop $spin (br $spin))
+            )
+        )"#,
+    )
+    .expect("failed to build infinite_loop wasm fixture")
+}
+
 /// 8. connector is blocked when NetworkOut capability is missing
 #[test]
 fn test_connector_blocked_without_network_out() {
@@ -474,5 +489,100 @@ fn test_connector_blocked_without_network_out() {
             }
         ),
         "expected CapabilityViolation(NetworkOut), got {err:?}"
+    );
+}
+
+/// 9. Loading the same wasm bytes twice hits the module cache (second load < 5ms).
+#[test]
+fn test_second_load_hits_module_cache() {
+    let (registry, signing_key, key_id) = make_registry_and_key();
+    let wasm = echo_wasm();
+    let package = build_and_sign_package(
+        vec![ExtensionPoint::OnState],
+        vec![Capability::ReadState],
+        wasm,
+        &signing_key,
+        &key_id,
+    );
+
+    let host = PluginHost::new(registry);
+    host.load_plugin(&package).expect("first load must succeed");
+
+    let t = std::time::Instant::now();
+    let loaded2 = host
+        .load_plugin(&package)
+        .expect("second load must succeed");
+    let elapsed = t.elapsed();
+
+    // Second load should be fast (module already compiled).
+    assert!(
+        elapsed.as_millis() < 5,
+        "second load took {}ms, expected < 5ms (cache miss?)",
+        elapsed.as_millis()
+    );
+
+    // Verify the cached plugin still executes correctly.
+    let mut runtime = loaded2.create_runtime().expect("runtime must be created");
+    let out = runtime
+        .on_state(r#"{"cached":true}"#)
+        .expect("on_state must succeed");
+    let parsed: serde_json::Value = serde_json::from_str(&out).expect("must be valid JSON");
+    assert_eq!(parsed["cached"], true);
+}
+
+/// 10. Epoch-based interruption stops a runaway (infinite-loop) plugin.
+#[test]
+fn test_epoch_interruption_stops_infinite_loop() {
+    let (registry, signing_key, key_id) = make_registry_and_key();
+    let wasm = infinite_loop_wasm();
+    let package = build_and_sign_package(
+        vec![ExtensionPoint::BeforeAct],
+        vec![],
+        wasm,
+        &signing_key,
+        &key_id,
+    );
+
+    let host = PluginHost::new(registry);
+    let loaded = host.load_plugin(&package).expect("plugin must load");
+    let mut runtime = loaded.create_runtime().expect("runtime must be created");
+
+    let err = runtime
+        .before_act(r#"{"action":"loop"}"#)
+        .expect_err("infinite loop must be interrupted");
+
+    assert!(
+        matches!(err, PluginError::Timeout),
+        "expected Timeout, got {err:?}"
+    );
+}
+
+/// 11. Creating 100 runtimes from a cached LoadedPlugin averages < 1ms each.
+#[test]
+fn test_bulk_runtime_creation_under_1ms_average() {
+    let (registry, signing_key, key_id) = make_registry_and_key();
+    let wasm = echo_wasm();
+    let package = build_and_sign_package(
+        vec![ExtensionPoint::OnState],
+        vec![Capability::ReadState],
+        wasm,
+        &signing_key,
+        &key_id,
+    );
+
+    let host = PluginHost::new(registry);
+    let loaded = host.load_plugin(&package).expect("plugin must load");
+
+    const N: u32 = 100;
+    let t = std::time::Instant::now();
+    for _ in 0..N {
+        loaded.create_runtime().expect("runtime must be created");
+    }
+    let total_ms = t.elapsed().as_millis();
+    let avg_us = t.elapsed().as_micros() / N as u128;
+
+    assert!(
+        total_ms < N as u128,
+        "total {total_ms}ms for {N} runtimes; average {avg_us}µs — expected < 1ms each"
     );
 }
