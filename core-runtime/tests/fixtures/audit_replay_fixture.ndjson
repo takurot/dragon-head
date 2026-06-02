@@ -1,0 +1,5 @@
+{"type":"STATE_SNAPSHOT","state_hash":"sha256:a1b2c3d4","page_instance_id":"page-test-001","timestamp":1000,"payload":{"role":"document","label":"Checkout Page","children":[{"role":"textbox","label":"Email","stable_key":"k-email","attributes":{"id":"email","value":"***"}},{"role":"button","label":"Submit","stable_key":"k-submit"}]}}
+{"type":"TOOL_CALL","tool_name":"act","args":{"action":"type","target_stable_key":"k-email","value":"***"},"timestamp":2000}
+{"type":"STATE_PATCH","state_hash":"sha256:b2c3d4e5","page_instance_id":"page-test-001","timestamp":3000,"patch":[{"op":"replace","path":"/label","value":"Checkout Page (step 2)"}]}
+{"type":"POLICY_DECISION","rule_id":"PII-001","action":"redact","decision":"allow","timestamp":4000}
+{"type":"HITL_EVENT","event_type":"approval_requested","reason":"Sensitive form submission detected","user_id":null,"timestamp":5000}

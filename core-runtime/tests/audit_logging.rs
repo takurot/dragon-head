@@ -4,6 +4,7 @@ use anyhow::Context;
 
 use core_runtime::{
     audit::AuditEvent,
+    audit_replay::{replay_events, ReplayError},
     sre::{normalize_dom, LoadProfile, SemanticState},
     BrowserClient,
 };
@@ -302,6 +303,143 @@ fn test_repeated_state_capture_emits_state_patch_for_incremental_update() -> any
     );
 
     Ok(())
+}
+
+/// Replay tests — no browser required.
+
+#[test]
+fn replay_fixture_produces_report_with_all_event_types() -> anyhow::Result<()> {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/audit_replay_fixture.ndjson");
+    let content = std::fs::read_to_string(&fixture_path)
+        .with_context(|| format!("failed to read fixture: {}", fixture_path.display()))?;
+
+    let events: Vec<AuditEvent> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l))
+        .collect::<Result<_, _>>()
+        .context("failed to parse fixture NDJSON")?;
+
+    let report = replay_events(&events)?;
+
+    assert_eq!(report.total_events, 5, "should count all 5 fixture events");
+
+    // State chain: one snapshot + one patch
+    assert_eq!(report.state_chain.len(), 2);
+    assert_eq!(report.state_chain[0].state_hash, "sha256:a1b2c3d4");
+    assert_eq!(report.state_chain[0].timestamp, 1000);
+    assert_eq!(report.state_chain[1].state_hash, "sha256:b2c3d4e5");
+
+    // Tool calls
+    assert_eq!(report.tool_calls.len(), 1);
+    assert_eq!(report.tool_calls[0].tool_name, "act");
+    assert!(
+        report.tool_calls[0].has_redacted_args,
+        "fixture tool call contains *** args"
+    );
+
+    // Policy decisions
+    assert_eq!(report.policy_decisions.len(), 1);
+    assert_eq!(report.policy_decisions[0].rule_id, "PII-001");
+    assert_eq!(report.policy_decisions[0].decision, "allow");
+
+    // HITL events
+    assert_eq!(report.hitl_events.len(), 1);
+    assert_eq!(report.hitl_events[0].event_type, "approval_requested");
+
+    assert!(report.has_redacted_content, "fixture contains *** values");
+    Ok(())
+}
+
+#[test]
+fn replay_report_includes_timestamps_state_hashes_and_decisions() -> anyhow::Result<()> {
+    let events = vec![
+        AuditEvent::StateSnapshot {
+            state_hash: "sha256:aabbcc".to_string(),
+            page_instance_id: "p-01".to_string(),
+            timestamp: 1_000,
+            payload: serde_json::json!({"role": "document", "label": "Test"}),
+        },
+        AuditEvent::PolicyDecision {
+            rule_id: "R-42".to_string(),
+            action: "block".to_string(),
+            decision: "deny".to_string(),
+            timestamp: 2_000,
+        },
+        AuditEvent::StatePatch {
+            state_hash: "sha256:bbccdd".to_string(),
+            page_instance_id: "p-01".to_string(),
+            timestamp: 3_000,
+            patch: serde_json::json!([{"op": "replace", "path": "/label", "value": "Updated"}]),
+        },
+    ];
+
+    let report = replay_events(&events)?;
+
+    assert_eq!(report.state_chain[0].timestamp, 1_000);
+    assert_eq!(report.state_chain[0].state_hash, "sha256:aabbcc");
+    assert_eq!(report.state_chain[1].timestamp, 3_000);
+    assert_eq!(report.state_chain[1].state_hash, "sha256:bbccdd");
+
+    assert_eq!(report.policy_decisions[0].rule_id, "R-42");
+    assert_eq!(report.policy_decisions[0].decision, "deny");
+    assert_eq!(report.policy_decisions[0].timestamp, 2_000);
+    Ok(())
+}
+
+#[test]
+fn replay_report_detects_redacted_content_in_tool_args() {
+    let events = vec![AuditEvent::ToolCall {
+        tool_name: "act".to_string(),
+        args: serde_json::json!({"action": "type", "value": "***"}),
+        timestamp: 100,
+    }];
+
+    let report = replay_events(&events).expect("replay must succeed");
+    assert!(report.has_redacted_content, "*** in args should set flag");
+    assert!(report.tool_calls[0].has_redacted_args);
+}
+
+#[test]
+fn replay_patch_without_prior_snapshot_is_an_error() {
+    let events = vec![AuditEvent::StatePatch {
+        state_hash: "sha256:orphan".to_string(),
+        page_instance_id: "p-01".to_string(),
+        timestamp: 1_000,
+        patch: serde_json::json!([{"op": "replace", "path": "/label", "value": "Orphan"}]),
+    }];
+
+    let result = replay_events(&events);
+    assert!(
+        matches!(result, Err(ReplayError::NoBaseSnapshot { .. })),
+        "orphan patch must produce NoBaseSnapshot error"
+    );
+}
+
+#[test]
+fn replay_invalid_patch_chain_produces_actionable_error() {
+    let events = vec![
+        AuditEvent::StateSnapshot {
+            state_hash: "sha256:base".to_string(),
+            page_instance_id: "p-01".to_string(),
+            timestamp: 1_000,
+            payload: serde_json::json!({"role": "document"}),
+        },
+        AuditEvent::StatePatch {
+            state_hash: "sha256:bad".to_string(),
+            page_instance_id: "p-01".to_string(),
+            timestamp: 2_000,
+            // "test" op on non-existent path will fail
+            patch: serde_json::json!([{"op": "test", "path": "/nonexistent", "value": "x"}]),
+        },
+    ];
+
+    let result = replay_events(&events);
+    assert!(
+        matches!(result, Err(ReplayError::PatchFailed { .. })),
+        "invalid patch should produce PatchFailed error"
+    );
 }
 
 fn wait_for_events(
