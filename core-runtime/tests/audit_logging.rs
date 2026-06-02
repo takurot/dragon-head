@@ -324,22 +324,31 @@ fn replay_fixture_produces_report_with_all_event_types() -> anyhow::Result<()> {
     let report = replay_events(&events)?;
 
     assert_eq!(report.total_events, 5, "should count all 5 fixture events");
+
+    // State chain: one snapshot + one patch
+    assert_eq!(report.state_chain.len(), 2);
+    assert_eq!(report.state_chain[0].state_hash, "sha256:a1b2c3d4");
+    assert_eq!(report.state_chain[0].timestamp, 1000);
+    assert_eq!(report.state_chain[1].state_hash, "sha256:b2c3d4e5");
+
+    // Tool calls
+    assert_eq!(report.tool_calls.len(), 1);
+    assert_eq!(report.tool_calls[0].tool_name, "act");
     assert!(
-        !report.state_chain.is_empty(),
-        "report must include state chain entries"
+        report.tool_calls[0].has_redacted_args,
+        "fixture tool call contains *** args"
     );
-    assert!(
-        !report.tool_calls.is_empty(),
-        "report must include tool call entries"
-    );
-    assert!(
-        !report.policy_decisions.is_empty(),
-        "report must include policy decision entries"
-    );
-    assert!(
-        !report.hitl_events.is_empty(),
-        "report must include HITL event entries"
-    );
+
+    // Policy decisions
+    assert_eq!(report.policy_decisions.len(), 1);
+    assert_eq!(report.policy_decisions[0].rule_id, "PII-001");
+    assert_eq!(report.policy_decisions[0].decision, "allow");
+
+    // HITL events
+    assert_eq!(report.hitl_events.len(), 1);
+    assert_eq!(report.hitl_events[0].event_type, "approval_requested");
+
+    assert!(report.has_redacted_content, "fixture contains *** values");
     Ok(())
 }
 

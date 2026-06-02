@@ -26,10 +26,10 @@ pub struct StateChainEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum StateEntryKind {
     Snapshot,
-    Patch { applied: bool },
+    Patch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +67,10 @@ pub struct ReplayReport {
 ///
 /// STATE_PATCH events are applied against the current snapshot using RFC 6902 JSON Patch.
 /// Returns `Err` on the first invalid patch (no prior snapshot, or patch application failure).
+///
+/// **Note:** on error, all accumulated state chain / tool calls / decisions up to the
+/// failing event are discarded. Callers that need partial output should split the log
+/// at the error boundary and replay each segment independently.
 pub fn replay_events(events: &[AuditEvent]) -> Result<ReplayReport, ReplayError> {
     let mut state_chain: Vec<StateChainEntry> = Vec::new();
     let mut tool_calls: Vec<ToolCallEntry> = Vec::new();
@@ -124,10 +128,14 @@ pub fn replay_events(events: &[AuditEvent]) -> Result<ReplayReport, ReplayError>
                     reason: e.to_string(),
                 })?;
 
+                if json_contains_redaction(patch) {
+                    has_redacted_content = true;
+                }
+
                 state_chain.push(StateChainEntry {
                     state_hash: state_hash.clone(),
                     timestamp: *timestamp,
-                    kind: StateEntryKind::Patch { applied: true },
+                    kind: StateEntryKind::Patch,
                 });
             }
 
@@ -208,20 +216,14 @@ pub fn report_to_markdown(report: &ReplayReport) -> String {
         out.push_str("|---|------|------|----------------|\n");
         for (i, entry) in report.state_chain.iter().enumerate() {
             let kind = match &entry.kind {
-                StateEntryKind::Snapshot => "SNAPSHOT".to_string(),
-                StateEntryKind::Patch { applied } => {
-                    if *applied {
-                        "PATCH (applied)".to_string()
-                    } else {
-                        "PATCH (skipped)".to_string()
-                    }
-                }
+                StateEntryKind::Snapshot => "SNAPSHOT",
+                StateEntryKind::Patch => "PATCH",
             };
             out.push_str(&format!(
                 "| {} | {} | `{}` | {} |\n",
                 i + 1,
                 kind,
-                entry.state_hash,
+                escape_md(&entry.state_hash),
                 entry.timestamp
             ));
         }
@@ -237,7 +239,9 @@ pub fn report_to_markdown(report: &ReplayReport) -> String {
         for tc in &report.tool_calls {
             out.push_str(&format!(
                 "| `{}` | {} | {} |\n",
-                tc.tool_name, tc.timestamp, tc.has_redacted_args
+                escape_md(&tc.tool_name),
+                tc.timestamp,
+                tc.has_redacted_args
             ));
         }
     }
@@ -252,7 +256,10 @@ pub fn report_to_markdown(report: &ReplayReport) -> String {
         for pd in &report.policy_decisions {
             out.push_str(&format!(
                 "| `{}` | {} | **{}** | {} |\n",
-                pd.rule_id, pd.action, pd.decision, pd.timestamp
+                escape_md(&pd.rule_id),
+                escape_md(&pd.action),
+                escape_md(&pd.decision),
+                pd.timestamp
             ));
         }
     }
@@ -265,16 +272,25 @@ pub fn report_to_markdown(report: &ReplayReport) -> String {
         out.push_str("| Event Type | Timestamp (ms) |\n");
         out.push_str("|------------|----------------|\n");
         for he in &report.hitl_events {
-            out.push_str(&format!("| `{}` | {} |\n", he.event_type, he.timestamp));
+            out.push_str(&format!(
+                "| `{}` | {} |\n",
+                escape_md(&he.event_type),
+                he.timestamp
+            ));
         }
     }
 
     out
 }
 
+fn escape_md(s: &str) -> String {
+    s.replace('`', "\\`").replace('|', "\\|").replace('\n', " ")
+}
+
 fn json_contains_redaction(value: &serde_json::Value) -> bool {
     match value {
-        serde_json::Value::String(s) => s.contains("***"),
+        // "***" covers email/generic redaction; "****-****-****-" covers card numbers.
+        serde_json::Value::String(s) => s.contains("***") || s.contains("****-****-****-"),
         serde_json::Value::Array(arr) => arr.iter().any(json_contains_redaction),
         serde_json::Value::Object(map) => map.values().any(json_contains_redaction),
         _ => false,
@@ -293,6 +309,40 @@ mod tests {
         assert!(json_contains_redaction(&json!(["ok", "***"])));
         assert!(!json_contains_redaction(&json!("clean")));
         assert!(!json_contains_redaction(&json!(42)));
+    }
+
+    #[test]
+    fn json_contains_redaction_detects_card_marker() {
+        assert!(json_contains_redaction(&json!("Card: ****-****-****-XXXX")));
+        assert!(json_contains_redaction(
+            &json!({"card": "****-****-****-XXXX"})
+        ));
+        assert!(!json_contains_redaction(&json!("1234-5678-9012-3456")));
+    }
+
+    #[test]
+    fn report_to_markdown_empty_report_renders_empty_sections() {
+        let report = ReplayReport {
+            total_events: 0,
+            has_redacted_content: false,
+            state_chain: vec![],
+            tool_calls: vec![],
+            policy_decisions: vec![],
+            hitl_events: vec![],
+        };
+        let md = report_to_markdown(&report);
+        assert!(md.contains("_(no state events)_"));
+        assert!(md.contains("_(no tool calls)_"));
+        assert!(md.contains("_(no policy decisions)_"));
+        assert!(md.contains("_(no HITL events)_"));
+    }
+
+    #[test]
+    fn escape_md_sanitizes_injection_characters() {
+        assert_eq!(escape_md("a|b"), "a\\|b");
+        assert_eq!(escape_md("a`b"), "a\\`b");
+        assert_eq!(escape_md("a\nb"), "a b");
+        assert_eq!(escape_md("safe"), "safe");
     }
 
     #[test]

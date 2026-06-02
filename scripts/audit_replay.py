@@ -12,6 +12,8 @@ validates patch chains, and produces a report for CI artifacts or incident revie
 from __future__ import annotations
 
 import argparse
+import copy
+import dataclasses
 import json
 import sys
 from dataclasses import dataclass, field
@@ -68,12 +70,11 @@ class ReplayReport:
 
 def _apply_json_patch(doc: Any, ops: list[dict]) -> Any:
     """Apply RFC 6902 JSON Patch operations. Raises ValueError on failure."""
-    import copy
     doc = copy.deepcopy(doc)
     for op in ops:
         operation = op.get("op")
         path = op.get("path", "")
-        parts = [p for p in path.split("/") if p != ""] if path else []
+        parts = _ptr_parts(path)
 
         if operation == "replace":
             _patch_set(doc, parts, op["value"])
@@ -88,17 +89,28 @@ def _apply_json_patch(doc: Any, ops: list[dict]) -> Any:
                     f"test failed at {path!r}: expected {op.get('value')!r}, got {actual!r}"
                 )
         elif operation == "copy":
-            from_parts = [p for p in op["from"].split("/") if p]
+            from_parts = _ptr_parts(op["from"])
             val = _patch_get(doc, from_parts)
             _patch_set(doc, parts, val)
         elif operation == "move":
-            from_parts = [p for p in op["from"].split("/") if p]
+            from_parts = _ptr_parts(op["from"])
             val = _patch_get(doc, from_parts)
             _patch_remove(doc, from_parts)
             _patch_set(doc, parts, val)
         else:
             raise ValueError(f"unsupported patch op: {operation!r}")
     return doc
+
+
+def _ptr_parts(path: str) -> list[str]:
+    """Split a JSON Pointer path into segments, decoding RFC 6902 escape sequences."""
+    if not path:
+        return []
+    return [
+        p.replace("~1", "/").replace("~0", "~")
+        for p in path.split("/")
+        if p != ""
+    ]
 
 
 def _resolve(doc: Any, parts: list[str]) -> tuple[Any, str]:
@@ -159,7 +171,8 @@ def _patch_remove(doc: Any, parts: list[str]) -> None:
 
 def _contains_redaction(value: Any) -> bool:
     if isinstance(value, str):
-        return "***" in value
+        # "***" covers email/generic redaction; "****-****-****-" covers card numbers.
+        return "***" in value or "****-****-****-" in value
     if isinstance(value, list):
         return any(_contains_redaction(v) for v in value)
     if isinstance(value, dict):
@@ -250,6 +263,11 @@ def replay_events(events: list[dict]) -> ReplayReport:
 # Report formatters
 # ---------------------------------------------------------------------------
 
+def _escape_md(s: str) -> str:
+    """Escape characters that could break Markdown table structure."""
+    return s.replace("`", "\\`").replace("|", "\\|").replace("\n", " ")
+
+
 def report_to_markdown(report: ReplayReport) -> str:
     lines: list[str] = []
     lines.append("# Audit Replay Report\n")
@@ -261,8 +279,8 @@ def report_to_markdown(report: ReplayReport) -> str:
         lines.append("| # | Kind | Hash | Timestamp (ms) |")
         lines.append("|---|------|------|----------------|")
         for i, e in enumerate(report.state_chain, 1):
-            kind = "SNAPSHOT" if e.kind == "snapshot" else "PATCH (applied)" if e.patch_applied else "PATCH (skipped)"
-            lines.append(f"| {i} | {kind} | `{e.state_hash}` | {e.timestamp} |")
+            kind = "SNAPSHOT" if e.kind == "snapshot" else "PATCH"
+            lines.append(f"| {i} | {kind} | `{_escape_md(e.state_hash)}` | {e.timestamp} |")
     else:
         lines.append("_(no state events)_")
     lines.append("")
@@ -272,7 +290,7 @@ def report_to_markdown(report: ReplayReport) -> str:
         lines.append("| Tool | Timestamp (ms) | Redacted Args |")
         lines.append("|------|----------------|---------------|")
         for tc in report.tool_calls:
-            lines.append(f"| `{tc.tool_name}` | {tc.timestamp} | {str(tc.has_redacted_args).lower()} |")
+            lines.append(f"| `{_escape_md(tc.tool_name)}` | {tc.timestamp} | {str(tc.has_redacted_args).lower()} |")
     else:
         lines.append("_(no tool calls)_")
     lines.append("")
@@ -282,7 +300,10 @@ def report_to_markdown(report: ReplayReport) -> str:
         lines.append("| Rule | Action | Decision | Timestamp (ms) |")
         lines.append("|------|--------|----------|----------------|")
         for pd in report.policy_decisions:
-            lines.append(f"| `{pd.rule_id}` | {pd.action} | **{pd.decision}** | {pd.timestamp} |")
+            lines.append(
+                f"| `{_escape_md(pd.rule_id)}` | {_escape_md(pd.action)} "
+                f"| **{_escape_md(pd.decision)}** | {pd.timestamp} |"
+            )
     else:
         lines.append("_(no policy decisions)_")
     lines.append("")
@@ -292,7 +313,7 @@ def report_to_markdown(report: ReplayReport) -> str:
         lines.append("| Event Type | Timestamp (ms) |")
         lines.append("|------------|----------------|")
         for he in report.hitl_events:
-            lines.append(f"| `{he.event_type}` | {he.timestamp} |")
+            lines.append(f"| `{_escape_md(he.event_type)}` | {he.timestamp} |")
     else:
         lines.append("_(no HITL events)_")
 
@@ -300,7 +321,6 @@ def report_to_markdown(report: ReplayReport) -> str:
 
 
 def report_to_json(report: ReplayReport) -> str:
-    import dataclasses
     return json.dumps(dataclasses.asdict(report), indent=2)
 
 
@@ -357,6 +377,7 @@ def main() -> None:
     output = report_to_markdown(report) if args.format == "markdown" else report_to_json(report)
 
     if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(output, encoding="utf-8")
         print(f"Report written to {args.out}")
     else:
