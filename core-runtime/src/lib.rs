@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod audit_replay;
 pub mod audit_sink;
 pub mod browser;
 pub mod chrome_detection;
