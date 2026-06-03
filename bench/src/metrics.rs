@@ -23,6 +23,7 @@ pub struct AggregatedMetrics {
     pub runs: usize,
 }
 
+/// Positive values = savings; negative values = cost increase (SRE > raw DOM).
 #[derive(Debug, Clone)]
 pub struct CostSavings {
     pub token_reduction_pct: f64,
@@ -48,23 +49,47 @@ pub fn aggregate(results: &[RunResult]) -> AggregatedMetrics {
         };
     }
 
-    let raw_tokens_sum: u64 = results
-        .iter()
-        .map(|r| estimate_tokens(r.raw_html_bytes))
-        .sum();
-    let sre_tokens_sum: u64 = results.iter().map(|r| estimate_tokens(r.sre_bytes)).sum();
-    let raw_ttft_sum: u128 = results.iter().map(|r| r.raw_html_ttft_ms).sum();
-    let sre_ttft_sum: u128 = results.iter().map(|r| r.sre_ttft_ms).sum();
-    let raw_success_count = results.iter().filter(|r| r.raw_success).count();
-    let sre_success_count = results.iter().filter(|r| r.sre_success).count();
+    // Only include successful runs in token/latency averages to avoid failed-run zeros
+    // skewing the ROI numbers. Success rate still counts all runs.
+    let raw_ok: Vec<&RunResult> = results.iter().filter(|r| r.raw_success).collect();
+    let sre_ok: Vec<&RunResult> = results.iter().filter(|r| r.sre_success).collect();
+
+    let raw_avg_tokens = if raw_ok.is_empty() {
+        0
+    } else {
+        raw_ok
+            .iter()
+            .map(|r| estimate_tokens(r.raw_html_bytes))
+            .sum::<u64>()
+            / raw_ok.len() as u64
+    };
+    let sre_avg_tokens = if sre_ok.is_empty() {
+        0
+    } else {
+        sre_ok
+            .iter()
+            .map(|r| estimate_tokens(r.sre_bytes))
+            .sum::<u64>()
+            / sre_ok.len() as u64
+    };
+    let raw_avg_ttft_ms = if raw_ok.is_empty() {
+        0.0
+    } else {
+        raw_ok.iter().map(|r| r.raw_html_ttft_ms).sum::<u128>() as f64 / raw_ok.len() as f64
+    };
+    let sre_avg_ttft_ms = if sre_ok.is_empty() {
+        0.0
+    } else {
+        sre_ok.iter().map(|r| r.sre_ttft_ms).sum::<u128>() as f64 / sre_ok.len() as f64
+    };
 
     AggregatedMetrics {
-        raw_avg_tokens: raw_tokens_sum / n as u64,
-        sre_avg_tokens: sre_tokens_sum / n as u64,
-        raw_avg_ttft_ms: raw_ttft_sum as f64 / n as f64,
-        sre_avg_ttft_ms: sre_ttft_sum as f64 / n as f64,
-        raw_success_rate: raw_success_count as f64 / n as f64 * 100.0,
-        sre_success_rate: sre_success_count as f64 / n as f64 * 100.0,
+        raw_avg_tokens,
+        sre_avg_tokens,
+        raw_avg_ttft_ms,
+        sre_avg_ttft_ms,
+        raw_success_rate: raw_ok.len() as f64 / n as f64 * 100.0,
+        sre_success_rate: sre_ok.len() as f64 / n as f64 * 100.0,
         runs: n,
     }
 }
@@ -75,11 +100,12 @@ pub fn cost_savings(raw_tokens: u64, sre_tokens: u64) -> CostSavings {
     } else {
         (1.0 - sre_tokens as f64 / raw_tokens as f64) * 100.0
     };
-    let saved_tokens = raw_tokens.saturating_sub(sre_tokens);
+    // Use signed delta so a cost increase (SRE > raw) shows as negative savings.
+    let token_delta = raw_tokens as i64 - sre_tokens as i64;
     CostSavings {
         token_reduction_pct,
-        gpt4o_savings_usd: saved_tokens as f64 * GPT4O_COST_PER_TOKEN,
-        claude_savings_usd: saved_tokens as f64 * CLAUDE_COST_PER_TOKEN,
+        gpt4o_savings_usd: token_delta as f64 * GPT4O_COST_PER_TOKEN,
+        claude_savings_usd: token_delta as f64 * CLAUDE_COST_PER_TOKEN,
     }
 }
 
@@ -135,17 +161,56 @@ mod tests {
         ];
         let m = aggregate(&results);
         assert_eq!(m.runs, 2);
-        // avg raw tokens: (2000 + 3000) / 2 = 2500
+        // avg raw tokens from 2 successful raw runs: (2000 + 3000) / 2 = 2500
         assert_eq!(m.raw_avg_tokens, 2500);
-        // avg sre tokens: (100 + 150) / 2 = 125
-        assert_eq!(m.sre_avg_tokens, 125);
-        // avg raw ttft: (100 + 200) / 2 = 150.0
+        // avg sre tokens from 1 successful sre run: 100
+        assert_eq!(m.sre_avg_tokens, 100);
+        // avg raw ttft from 2 successful raw runs: (100 + 200) / 2 = 150.0
         assert!((m.raw_avg_ttft_ms - 150.0).abs() < 0.01);
-        // avg sre ttft: (50 + 80) / 2 = 65.0
-        assert!((m.sre_avg_ttft_ms - 65.0).abs() < 0.01);
+        // avg sre ttft from 1 successful sre run: 50.0
+        assert!((m.sre_avg_ttft_ms - 50.0).abs() < 0.01);
         // success rates
         assert!((m.raw_success_rate - 100.0).abs() < 0.01);
         assert!((m.sre_success_rate - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn aggregate_failed_runs_excluded_from_token_averages() {
+        let results = vec![
+            RunResult {
+                run: 0,
+                raw_html_bytes: 0, // failed
+                sre_bytes: 0,      // failed
+                raw_html_ttft_ms: 0,
+                sre_ttft_ms: 0,
+                raw_success: false,
+                sre_success: false,
+            },
+            RunResult {
+                run: 1,
+                raw_html_bytes: 8000,
+                sre_bytes: 400,
+                raw_html_ttft_ms: 100,
+                sre_ttft_ms: 50,
+                raw_success: true,
+                sre_success: true,
+            },
+        ];
+        let m = aggregate(&results);
+        // Only the successful run contributes to token/latency averages
+        assert_eq!(m.raw_avg_tokens, 2000); // 8000/4
+        assert_eq!(m.sre_avg_tokens, 100); // 400/4
+        assert_eq!(m.runs, 2);
+        assert!((m.raw_success_rate - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn cost_savings_negative_when_sre_larger() {
+        // SRE produces more tokens than raw DOM — should show negative savings
+        let savings = cost_savings(100, 200);
+        assert!(savings.token_reduction_pct < 0.0);
+        assert!(savings.gpt4o_savings_usd < 0.0);
+        assert!(savings.claude_savings_usd < 0.0);
     }
 
     #[test]

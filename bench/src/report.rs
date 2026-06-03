@@ -2,6 +2,14 @@ use crate::metrics::{cost_savings, AggregatedMetrics};
 use anyhow::Result;
 use std::path::Path;
 
+fn format_savings_usd(usd: f64) -> String {
+    if usd >= 0.0 {
+        format!("-${usd:.6}")
+    } else {
+        format!("+${:.6}", usd.abs())
+    }
+}
+
 pub fn print_table(m: &AggregatedMetrics) {
     let savings = cost_savings(m.raw_avg_tokens, m.sre_avg_tokens);
     println!();
@@ -33,7 +41,7 @@ pub fn print_table(m: &AggregatedMetrics) {
             "${:.6}",
             m.sre_avg_tokens as f64 * crate::metrics::GPT4O_COST_PER_TOKEN
         ),
-        format!("-${:.6}", savings.gpt4o_savings_usd)
+        format_savings_usd(savings.gpt4o_savings_usd)
     );
     println!(
         "{:<30} {:>14} {:>20} {:>15}",
@@ -46,7 +54,7 @@ pub fn print_table(m: &AggregatedMetrics) {
             "${:.6}",
             m.sre_avg_tokens as f64 * crate::metrics::CLAUDE_COST_PER_TOKEN
         ),
-        format!("-${:.6}", savings.claude_savings_usd)
+        format_savings_usd(savings.claude_savings_usd)
     );
     println!("{}", "-".repeat(82));
     println!(
@@ -97,14 +105,14 @@ fn build_markdown(
 | Avg Tokens (est.) | {raw_tokens} | {sre_tokens} | {token_pct:.1}% |
 | Avg TTFT (ms) | {raw_ttft:.1} | {sre_ttft:.1} | — |
 | Success Rate | {raw_sr:.1}% | {sre_sr:.1}% | — |
-| Est. GPT-4o Cost / run | ${raw_gpt:.6} | ${sre_gpt:.6} | -${save_gpt:.6} |
-| Est. Claude Cost / run | ${raw_cl:.6} | ${sre_cl:.6} | -${save_cl:.6} |
+| Est. GPT-4o Cost / run | ${raw_gpt:.6} | ${sre_gpt:.6} | {save_gpt_fmt} |
+| Est. Claude Cost / run | ${raw_cl:.6} | ${sre_cl:.6} | {save_cl_fmt} |
 
 ## Cost Savings Summary
 
 - **Token reduction:** {token_pct:.1}%
-- **GPT-4o savings per run:** ${save_gpt:.6} USD
-- **Claude savings per run:** ${save_cl:.6} USD
+- **GPT-4o savings per run:** {save_gpt_fmt} USD
+- **Claude savings per run:** {save_cl_fmt} USD
 
 > Token estimates use the standard approximation of 1 token ≈ 4 characters.
 > Pricing: GPT-4o input $5/1M tokens, Claude claude-sonnet-4-6 input $3/1M tokens.
@@ -122,10 +130,10 @@ fn build_markdown(
         sre_sr = m.sre_success_rate,
         raw_gpt = m.raw_avg_tokens as f64 * crate::metrics::GPT4O_COST_PER_TOKEN,
         sre_gpt = m.sre_avg_tokens as f64 * crate::metrics::GPT4O_COST_PER_TOKEN,
-        save_gpt = savings.gpt4o_savings_usd,
+        save_gpt_fmt = format_savings_usd(savings.gpt4o_savings_usd),
         raw_cl = m.raw_avg_tokens as f64 * crate::metrics::CLAUDE_COST_PER_TOKEN,
         sre_cl = m.sre_avg_tokens as f64 * crate::metrics::CLAUDE_COST_PER_TOKEN,
-        save_cl = savings.claude_savings_usd,
+        save_cl_fmt = format_savings_usd(savings.claude_savings_usd),
     )
 }
 
