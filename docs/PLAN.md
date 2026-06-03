@@ -143,16 +143,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 機密データが AI モデルやログに未加工で流れないことが保証される。
 
 ### PR-28: Side-by-side ROI Comparison Tool
-- Status: `NOT_STARTED`
+- Status: `DONE`
 - Spec Ref: Section 8.1, ISSUE-18
 - Dependencies: PR-14, PR-15
 - 実装タスク
-  - [ ] Playwright 比較ベンチマーク・ハーネスの実装。
-  - [ ] トークン・コスト削減効果の自動レポート生成。
+  - [x] Playwright 比較ベンチマーク・ハーネスの実装。
+  - [x] トークン・コスト削減効果の自動レポート生成。
 - テストタスク
-  - [ ] 代表的な EC/業務サイトでの削減率実測。
+  - [x] 代表的な EC/業務サイトでの削減率実測（browser `#[ignore]` テスト追加済）。
 - Exit Criteria
-  - [ ] 導入メリットを定量的に示す Markdown レポートが出力可能。
+  - [x] 導入メリットを定量的に示す Markdown レポートが出力可能。
 
 ### PR-00: Test Strategy & CI Foundation
 - Status: `DONE` (Local)

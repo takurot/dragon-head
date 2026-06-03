@@ -1,0 +1,18 @@
+[package]
+name = "bench"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+core-runtime = { path = "../core-runtime" }
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "dragon-head-bench"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3.10"
