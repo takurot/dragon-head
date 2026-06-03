@@ -3,7 +3,7 @@ use core_runtime::BrowserClient;
 
 #[test]
 fn test_stable_key_determinism() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -55,7 +55,7 @@ fn test_stable_key_determinism() -> anyhow::Result<()> {
 
 #[test]
 fn test_stable_key_collision_handling() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

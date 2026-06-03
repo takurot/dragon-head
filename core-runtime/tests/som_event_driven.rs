@@ -7,7 +7,7 @@ use core_runtime::{
 
 #[test]
 fn test_som_not_generated_without_trigger() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -35,7 +35,7 @@ fn test_som_not_generated_without_trigger() -> anyhow::Result<()> {
 
 #[test]
 fn test_som_generated_by_get_visual_trigger() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -68,7 +68,7 @@ fn test_som_generated_by_get_visual_trigger() -> anyhow::Result<()> {
 
 #[test]
 fn test_som_generated_by_act_ambiguous_trigger() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -117,7 +117,7 @@ fn test_som_generated_by_act_ambiguous_trigger() -> anyhow::Result<()> {
 
 #[test]
 fn test_som_generated_by_act_ambiguous_without_stable_key() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -157,7 +157,7 @@ fn test_som_generated_by_act_ambiguous_without_stable_key() -> anyhow::Result<()
 
 #[test]
 fn test_som_generated_by_verify_failure_trigger() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

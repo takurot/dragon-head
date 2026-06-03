@@ -6,7 +6,7 @@ use core_runtime::{BrowserClient, KmsAdapter, LocalSessionVault, SessionVault, S
 
 #[tokio::test]
 async fn test_session_management_cross_domain_save_restore() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -66,7 +66,7 @@ async fn test_session_management_cross_domain_save_restore() -> anyhow::Result<(
 
 #[tokio::test]
 async fn test_session_management_key_rotation_restore_roundtrip() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

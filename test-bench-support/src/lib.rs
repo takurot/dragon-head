@@ -1,12 +1,73 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    process::Command,
     time::Instant,
 };
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Returns `true` when no Chrome/Chromium binary is available, indicating that
+/// browser-dependent tests should be skipped.
+///
+/// Usage in a test:
+/// ```ignore
+/// if test_bench_support::should_skip_browser_tests() { return Ok(()); }
+/// ```
+#[must_use]
+pub fn should_skip_browser_tests() -> bool {
+    if let Ok(path) = env::var("CHROME_PATH") {
+        if Path::new(&path).exists() {
+            return false;
+        }
+    }
+
+    let candidates: &[&str] = if cfg!(target_os = "macos") {
+        &["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+    } else if cfg!(target_os = "linux") {
+        &[
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+        ]
+    } else if cfg!(target_os = "windows") {
+        &[
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+        ]
+    } else {
+        &[]
+    };
+
+    if candidates.iter().any(|p| Path::new(p).exists()) {
+        return false;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    let which_cmd = "which";
+    #[cfg(target_os = "windows")]
+    let which_cmd = "where";
+
+    let found_via_which = [
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+    ]
+    .iter()
+    .any(|name| {
+        Command::new(which_cmd)
+            .arg(name)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    });
+
+    !found_via_which
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

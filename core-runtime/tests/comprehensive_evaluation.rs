@@ -21,7 +21,7 @@ use test_bench_support::{EvaluationBench, EvaluationMode};
 
 #[test]
 fn test_core_runtime_comprehensive_evaluation_suite() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

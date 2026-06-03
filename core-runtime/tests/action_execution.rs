@@ -5,7 +5,7 @@ use core_runtime::{
 
 #[test]
 fn test_action_execution_basic() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -51,7 +51,7 @@ fn test_action_execution_basic() -> anyhow::Result<()> {
 
 #[test]
 fn test_action_execution_fallback() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -135,7 +135,7 @@ fn find_button_info(node: &core_runtime::sre::state::SemanticNode) -> Option<(i6
 
 #[test]
 fn test_action_execution_verify_required() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

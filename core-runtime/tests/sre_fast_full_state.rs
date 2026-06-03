@@ -16,7 +16,7 @@ fn build_state(html: &str) -> anyhow::Result<SemanticState> {
 
 #[test]
 fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -141,7 +141,7 @@ fn test_fast_full_state_content_diff() -> anyhow::Result<()> {
 
 #[test]
 fn test_fast_state_generated_before_full_state() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

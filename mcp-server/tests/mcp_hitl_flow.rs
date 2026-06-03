@@ -4,7 +4,7 @@ use serde_json::json;
 
 #[test]
 fn test_ask_human_hitl_flow_with_policy_gate() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

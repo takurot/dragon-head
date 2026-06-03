@@ -13,7 +13,7 @@ const DIFF_THRESHOLD: f64 = 0.06;
 
 #[test]
 fn test_som_visual_regression_threshold() -> Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

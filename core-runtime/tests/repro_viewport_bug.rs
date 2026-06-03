@@ -273,7 +273,7 @@ fn explicit_800x600_matches_normalize_dom_default() {
 /// `get_viewport_dimensions()` and forwards the result to `normalize_dom_with_viewport`.
 #[test]
 fn page_session_uses_actual_viewport_for_stable_key() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

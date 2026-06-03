@@ -16,7 +16,7 @@ mod nfr_metrics;
 
 #[test]
 fn test_nfr_state_update_latency_under_100ms() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

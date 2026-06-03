@@ -3,7 +3,7 @@ use core_runtime::BrowserClient;
 
 #[test]
 fn test_repro_unstable_keys_on_sibling_insertion() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

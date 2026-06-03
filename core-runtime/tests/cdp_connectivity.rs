@@ -8,7 +8,7 @@ fn test_browser_launch_and_navigate() -> anyhow::Result<()> {
     // For local dev, we assume chrome is present.
 
     // Check if we are in a CI environment without chrome
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         println!("Skipping CDP test: Chrome not available");
         return Ok(());
     }

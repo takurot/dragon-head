@@ -1,10 +1,10 @@
 use mcp_server::{McpBackend, McpServer};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::Instant;
+use test_bench_support::should_skip_browser_tests;
 
 // ---------------------------------------------------------------------------
 // Fast library-level protocol tests (no Chrome / no subprocess)
@@ -134,36 +134,6 @@ fn protocol_tools_call_get_usage_report() {
 // Binary helper utilities
 // ---------------------------------------------------------------------------
 
-fn chrome_available() -> bool {
-    if let Ok(path) = std::env::var("CHROME_PATH") {
-        if Path::new(&path).exists() {
-            return true;
-        }
-    }
-    let candidates = [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-        "chromium",
-        "chromium-browser",
-        "google-chrome",
-        "google-chrome-stable",
-    ];
-    candidates.iter().any(|p| {
-        if p.contains('/') {
-            Path::new(p).exists()
-        } else {
-            Command::new("which")
-                .arg(p)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
-    })
-}
-
 fn mcp_handshake(
     stdin: &mut impl Write,
     reader: &mut BufReader<impl std::io::Read>,
@@ -291,7 +261,7 @@ fn binary_init_unknown_client_exits_nonzero() -> anyhow::Result<()> {
 #[test]
 #[ignore = "requires Chrome; starts a real browser process (~30-60s). Run with: cargo test -p mcp-server --test mcp_binary_e2e -- --ignored"]
 fn test_mcp_binary_full_handshake_and_tools_list() -> anyhow::Result<()> {
-    if !chrome_available() {
+    if should_skip_browser_tests() {
         eprintln!("SKIP: Chrome not available");
         return Ok(());
     }
@@ -352,7 +322,7 @@ fn test_mcp_binary_full_handshake_and_tools_list() -> anyhow::Result<()> {
 #[test]
 #[ignore = "requires Chrome; starts a real browser process (~30-60s). Run with: cargo test -p mcp-server --test mcp_binary_e2e -- --ignored"]
 fn test_mcp_binary_full_handshake_and_tools_call() -> anyhow::Result<()> {
-    if !chrome_available() {
+    if should_skip_browser_tests() {
         eprintln!("SKIP: Chrome not available");
         return Ok(());
     }

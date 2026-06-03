@@ -55,7 +55,7 @@ fn build_snapshot() -> Result<Value> {
 
 #[test]
 fn test_sre_minimal_snapshot_regression() -> Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
