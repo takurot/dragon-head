@@ -120,16 +120,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [ ] チャットツール経由で安全に HITL 判断を完走できる。
 
 ### PR-26: Shared Wasm Engine & Performance Tuning
-- Status: `NOT_STARTED`
+- Status: `DONE`
 - Spec Ref: Section 4.1, ISSUE-16
 - Dependencies: PR-12
 - 実装タスク
-  - [ ] `wasmtime` Engine のグローバル共有とコンパイル済みモジュールのキャッシュ。
-  - [ ] Epoch-based Interruption による暴走プラグインの強制遮断。
+  - [x] `wasmtime` Engine のグローバル共有とコンパイル済みモジュールのキャッシュ。
+  - [x] Epoch-based Interruption による暴走プラグインの強制遮断。
 - テストタスク
-  - [ ] 大量プラグインロード時のメモリ消費と起動レイテンシの計測。
+  - [x] 大量プラグインロード時のメモリ消費と起動レイテンシの計測。
 - Exit Criteria
-  - [ ] プラグイン起動時間が 1ms 以下に短縮。
+  - [x] プラグイン起動時間が 1ms 以下に短縮。
 
 ### PR-27: Unified PII Redactor Utility
 - Status: `DONE`
