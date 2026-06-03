@@ -414,7 +414,7 @@ fn test_refinement_cache_invalidated_on_viewport_change() {
 /// differs from a narrow viewport for straddling elements."
 #[test]
 fn test_browser_backed_viewport_affects_stable_key() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

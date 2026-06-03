@@ -9,7 +9,7 @@ use core_runtime::{
 
 #[test]
 fn test_block_rule_prevents_action_execution() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -58,7 +58,7 @@ fn test_block_rule_prevents_action_execution() -> anyhow::Result<()> {
 
 #[test]
 fn test_action_only_approval_scope_expires_after_single_use() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -128,7 +128,7 @@ fn test_action_only_approval_scope_expires_after_single_use() -> anyhow::Result<
 
 #[test]
 fn test_action_only_approval_scope_expires_on_navigation() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -188,7 +188,7 @@ fn test_action_only_approval_scope_expires_on_navigation() -> anyhow::Result<()>
 
 #[test]
 fn test_set_policy_rules_clears_stale_approvals() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -244,7 +244,7 @@ fn test_set_policy_rules_clears_stale_approvals() -> anyhow::Result<()> {
 
 #[test]
 fn test_until_navigation_and_timeboxed_scopes_expire() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -347,7 +347,7 @@ fn test_until_navigation_and_timeboxed_scopes_expire() -> anyhow::Result<()> {
 /// `granted_url` comparison must invalidate the approval.
 #[test]
 fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -442,7 +442,7 @@ fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<
 /// attribute values, making `context_regex` on checkout amounts effectively dead.
 #[test]
 fn test_context_regex_matches_text_outside_button() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -523,7 +523,7 @@ fn find_button_info_in_node(
 
 #[test]
 fn test_guardian_angel_proactive_block_on_high_amount() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -582,7 +582,7 @@ fn test_guardian_angel_proactive_block_on_high_amount() -> anyhow::Result<()> {
 
 #[test]
 fn test_guardian_angel_hitl_carries_outcome_projection() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

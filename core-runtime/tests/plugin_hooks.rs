@@ -305,7 +305,7 @@ fn test_run_policy_hooks_trap_fails_closed() {
 
 #[test]
 fn test_no_plugins_unchanged_browser_behavior() {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return;
     }
 
@@ -324,7 +324,7 @@ fn test_no_plugins_unchanged_browser_behavior() {
 
 #[test]
 fn test_block_policy_plugin_prevents_action_in_browser() {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return;
     }
 
@@ -351,7 +351,7 @@ fn test_block_policy_plugin_prevents_action_in_browser() {
 
 #[test]
 fn test_policy_plugin_decision_recorded_in_audit_browser() {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return;
     }
 
@@ -391,7 +391,7 @@ fn test_policy_plugin_decision_recorded_in_audit_browser() {
 
 #[test]
 fn test_state_plugin_failure_is_nonfatal_in_browser() {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return;
     }
 
@@ -417,7 +417,7 @@ fn test_state_plugin_failure_is_nonfatal_in_browser() {
 
 #[test]
 fn test_state_plugin_failure_recorded_in_audit_browser() {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return;
     }
 

@@ -5,7 +5,7 @@ use core_runtime::{
 
 #[test]
 fn test_stable_key_self_heals_across_spa_rerenders() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

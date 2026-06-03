@@ -5,7 +5,7 @@ use core_runtime::{
 
 #[test]
 fn test_sre_determinism_same_input() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -64,7 +64,7 @@ fn test_sre_determinism_same_input() -> anyhow::Result<()> {
 /// This is the core determinism requirement of SPEC SRE-01.
 #[test]
 fn test_sre_determinism_dynamic_class_variance() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

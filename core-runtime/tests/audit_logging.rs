@@ -11,7 +11,7 @@ use core_runtime::{
 
 #[test]
 fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -140,7 +140,7 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
 
 #[test]
 fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -210,7 +210,7 @@ fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
 
 #[test]
 fn test_repeated_state_capture_emits_state_patch_for_incremental_update() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

@@ -3,7 +3,7 @@ use core_runtime::BrowserClient;
 
 #[test]
 fn test_stable_key_format_compliance() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -31,7 +31,7 @@ fn test_stable_key_format_compliance() -> anyhow::Result<()> {
 
 #[test]
 fn test_ambiguous_flag_on_collision() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 

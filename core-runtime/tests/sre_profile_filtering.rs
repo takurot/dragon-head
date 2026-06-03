@@ -49,7 +49,7 @@ fn get_all_roles(state: &core_runtime::sre::SemanticState) -> Vec<String> {
 
 #[test]
 fn test_minimal_blocks_all_media_and_js() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -108,7 +108,7 @@ fn test_minimal_blocks_all_media_and_js() -> anyhow::Result<()> {
 
 #[test]
 fn test_visual_allows_images_blocks_js() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
@@ -161,7 +161,7 @@ fn test_visual_allows_images_blocks_js() -> anyhow::Result<()> {
 
 #[test]
 fn test_interactive_allows_js_and_images() -> anyhow::Result<()> {
-    if !core_runtime::chrome_available() {
+    if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
 
