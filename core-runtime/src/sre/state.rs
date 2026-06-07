@@ -160,6 +160,24 @@ impl SemanticState {
         }
     }
 
+    /// Clone this state with a fresh `page_instance_id` and `timestamp`,
+    /// keeping the same `state_hash`/`root`/`load_profile`. Use this when
+    /// re-serving a cached snapshot (e.g. speculative pre-generation) so
+    /// downstream consumers see a current capture rather than stale
+    /// page-instance metadata from the original observation.
+    pub fn with_refreshed_metadata(&self) -> Self {
+        Self {
+            page_instance_id: uuid::Uuid::new_v4().to_string(),
+            state_hash: self.state_hash.clone(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            load_profile: self.load_profile,
+            root: self.root.clone(),
+        }
+    }
+
     /// Accessor for state_hash (read-only).
     pub fn state_hash(&self) -> &str {
         &self.state_hash

@@ -9,6 +9,7 @@ pub mod policy;
 pub mod privacy;
 pub mod prompt_injection;
 pub mod session_vault;
+pub mod speculative;
 pub mod sre;
 
 // Re-export SRE types used by examples and downstream crates.

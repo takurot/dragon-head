@@ -41,22 +41,22 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 7 | Marketplace | PR-17 | 1/1 | DONE |
 | 8 | Robustness & Verification | PR-18 | 1/1 | DONE |
 | 9 | Comprehensive Evaluation Bench | PR-19 | 1/1 | DONE |
-| 10 | Cathedral Edition (Commercialization) | PR-20〜28 | 5/9 | IN_PROGRESS |
+| 10 | Cathedral Edition (Commercialization) | PR-20〜28 | 8/9 | IN_PROGRESS |
 
 ## 3. PRバックログ（進捗チェック付き）
 
 ### PR-20: Speculative State Generation Pipeline
-- Status: `NOT_STARTED`
+- Status: `DONE`
 - Spec Ref: Section 3.5, ISSUE-10
 - Dependencies: PR-08, PR-14
 - 実装タスク
-  - [ ] `core-runtime/src/speculative/mod.rs` を新設し予測エンジンを実装。
-  - [ ] `flatbuffers` によるモデルのシリアライズ/デシリアライズを実装。
-  - [ ] 予測失敗時の `StateDelta::Mismatch` とリプレイ・デバッグ用のスナップショット保存を実装。
+  - [x] `core-runtime/src/speculative/mod.rs` を新設し予測エンジンを実装。
+  - [x] `flatbuffers` によるモデルのシリアライズ/デシリアライズを実装。
+  - [x] 予測失敗時の `StateDelta::Mismatch` とリプレイ・デバッグ用のスナップショット保存を実装。
 - テストタスク
-  - [ ] 意図的な予測ミス（Drift Injection）によるバックトラッキングの検証。
+  - [x] 意図的な予測ミス（Drift Injection）によるバックトラッキングの検証。
 - Exit Criteria
-  - [ ] 予測的中時に TTFT < 10ms を達成。
+  - [x] 予測的中時に TTFT < 10ms を達成。
 
 ### PR-21: Self-Healing Context Recovery Layer
 - Status: `DONE`
