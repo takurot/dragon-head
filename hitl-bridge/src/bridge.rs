@@ -122,13 +122,23 @@ impl Bridge {
             outcome_projection,
         })?;
 
-        if let Some(token) = self
+        let token = self
             .tokens
             .lock()
             .expect("token map mutex poisoned")
-            .remove(&id)
-        {
+            .get(&id)
+            .cloned();
+        if let Some(token) = token {
+            // Only drop the token once the chat update succeeds — if
+            // `respond` fails (e.g. a transient Slack API error), the token
+            // is the only handle that lets a retry repair the now-stale
+            // prompt for a request whose gateway mutation and audit record
+            // have already been durably committed.
             self.notifier.respond(&token, decision, decided_by)?;
+            self.tokens
+                .lock()
+                .expect("token map mutex poisoned")
+                .remove(&id);
         }
 
         Ok(())
@@ -266,6 +276,47 @@ mod tests {
             bridge_audit_records(&dir).len(),
             1,
             "audit trail must have exactly one record"
+        );
+    }
+
+    #[test]
+    fn resolve_keeps_the_chat_token_when_the_chat_update_fails() {
+        let dir = tempdir().expect("tempdir");
+        let id = Uuid::new_v4();
+        let gateway = Arc::new(MockGateway::new(Some(sample_pending(id))));
+        let notifier = Arc::new(MockNotifier::new_failing_respond());
+        let audit = BridgeAuditTrail::new(dir.path().join("audit.ndjson"));
+        let bridge = Bridge::new(
+            gateway.clone() as Arc<dyn ApprovalGateway>,
+            notifier.clone() as Arc<dyn ChatNotifier>,
+            audit,
+        );
+
+        bridge.poll_once().expect("poll");
+        let result = bridge.resolve(id, Decision::Approved, "alice");
+
+        assert!(
+            result.is_err(),
+            "resolve must surface the chat-update failure"
+        );
+        assert_eq!(
+            gateway.resolutions().len(),
+            1,
+            "the decision must still be applied to the gateway"
+        );
+        assert_eq!(
+            bridge_audit_records(&dir).len(),
+            1,
+            "the decision must still be durably audited"
+        );
+        assert_eq!(
+            bridge
+                .tokens
+                .lock()
+                .expect("token map mutex poisoned")
+                .len(),
+            1,
+            "the chat token must be retained so a retry can repair the stale prompt"
         );
     }
 

@@ -237,11 +237,25 @@ pub mod mock {
     #[derive(Default)]
     pub struct MockNotifier {
         calls: Mutex<Vec<Call>>,
+        /// When `true`, [`respond`](ChatNotifier::respond) returns an error
+        /// without recording the call — simulates a transient chat-API
+        /// failure (e.g. a network error updating the Slack message) so
+        /// tests can assert the bridge preserves recoverable state.
+        fail_respond: std::sync::atomic::AtomicBool,
     }
 
     impl MockNotifier {
         pub fn new() -> Self {
             Self::default()
+        }
+
+        /// Builds a notifier whose `respond` calls always fail — for testing
+        /// how the bridge behaves when the chat-update step errors out.
+        pub fn new_failing_respond() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                fail_respond: std::sync::atomic::AtomicBool::new(true),
+            }
         }
 
         pub fn calls(&self) -> Vec<Call> {
@@ -263,6 +277,9 @@ pub mod mock {
         }
 
         fn respond(&self, token: &str, decision: Decision, decided_by: &str) -> Result<()> {
+            if self.fail_respond.load(std::sync::atomic::Ordering::SeqCst) {
+                anyhow::bail!("mock notifier: simulated chat-update failure");
+            }
             self.calls
                 .lock()
                 .expect("mock notifier mutex poisoned")

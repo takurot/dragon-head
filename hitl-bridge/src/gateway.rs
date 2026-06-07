@@ -58,35 +58,61 @@ struct RequestKey {
     action: String,
 }
 
-/// [`ApprovalGateway`] backed by a live `core_runtime::PageSession`.
+/// Single-slot cache mapping the most recently observed [`RequestKey`] to a
+/// bridge-minted [`Uuid`].
 ///
-/// Mints and remembers a [`Uuid`] for the most recently observed pending
-/// request. Because the underlying session only ever tracks a single pending
-/// request at a time, a single-slot cache (rather than a full map) is
-/// sufficient and avoids unbounded growth.
+/// Because the underlying session only ever tracks a single pending request at
+/// a time, a single slot (rather than a full map) is sufficient and avoids
+/// unbounded growth. The slot is cleared whenever no request is pending — see
+/// [`clear`](Self::clear) — so that a *later* approval cycle on the same
+/// control (same `rule_id`/`target_signature`/`action`) mints a fresh ID
+/// rather than reusing one the lock registry has already recorded as resolved.
+#[derive(Default)]
+struct MintedIdCache {
+    slot: Option<(RequestKey, Uuid)>,
+}
+
+impl MintedIdCache {
+    fn id_for(&mut self, key: &RequestKey) -> Uuid {
+        if let Some((existing_key, id)) = &self.slot {
+            if existing_key == key {
+                return *id;
+            }
+        }
+        let id = Uuid::new_v4();
+        self.slot = Some((key.clone(), id));
+        id
+    }
+
+    /// Drops the cached ID. Call when no request is pending, so a future
+    /// request with the same key — a fresh approval cycle on the same
+    /// control — mints a new UUID instead of reusing one the lock registry
+    /// already considers resolved (which would make the bridge treat a brand
+    /// new request as a stale, already-decided interaction).
+    fn clear(&mut self) {
+        self.slot = None;
+    }
+}
+
+/// [`ApprovalGateway`] backed by a live `core_runtime::PageSession`.
 pub struct PageSessionGateway {
     session: Arc<PageSession>,
-    minted: std::sync::Mutex<Option<(RequestKey, Uuid)>>,
+    minted: std::sync::Mutex<MintedIdCache>,
 }
 
 impl PageSessionGateway {
     pub fn new(session: Arc<PageSession>) -> Self {
         Self {
             session,
-            minted: std::sync::Mutex::new(None),
+            minted: std::sync::Mutex::new(MintedIdCache::default()),
         }
     }
 
     fn id_for(&self, key: &RequestKey) -> Uuid {
-        let mut minted = self.minted.lock().expect("minted-id mutex poisoned");
-        if let Some((existing_key, id)) = minted.as_ref() {
-            if existing_key == key {
-                return *id;
-            }
-        }
-        let id = Uuid::new_v4();
-        *minted = Some((key.clone(), id));
-        id
+        self.minted
+            .lock()
+            .expect("minted-id mutex poisoned")
+            .id_for(key)
     }
 
     /// Returns the bridge-minted ID for the current pending request, if `id`
@@ -105,7 +131,13 @@ impl PageSessionGateway {
 
 impl ApprovalGateway for PageSessionGateway {
     fn pending_request(&self) -> Option<PendingApproval> {
-        let pending = self.session.pending_policy_approval()?;
+        let Some(pending) = self.session.pending_policy_approval() else {
+            self.minted
+                .lock()
+                .expect("minted-id mutex poisoned")
+                .clear();
+            return None;
+        };
         let key = RequestKey {
             rule_id: pending.rule_id.clone(),
             target_signature: pending.target_signature.clone(),
@@ -229,6 +261,57 @@ mod tests {
                 risk_level: core_runtime::RiskLevel::High,
             }),
         }
+    }
+
+    fn sample_key() -> RequestKey {
+        RequestKey {
+            rule_id: "approve-pay".to_string(),
+            target_signature: "sig-123".to_string(),
+            action: "click".to_string(),
+        }
+    }
+
+    #[test]
+    fn minted_id_cache_returns_the_same_id_for_repeated_lookups_of_the_same_key() {
+        let mut cache = MintedIdCache::default();
+        let key = sample_key();
+
+        let first = cache.id_for(&key);
+        let second = cache.id_for(&key);
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn minted_id_cache_mints_a_distinct_id_for_a_different_key() {
+        let mut cache = MintedIdCache::default();
+        let other_key = RequestKey {
+            rule_id: "approve-pay".to_string(),
+            target_signature: "sig-456".to_string(),
+            action: "click".to_string(),
+        };
+
+        let first = cache.id_for(&sample_key());
+        let second = cache.id_for(&other_key);
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn minted_id_cache_mints_a_fresh_id_after_clear_for_a_new_approval_cycle_on_the_same_control() {
+        let mut cache = MintedIdCache::default();
+        let key = sample_key();
+
+        let first_cycle = cache.id_for(&key);
+        cache.clear();
+        let second_cycle = cache.id_for(&key);
+
+        assert_ne!(
+            first_cycle, second_cycle,
+            "a later approval cycle on the same (rule_id, target_signature, action) \
+             must mint a new ID — reusing the old one would make the lock registry \
+             treat the fresh request as already resolved"
+        );
     }
 
     #[test]
