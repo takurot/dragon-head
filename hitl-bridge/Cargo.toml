@@ -1,0 +1,33 @@
+[package]
+name = "hitl-bridge"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+core-runtime = { path = "../core-runtime" }
+clap = { version = "4", features = ["derive", "env"] }
+axum = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+serde_urlencoded = "0.7"
+base64 = "0.22"
+
+[[bin]]
+name = "dragon-head-hitl-bridge"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3.10"
+test-bench-support = { path = "../test-bench-support" }
+urlencoding = "2.1"

@@ -127,6 +127,77 @@ fn test_action_only_approval_scope_expires_after_single_use() -> anyhow::Result<
 }
 
 #[test]
+fn test_reject_pending_policy_action_keeps_action_blocked() -> anyhow::Result<()> {
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+    page.set_policy_rules(vec![PolicyRule {
+        id: "approve-pay".to_string(),
+        domain: None,
+        path_prefix: None,
+        role: Some("button".to_string()),
+        text_regex: Some("(?i)pay".to_string()),
+        context_regex: None,
+        action: PolicyAction::RequireHumanApproval,
+        scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
+    }])?;
+
+    let html = r#"
+        <html>
+            <body>
+                <button id="pay" onclick="document.body.dataset.payCount = String((Number(document.body.dataset.payCount||0)+1))">Pay</button>
+            </body>
+        </html>
+    "#;
+    let url = format!("data:text/html,{}", urlencoding::encode(html));
+    page.navigate(&url)?;
+
+    let (target_id, target_key) = find_button_info(&page)?;
+
+    let first_attempt = page.act(Some(target_id), Some(&target_key), "click", None);
+    assert!(first_attempt.is_err(), "approval should be required first");
+    assert!(page.pending_policy_approval().is_some());
+
+    page.reject_pending_policy_action()?;
+    assert!(
+        page.pending_policy_approval().is_none(),
+        "rejection must clear the pending request"
+    );
+
+    let approve_after_reject = page.approve_pending_policy_action();
+    assert!(
+        approve_after_reject.is_err(),
+        "a rejected request must not be approvable afterwards"
+    );
+
+    let retry = page.act(Some(target_id), Some(&target_key), "click", None);
+    assert!(retry.is_err(), "rejected action must remain blocked");
+    let retry_err = retry.unwrap_err();
+    let retry_action_err = retry_err
+        .downcast_ref::<ActionError>()
+        .expect("error should be ActionError");
+    assert!(matches!(
+        retry_action_err,
+        ActionError::HumanApprovalRequired { .. }
+    ));
+
+    let pay_count = page
+        .evaluate_script("document.body.dataset.payCount")?
+        .value
+        .and_then(|v| v.as_str().map(ToOwned::to_owned));
+    assert!(
+        pay_count.is_none(),
+        "rejected action must not mutate page state"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_action_only_approval_scope_expires_on_navigation() -> anyhow::Result<()> {
     if test_bench_support::should_skip_browser_tests() {
         return Ok(());

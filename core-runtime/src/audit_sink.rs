@@ -450,7 +450,7 @@ mod tests {
             .collect();
         assert_eq!(files.len(), 1, "no rotation expected when max_bytes=0");
 
-        let content = fs::read_to_string(&files[0].path()).unwrap();
+        let content = fs::read_to_string(files[0].path()).unwrap();
         let lines: Vec<_> = content.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("TOOL_CALL"));

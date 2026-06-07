@@ -16,7 +16,9 @@ use crate::{
     dom_signature::DOMSignatureCache,
     error::{ActionError, VerifyError, WaitError},
     plugin_hooks::{run_policy_hooks, run_state_hooks, PluginHookConfig, PolicyHookOutcome},
-    policy::{ApprovalScope, PolicyAction, PolicyContext, PolicyEngine, PolicyRule},
+    policy::{
+        ApprovalScope, OutcomeProjection, PolicyAction, PolicyContext, PolicyEngine, PolicyRule,
+    },
     session_vault::{CookieData, LocalSessionVault, SessionData, SessionVault, SoftwareKms},
     sre::{
         normalize_dom_with_viewport, normalize_dom_with_viewport_and_refinement, LoadProfile,
@@ -105,15 +107,21 @@ struct StableKeyIndexEntry {
     alias: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// PartialEq only (not Eq): `outcome` carries `OutcomeProjection`, which holds an
+// f64 and therefore cannot implement Eq.
+#[derive(Debug, Clone, PartialEq)]
 pub struct PolicyApprovalRequest {
     pub rule_id: String,
     pub scope: ApprovalScope,
     pub action: String,
     pub target_signature: String,
+    /// Guardian Angel: structured outcome projection captured when the request
+    /// was raised. Surfaced to HITL bridges (e.g. Slack/Teams) alongside the
+    /// approval prompt so reviewers see the projected impact.
+    pub outcome: Option<OutcomeProjection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct GrantedPolicyApproval {
     request: PolicyApprovalRequest,
     granted_navigation_epoch: u64,
@@ -840,6 +848,35 @@ impl PageSession {
         Ok(())
     }
 
+    /// Reject the latest pending policy request.
+    ///
+    /// Unlike [`approve_pending_policy_action`], the request is discarded rather
+    /// than recorded as granted — the originating action remains blocked. Used by
+    /// HITL bridges (e.g. Slack/Teams reference implementations) to relay a human's
+    /// "Reject" decision back into the session.
+    ///
+    /// [`approve_pending_policy_action`]: Self::approve_pending_policy_action
+    pub fn reject_pending_policy_action(&self) -> Result<()> {
+        let mut guard = self
+            .policy_approvals
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
+
+        if guard.pending.take().is_none() {
+            anyhow::bail!("No pending policy approval request");
+        }
+        drop(guard);
+
+        self.audit_logger.log(AuditEvent::HitlEvent {
+            event_type: "rejected".to_string(),
+            reason: None,
+            user_id: None,
+            timestamp: epoch_millis_u64(),
+        });
+
+        Ok(())
+    }
+
     /// Verify element text against an expected value.
     /// On mismatch, triggers a SoM capture to help disambiguate recovery.
     pub fn verify_text(&self, target_id: i64, expected_text: &str) -> Result<()> {
@@ -1216,6 +1253,7 @@ impl PageSession {
                     scope,
                     action: action.to_string(),
                     target_signature,
+                    outcome: decision.outcome.clone(),
                 })?;
 
                 self.audit_logger.log(AuditEvent::HitlEvent {
