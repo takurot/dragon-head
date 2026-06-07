@@ -77,10 +77,19 @@ fn pre_generate_serves_cached_state_near_instantly_on_prediction_hit() -> anyhow
     let served = engine.pre_generate(search_page.state_hash(), Some(&nav));
     let prediction_hit_ttft = started.elapsed();
 
+    let served = served.expect(
+        "expected the engine to serve the cached results-page snapshot on a prediction hit",
+    );
     assert_eq!(
-        served.as_deref(),
-        Some(&results_page),
-        "expected the engine to serve the cached results-page snapshot on a prediction hit"
+        served.state_hash(),
+        results_page.state_hash(),
+        "served snapshot must carry the predicted page's content/state_hash"
+    );
+    assert_eq!(served.root(), results_page.root());
+    assert_ne!(
+        served.page_instance_id(),
+        results_page.page_instance_id(),
+        "served snapshot must carry fresh page-instance metadata, not the original capture's"
     );
     assert!(
         prediction_hit_ttft <= PREDICTION_HIT_TTFT_BUDGET,

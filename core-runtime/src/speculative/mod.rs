@@ -28,6 +28,11 @@ use std::{
 /// replay/debug data cannot grow unbounded over a long session.
 const MISMATCH_LOG_CAPACITY: usize = 32;
 
+/// Bound on `snapshot_cache` size — oldest-observed snapshots are evicted at
+/// capacity so a long browsing session with many distinct page hashes cannot
+/// keep every DOM snapshot alive indefinitely.
+const SNAPSHOT_CACHE_CAPACITY: usize = 64;
+
 /// A speculative guess at the AI's next action and the state it will produce.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpeculativePrediction {
@@ -70,7 +75,10 @@ struct Inner {
     domain_hints: Vec<DomainHint>,
     /// Observed states keyed by `state_hash`, used to serve `pre_generate`
     /// cache hits without regenerating anything (the near-zero-TTFT path).
+    /// Bounded by `SNAPSHOT_CACHE_CAPACITY`; `snapshot_order` tracks
+    /// insertion order so the oldest entry can be evicted at capacity.
     snapshot_cache: HashMap<String, Arc<SemanticState>>,
+    snapshot_order: VecDeque<String>,
     mismatch_log: VecDeque<MismatchSnapshot>,
     last_action: Option<ActionSignature>,
 }
@@ -93,6 +101,7 @@ impl SpeculativeEngine {
                 model: TransitionModel::new(),
                 domain_hints,
                 snapshot_cache: HashMap::new(),
+                snapshot_order: VecDeque::with_capacity(SNAPSHOT_CACHE_CAPACITY),
                 mismatch_log: VecDeque::with_capacity(MISMATCH_LOG_CAPACITY),
                 last_action: None,
             }),
@@ -106,12 +115,22 @@ impl SpeculativeEngine {
     }
 
     /// Cache an observed state by its hash, making it servable via
-    /// [`Self::pre_generate`] on a future cache hit.
+    /// [`Self::pre_generate`] on a future cache hit. Bounded by
+    /// `SNAPSHOT_CACHE_CAPACITY`: the oldest-observed snapshot is evicted
+    /// once the cache is full, so a long session cannot grow it unbounded.
     pub fn observe_state(&self, state: Arc<SemanticState>) {
         let mut inner = self.lock();
-        inner
-            .snapshot_cache
-            .insert(state.state_hash().to_string(), state);
+        let hash = state.state_hash().to_string();
+        let is_new = !inner.snapshot_cache.contains_key(&hash);
+        inner.snapshot_cache.insert(hash.clone(), state);
+        if is_new {
+            inner.snapshot_order.push_back(hash);
+            if inner.snapshot_order.len() > SNAPSHOT_CACHE_CAPACITY {
+                if let Some(oldest) = inner.snapshot_order.pop_front() {
+                    inner.snapshot_cache.remove(&oldest);
+                }
+            }
+        }
     }
 
     /// Record an observed `from_state_hash --action--> to_state_hash`
@@ -156,6 +175,10 @@ impl SpeculativeEngine {
     /// The near-zero-TTFT path: predict, then look up the predicted state
     /// hash in the snapshot cache. Returns `Some` only on a concrete cache
     /// hit — callers fall through to the normal pipeline on `None`.
+    ///
+    /// The cached snapshot is returned with refreshed `page_instance_id` and
+    /// `timestamp` (same `state_hash`/content) so repeat hits don't leak the
+    /// stale metadata of the original observation into serialized output.
     pub fn pre_generate(
         &self,
         current_state_hash: &str,
@@ -168,7 +191,8 @@ impl SpeculativeEngine {
         let (predicted_state_hash, _confidence) = inner
             .model
             .predict_state(current_state_hash, &predicted_action)?;
-        inner.snapshot_cache.get(&predicted_state_hash).cloned()
+        let cached = inner.snapshot_cache.get(&predicted_state_hash)?;
+        Some(Arc::new(cached.with_refreshed_metadata()))
     }
 
     /// Compare a prediction against the actual resulting state. A hash
@@ -307,8 +331,65 @@ mod tests {
         engine.record_transition("hash_a", &type_input, &next_hash);
         engine.observe_state(next_state.clone());
 
-        let served = engine.pre_generate("hash_a", Some(&click));
-        assert_eq!(served, Some(next_state));
+        let served = engine.pre_generate("hash_a", Some(&click)).unwrap();
+        assert_eq!(served.state_hash(), next_state.state_hash());
+        assert_eq!(served.root(), next_state.root());
+        assert_ne!(
+            served.page_instance_id(),
+            next_state.page_instance_id(),
+            "served snapshot must carry fresh page-instance metadata, not the stale capture's"
+        );
+    }
+
+    #[test]
+    fn pre_generate_refreshes_metadata_on_repeat_hits() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        let next_state = Arc::new(state_with_label("results page"));
+        let next_hash = next_state.state_hash().to_string();
+
+        engine.record_transition("hash_a", &click, &next_hash);
+        engine.record_transition("hash_a", &type_input, &next_hash);
+        engine.record_transition("hash_a", &type_input, &next_hash);
+        engine.observe_state(next_state.clone());
+
+        let first = engine.pre_generate("hash_a", Some(&click)).unwrap();
+        let second = engine.pre_generate("hash_a", Some(&click)).unwrap();
+
+        assert_eq!(first.state_hash(), second.state_hash());
+        assert_ne!(
+            first.page_instance_id(),
+            second.page_instance_id(),
+            "each pre_generate hit must mint fresh page-instance metadata"
+        );
+    }
+
+    #[test]
+    fn observe_state_evicts_oldest_snapshot_beyond_capacity() {
+        let engine = SpeculativeEngine::new(vec![]);
+
+        let states: Vec<Arc<SemanticState>> = (0..SNAPSHOT_CACHE_CAPACITY + 1)
+            .map(|i| Arc::new(state_with_label(&format!("page {i}"))))
+            .collect();
+        let first_hash = states[0].state_hash().to_string();
+        let last_hash = states[states.len() - 1].state_hash().to_string();
+
+        for state in &states {
+            engine.observe_state(state.clone());
+        }
+
+        let inner = engine.lock();
+        assert_eq!(inner.snapshot_cache.len(), SNAPSHOT_CACHE_CAPACITY);
+        assert!(
+            !inner.snapshot_cache.contains_key(&first_hash),
+            "the oldest-observed snapshot should have been evicted"
+        );
+        assert!(
+            inner.snapshot_cache.contains_key(&last_hash),
+            "the most recently observed snapshot must remain cached"
+        );
     }
 
     #[test]
