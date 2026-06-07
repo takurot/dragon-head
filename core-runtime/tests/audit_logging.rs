@@ -317,7 +317,7 @@ fn replay_fixture_produces_report_with_all_event_types() -> anyhow::Result<()> {
     let events: Vec<AuditEvent> = content
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l))
+        .map(serde_json::from_str)
         .collect::<Result<_, _>>()
         .context("failed to parse fixture NDJSON")?;
 

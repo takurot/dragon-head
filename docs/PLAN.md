@@ -108,16 +108,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 長期保存可能な監査トレースが外部システムと連携される。
 
 ### PR-25: Slack/Teams HITL Reference Implementation
-- Status: `NOT_STARTED`
+- Status: `DONE`
 - Spec Ref: Section 5.2, ISSUE-15
 - Dependencies: PR-14, PR-23
 - 実装タスク
-  - [ ] Slack App 連携リファレンス実装（画像 + 未来投影データ付き）。
-  - [ ] セッションレベルの二重承認防止ロック。
+  - [x] Slack App 連携リファレンス実装（画像 + 未来投影データ付き）。
+  - [x] セッションレベルの二重承認防止ロック。
 - テストタスク
-  - [ ] 複数人による同時承認リクエストの競合回避検証。
+  - [x] 複数人による同時承認リクエストの競合回避検証。
 - Exit Criteria
-  - [ ] チャットツール経由で安全に HITL 判断を完走できる。
+  - [x] チャットツール経由で安全に HITL 判断を完走できる。
 
 ### PR-26: Shared Wasm Engine & Performance Tuning
 - Status: `DONE`
