@@ -12,6 +12,7 @@ use core_runtime::{
         PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig,
         REDACTION_PLACEHOLDER, SECURITY_FLAG,
     },
+    speculative::{ActionSignature, SpeculativeEngine, SpeculativePrediction, StateDelta},
     sre::{normalize_dom, LoadProfile, SemanticState},
     ActionError, BrowserClient, KmsAdapter, LocalSessionVault, PageSession, PolicyAction,
     PolicyRule, SoftwareKms,
@@ -64,6 +65,11 @@ fn test_core_runtime_comprehensive_evaluation_suite() -> anyhow::Result<()> {
         "prompt_injection",
         scenario_injection_pii_composition,
     );
+    bench.run_scenario(
+        "speculative_pregeneration",
+        "speculative",
+        scenario_speculative_pregeneration,
+    );
 
     bench.write_if_configured()?;
     bench.assert_required_scenarios(&[
@@ -76,6 +82,7 @@ fn test_core_runtime_comprehensive_evaluation_suite() -> anyhow::Result<()> {
         "injection_report_only",
         "injection_redact",
         "injection_pii_composition",
+        "speculative_pregeneration",
     ])?;
     bench.assert_all_passed()?;
 
@@ -695,5 +702,108 @@ fn scenario_injection_pii_composition() -> anyhow::Result<Value> {
         "mode": "report_only_plus_pii",
         "label": label,
         "security_flags": button.security_flags,
+    }))
+}
+
+fn scenario_speculative_pregeneration() -> anyhow::Result<Value> {
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+
+    let home_html = r#"
+        <html>
+            <body>
+                <h1>Home</h1>
+                <button id="open_search">Go to search</button>
+            </body>
+        </html>
+    "#;
+    let landing_html = r#"
+        <html>
+            <body>
+                <h1>Search</h1>
+                <button id="search">Search</button>
+            </body>
+        </html>
+    "#;
+    let results_html = r#"
+        <html>
+            <body>
+                <h1>Results</h1>
+                <div role="list">3 results</div>
+            </body>
+        </html>
+    "#;
+
+    page.navigate(&format!(
+        "data:text/html,{}",
+        urlencoding::encode(home_html)
+    ))?;
+    let home_state = page.capture_semantic_state(LoadProfile::Interactive)?;
+
+    page.navigate(&format!(
+        "data:text/html,{}",
+        urlencoding::encode(landing_html)
+    ))?;
+    let landing_state = page.capture_semantic_state(LoadProfile::Interactive)?;
+
+    page.navigate(&format!(
+        "data:text/html,{}",
+        urlencoding::encode(results_html)
+    ))?;
+    let results_state = page.capture_semantic_state(LoadProfile::Interactive)?;
+
+    let nav = ActionSignature::from("nav:open_search");
+    let click = ActionSignature::from("click:search_button");
+    let engine = SpeculativeEngine::new(vec![]);
+
+    // Teach the engine the observed home -> nav -> landing -> click -> results
+    // walk: this populates both `action_sequences[nav] = {click: ...}` (so
+    // `predict_action` resolves `click` from `nav`) and
+    // `state_transitions[(landing, click)] = {results: ...}` (so
+    // `predict_state` resolves the results-page hash). Cache the resulting
+    // state for near-zero-TTFT serving.
+    engine.record_transition(home_state.state_hash(), &nav, landing_state.state_hash());
+    engine.record_transition(
+        landing_state.state_hash(),
+        &click,
+        results_state.state_hash(),
+    );
+    engine.observe_state(Arc::new(results_state.clone()));
+
+    // Caller is back on `landing_state`, having just taken `nav` to get there;
+    // the engine should predict `click` comes next, that it leads to
+    // `results_state`, and serve the cached snapshot directly.
+    let served = engine
+        .pre_generate(landing_state.state_hash(), Some(&nav))
+        .context("expected a cache hit when pre-generating the results page")?;
+    assert_eq!(
+        served.state_hash(),
+        results_state.state_hash(),
+        "pre_generate should serve the cached results-page snapshot"
+    );
+
+    // Drift Injection: a hand-built prediction that guesses a state hash the
+    // engine has never observed must surface as StateDelta::Mismatch with a
+    // replay snapshot appended to the bounded mismatch log (the backtracking
+    // mechanism ISSUE-10 calls for).
+    let wrong_prediction = SpeculativePrediction {
+        predicted_action: click.clone(),
+        predicted_state_hash: Some("never_observed_hash".to_string()),
+        confidence: 0.5,
+    };
+    let delta = engine.verify(&wrong_prediction, &landing_state);
+    assert!(
+        matches!(delta, StateDelta::Mismatch { .. }),
+        "drift injection should surface as StateDelta::Mismatch, got {delta:?}"
+    );
+    assert_eq!(
+        engine.mismatch_log().len(),
+        1,
+        "the drift-injected mismatch should be appended to the replay/debug log"
+    );
+
+    Ok(json!({
+        "cache_hit": served.state_hash() == results_state.state_hash(),
+        "mismatch_log_len": engine.mismatch_log().len(),
     }))
 }
