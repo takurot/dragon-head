@@ -2,33 +2,41 @@ use core_runtime::BrowserClient;
 use mcp_server::{doctor, CoreRuntimeBackend, McpServer};
 use std::io::{self, BufRead, Write};
 
+mod cli;
 mod init;
 
 fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = std::env::args().skip(1).collect();
 
-    if args.iter().any(|a| a == "--init") {
-        let client = args.windows(2).find(|w| w[0] == "--init").and_then(|w| {
-            let s = w[1].as_str();
-            if s.starts_with('-') {
-                None
-            } else {
-                Some(s)
+    match cli::parse_args(&args) {
+        cli::CliAction::Help => {
+            println!("{}", cli::USAGE);
+            return Ok(());
+        }
+        cli::CliAction::Version => {
+            println!("dragon-head-mcp {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        cli::CliAction::Init(client) => {
+            if !init::print_init(client.as_deref()) {
+                std::process::exit(1);
             }
-        });
-        if !init::print_init(client) {
-            std::process::exit(1);
+            return Ok(());
         }
-        return Ok(());
-    }
-
-    if args.iter().any(|a| a == "--doctor") {
-        let report = doctor::run_doctor();
-        doctor::print_report(&report);
-        if !report.all_passed() {
-            std::process::exit(1);
+        cli::CliAction::Doctor => {
+            let report = doctor::run_doctor();
+            doctor::print_report(&report);
+            if !report.all_passed() {
+                std::process::exit(1);
+            }
+            return Ok(());
         }
-        return Ok(());
+        cli::CliAction::UnknownFlag(flag) => {
+            eprintln!("dragon-head-mcp: unrecognized flag '{flag}'\n");
+            eprintln!("{}", cli::USAGE);
+            std::process::exit(2);
+        }
+        cli::CliAction::RunServer => {}
     }
 
     let chrome_path = std::env::var("CHROME_PATH").ok();
