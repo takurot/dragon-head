@@ -38,6 +38,16 @@ const RECOGNIZED_FLAGS: &[&str] = &["--help", "--version", "--doctor", "--init"]
 
 /// Parses CLI arguments (excluding the program name) into a [`CliAction`].
 pub fn parse_args(args: &[String]) -> CliAction {
+    // --help/--version win even if an unrecognized flag is also present,
+    // so a typo doesn't block a user trying to get usage or version info.
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        return CliAction::Help;
+    }
+
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        return CliAction::Version;
+    }
+
     let init_pos = args.iter().position(|a| a == "--init");
     // Index of the argument consumed as --init's client name, if any.
     let init_client_idx = init_pos.and_then(|pos| {
@@ -57,14 +67,6 @@ pub fn parse_args(args: &[String]) -> CliAction {
         }
     }) {
         return CliAction::UnknownFlag(flag.clone());
-    }
-
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        return CliAction::Help;
-    }
-
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        return CliAction::Version;
     }
 
     if args.iter().any(|a| a == "--doctor") {
@@ -139,6 +141,19 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["--init", "codex", "--bogus"])),
             CliAction::UnknownFlag("--bogus".to_string())
+        );
+    }
+
+    #[test]
+    fn help_wins_over_an_unrelated_unknown_flag() {
+        assert_eq!(parse_args(&args(&["--help", "--bogus"])), CliAction::Help);
+    }
+
+    #[test]
+    fn version_wins_over_an_unrelated_unknown_flag() {
+        assert_eq!(
+            parse_args(&args(&["--version", "--bogus"])),
+            CliAction::Version
         );
     }
 
