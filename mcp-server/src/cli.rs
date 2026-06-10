@@ -33,8 +33,32 @@ pub enum CliAction {
     UnknownFlag(String),
 }
 
+/// `--`-prefixed flags recognized by [`parse_args`].
+const RECOGNIZED_FLAGS: &[&str] = &["--help", "--version", "--doctor", "--init"];
+
 /// Parses CLI arguments (excluding the program name) into a [`CliAction`].
 pub fn parse_args(args: &[String]) -> CliAction {
+    let init_pos = args.iter().position(|a| a == "--init");
+    // Index of the argument consumed as --init's client name, if any.
+    let init_client_idx = init_pos.and_then(|pos| {
+        args.get(pos + 1)
+            .filter(|s| !s.starts_with('-'))
+            .map(|_| pos + 1)
+    });
+
+    if let Some(flag) = args.iter().enumerate().find_map(|(i, a)| {
+        if Some(i) == init_client_idx {
+            return None;
+        }
+        if a.starts_with("--") && !RECOGNIZED_FLAGS.contains(&a.as_str()) {
+            Some(a)
+        } else {
+            None
+        }
+    }) {
+        return CliAction::UnknownFlag(flag.clone());
+    }
+
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return CliAction::Help;
     }
@@ -47,13 +71,9 @@ pub fn parse_args(args: &[String]) -> CliAction {
         return CliAction::Doctor;
     }
 
-    if let Some(pos) = args.iter().position(|a| a == "--init") {
-        let client = args.get(pos + 1).filter(|s| !s.starts_with('-')).cloned();
+    if init_pos.is_some() {
+        let client = init_client_idx.map(|idx| args[idx].clone());
         return CliAction::Init(client);
-    }
-
-    if let Some(flag) = args.iter().find(|a| a.starts_with("--")) {
-        return CliAction::UnknownFlag(flag.clone());
     }
 
     CliAction::RunServer
@@ -102,7 +122,23 @@ mod tests {
     fn init_does_not_consume_following_flag_as_client() {
         assert_eq!(
             parse_args(&args(&["--init", "--bogus"])),
-            CliAction::Init(None)
+            CliAction::UnknownFlag("--bogus".to_string())
+        );
+    }
+
+    #[test]
+    fn unknown_flag_after_recognized_action_is_rejected() {
+        assert_eq!(
+            parse_args(&args(&["--doctor", "--bogus"])),
+            CliAction::UnknownFlag("--bogus".to_string())
+        );
+    }
+
+    #[test]
+    fn unknown_flag_after_init_with_client_is_rejected() {
+        assert_eq!(
+            parse_args(&args(&["--init", "codex", "--bogus"])),
+            CliAction::UnknownFlag("--bogus".to_string())
         );
     }
 
