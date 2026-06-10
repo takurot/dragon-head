@@ -390,7 +390,7 @@ impl<B: McpBackend> McpServer<B> {
                 },
                 "serverInfo": {
                     "name": "dragon-head-mcp",
-                    "version": "0.1.0"
+                    "version": env!("CARGO_PKG_VERSION")
                 }
             })),
             "notifications/initialized" => {
