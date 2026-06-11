@@ -383,16 +383,41 @@ impl<B: McpBackend> McpServer<B> {
         let is_notification = req.id == Value::Null;
 
         let result: Result<Value, (i64, String)> = match req.method.as_str() {
-            "initialize" => Ok(json!({
-                "protocolVersion": "2025-11-25",
-                "capabilities": {
-                    "tools": {}
-                },
-                "serverInfo": {
-                    "name": "dragon-head-mcp",
-                    "version": env!("CARGO_PKG_VERSION")
+            "initialize" => {
+                let requested_version = req.params.get("protocolVersion").and_then(Value::as_str);
+                let negotiated_version = negotiate_protocol_version(requested_version);
+
+                if let Some(client_info) = req.params.get("clientInfo") {
+                    let name = client_info
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(sanitize_log_field)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let version = client_info
+                        .get("version")
+                        .and_then(Value::as_str)
+                        .map(sanitize_log_field)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    eprintln!(
+                        "[mcp-server] client connected: name={name} version={version} \
+                         requested_protocol={}",
+                        requested_version
+                            .map(sanitize_log_field)
+                            .unwrap_or_else(|| "none".to_string())
+                    );
                 }
-            })),
+
+                Ok(json!({
+                    "protocolVersion": negotiated_version,
+                    "capabilities": {
+                        "tools": {}
+                    },
+                    "serverInfo": {
+                        "name": "dragon-head-mcp",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                }))
+            }
             "notifications/initialized" => {
                 return None;
             }
@@ -567,6 +592,39 @@ impl<B: McpBackend> McpServer<B> {
             _ => {}
         }
     }
+}
+
+/// Latest MCP protocol revision implemented by this server.
+const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
+
+/// All protocol revisions this server can serve. The `tools`-only capability
+/// surface implemented here (initialize/tools/list/tools/call) is stable
+/// across these revisions.
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18"];
+
+/// Echo the client's requested protocol version when supported, otherwise
+/// fall back to the server's latest. Per the MCP lifecycle spec, a client
+/// requesting an unsupported version is expected to disconnect.
+fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
+    requested
+        .and_then(|version| {
+            SUPPORTED_PROTOCOL_VERSIONS
+                .iter()
+                .find(|&&supported| supported == version)
+        })
+        .copied()
+        .unwrap_or(LATEST_PROTOCOL_VERSION)
+}
+
+/// Strip control characters and bound length before writing client-supplied
+/// strings (e.g. `clientInfo`) to logs.
+fn sanitize_log_field(value: &str) -> String {
+    const MAX_LEN: usize = 200;
+    value
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_LEN)
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1910,6 +1968,81 @@ mod tests {
                 .clone()
                 .unwrap_or(json!({"rule": "test", "result": null})))
         }
+    }
+
+    // --- initialize protocol version negotiation ---
+
+    #[test]
+    fn negotiate_protocol_version_echoes_supported_non_latest_version() {
+        assert_eq!(negotiate_protocol_version(Some("2025-06-18")), "2025-06-18");
+    }
+
+    #[test]
+    fn negotiate_protocol_version_falls_back_to_latest_for_unknown_version() {
+        assert_eq!(
+            negotiate_protocol_version(Some("1999-01-01")),
+            LATEST_PROTOCOL_VERSION
+        );
+    }
+
+    #[test]
+    fn negotiate_protocol_version_falls_back_to_latest_when_missing() {
+        assert_eq!(negotiate_protocol_version(None), LATEST_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn initialize_echoes_supported_non_latest_protocol_version() {
+        let mut server = McpServer::new(MockBackend {
+            extract_result: None,
+        });
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test-client", "version": "1.0.0" }
+            }
+        });
+        let resp_str = server.handle_jsonrpc(&req.to_string()).unwrap();
+        let resp: Value = serde_json::from_str(&resp_str).unwrap();
+        assert_eq!(resp["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(
+            resp["result"]["serverInfo"]["version"],
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+
+    #[test]
+    fn initialize_falls_back_to_latest_for_unsupported_protocol_version() {
+        let mut server = McpServer::new(MockBackend {
+            extract_result: None,
+        });
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "1999-01-01",
+                "capabilities": {},
+                "clientInfo": { "name": "old-client", "version": "0.1.0" }
+            }
+        });
+        let resp_str = server.handle_jsonrpc(&req.to_string()).unwrap();
+        let resp: Value = serde_json::from_str(&resp_str).unwrap();
+        assert_eq!(resp["result"]["protocolVersion"], LATEST_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn initialize_without_params_falls_back_to_latest_protocol_version() {
+        let mut server = McpServer::new(MockBackend {
+            extract_result: None,
+        });
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
+        let resp_str = server.handle_jsonrpc(req).unwrap();
+        let resp: Value = serde_json::from_str(&resp_str).unwrap();
+        assert_eq!(resp["result"]["protocolVersion"], LATEST_PROTOCOL_VERSION);
     }
 
     #[test]
