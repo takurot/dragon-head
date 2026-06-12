@@ -78,6 +78,16 @@ dragon-head-mcp doctor
 All checks passed.
 ```
 
+If a `config.toml` is present and valid, the "Config file" line instead shows a
+summary of the resolved settings, e.g.:
+
+```text
+ℹ Config file: /Users/you/.config/dragon-head/config.toml (chrome_path=<unset>, prompt_injection.mode=ReportOnly, policy.file=<unset>)
+```
+
+A malformed file or an invalid `prompt_injection.mode` makes this check fail
+(`✗`), and `--doctor` exits non-zero.
+
 If Chrome is not found, install it or set `CHROME_PATH`:
 
 ```bash
@@ -98,6 +108,52 @@ dragon-head-mcp --init claude-code
 dragon-head-mcp --init codex
 dragon-head-mcp --init generic
 ```
+
+## Configuration (`config.toml`)
+
+`dragon-head-mcp` optionally reads `$XDG_CONFIG_HOME/dragon-head/config.toml`
+(falling back to `$HOME/.config/dragon-head/config.toml`). All settings are
+optional — omit the file entirely to use defaults. Where an equivalent
+environment variable exists, the environment variable always wins.
+
+```toml
+# Path to the Chrome/Chromium binary. Overridden by CHROME_PATH.
+chrome_path = "/usr/bin/chromium"
+
+[prompt_injection]
+# "off" | "report_only" (default) | "redact". Overridden by PROMPT_INJECTION_MODE.
+mode = "report_only"
+
+[policy]
+# Path to a PolicyRule JSON file (see examples/policies/). Overridden by POLICY_FILE.
+file = "/etc/dragon-head/policy.json"
+
+[audit]
+# Mirrors AUDIT_LOG_DIR / AUDIT_LOG_MAX_BYTES / AUDIT_DURABILITY.
+log_dir = "/var/log/dragon-head"
+max_bytes = 10485760
+durability = "flush"  # "flush" (default) or "sync"
+```
+
+### Precedence
+
+| Setting | Env var (wins) | config.toml key |
+| --- | --- | --- |
+| Chrome path | `CHROME_PATH` | `chrome_path` |
+| Prompt-injection mode | `PROMPT_INJECTION_MODE` | `prompt_injection.mode` |
+| Policy file | `POLICY_FILE` | `policy.file` |
+| Audit log directory | `AUDIT_LOG_DIR` | `audit.log_dir` |
+| Audit max bytes | `AUDIT_LOG_MAX_BYTES` | `audit.max_bytes` |
+| Audit durability | `AUDIT_DURABILITY` | `audit.durability` |
+
+Run `dragon-head-mcp --doctor` to validate the config file. A malformed file, or
+an invalid `prompt_injection.mode` value, makes the "Config file" check fail.
+
+Setting `prompt_injection.mode` to `redact` or `off` changes the default
+security posture — see [Security: Prompt Injection
+Sanitization](#security-prompt-injection-sanitization). The server prints a
+`[SECURITY][WARN]` message to stderr on startup when the resolved mode is not
+`report_only`.
 
 ## MCP Client Setup
 
@@ -232,11 +288,12 @@ prevention of indirect prompt injection.
 | `Redact` | Matched phrases are replaced with `[REDACTED_SECURITY]`. The same `security_flags` flag is also set on the node. |
 | `Off` | No detection or modification is performed. |
 
-The `dragon-head-mcp` binary runs in `ReportOnly` mode. `Redact` and `Off` are
-available when embedding the `core-runtime` library directly and constructing
-`PromptInjectionSanitizerConfig { mode: PromptInjectionMode::Redact }`. Note
-that `Redact` mode changes page text, which may break downstream actions that
-rely on the original content.
+The `dragon-head-mcp` binary defaults to `ReportOnly` mode. Set
+`prompt_injection.mode` in `config.toml` (or the `PROMPT_INJECTION_MODE`
+environment variable) to `redact` or `off` to change it — see
+[Configuration](#configuration-configtoml). Note that `Redact` mode changes
+page text, which may break downstream actions that rely on the original
+content.
 
 ### Reading `security_flags`
 

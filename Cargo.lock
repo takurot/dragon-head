@@ -1800,9 +1800,11 @@ dependencies = [
  "serde_json",
  "sha2",
  "skills-engine",
+ "tempfile",
  "test-bench-support",
  "thiserror 1.0.69",
  "tokio",
+ "toml",
  "urlencoding",
 ]
 

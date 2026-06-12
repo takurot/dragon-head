@@ -249,6 +249,14 @@ impl BrowserClient {
     }
 
     pub fn new_page(&self) -> Result<PageSession> {
+        self.new_page_with_audit_logger(AuditLogger::from_env())
+    }
+
+    /// Like [`new_page`](Self::new_page), but uses the given [`AuditLogger`] instead of one
+    /// built from `std::env` via [`AuditLogger::from_env`]. Lets callers (e.g. the MCP server
+    /// binary) merge config-file settings with env vars via [`AuditLogger::from_env_with`]
+    /// without mutating global environment state.
+    pub fn new_page_with_audit_logger(&self, audit_logger: AuditLogger) -> Result<PageSession> {
         let tab = self.inner.new_tab().context("Failed to create new tab")?;
         if let Some((width, height)) = self.viewport_size {
             apply_viewport_size(&tab, width, height)?;
@@ -261,7 +269,7 @@ impl BrowserClient {
             policy_engine: Arc::new(Mutex::new(PolicyEngine::default())),
             policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
             navigation_epoch: Arc::new(AtomicU64::new(0)),
-            audit_logger: Arc::new(AuditLogger::from_env()),
+            audit_logger: Arc::new(audit_logger),
             semantic_capture_cache: Arc::new(Mutex::new(SemanticCaptureCache::default())),
             vault: Arc::clone(&self.vault),
             plugin_hooks: Arc::clone(&self.plugin_hooks),
