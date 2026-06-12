@@ -1,5 +1,5 @@
 use crate::config;
-use core_runtime::chrome_available;
+use core_runtime::{chrome_available, PolicyEngine};
 use std::path::Path;
 
 #[derive(Debug)]
@@ -72,52 +72,89 @@ fn chrome_path_detail() -> (bool, String) {
     chrome_path_detail_with_env(std::env::var("CHROME_PATH").ok().as_deref())
 }
 
-/// Resolves and validates the `config.toml` file via [`config::default_config_path_with`],
-/// [`config::load_config_file`], and [`config::resolve_config`].
+/// Returns an error message if `resolved.chrome_path` or `resolved.policy_file` would fail
+/// during server startup (see `main.rs`): a non-existent `chrome_path`, or a `policy.file` that
+/// is missing or fails to parse via [`PolicyEngine::try_from_file`].
+fn validate_resolved_paths(resolved: &config::ResolvedConfig) -> Result<(), String> {
+    if let Some(chrome_path) = &resolved.chrome_path {
+        if !Path::new(chrome_path).exists() {
+            return Err(format!("chrome_path '{chrome_path}' does not exist"));
+        }
+    }
+
+    if let Some(policy_file) = &resolved.policy_file {
+        if let Err(err) = PolicyEngine::try_from_file(policy_file) {
+            return Err(format!(
+                "policy.file '{}' is invalid: {err}",
+                policy_file.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolves and validates the effective configuration via [`config::default_config_path_with`],
+/// [`config::load_config_file`], [`config::resolve_config`], and [`validate_resolved_paths`].
 ///
-/// - No `$XDG_CONFIG_HOME`/`$HOME` -> informational (defaults will be used).
-/// - File not found -> informational (defaults will be used).
-/// - File found and valid -> informational, detail includes a resolved-settings summary.
-/// - File found but unreadable/unparsable/invalid -> **fatal** (`passed: false`).
+/// `resolve_config` and `validate_resolved_paths` run even when no `config.toml` is present, so
+/// environment-only misconfiguration (e.g. an invalid `PROMPT_INJECTION_MODE` or a nonexistent
+/// `CHROME_PATH`) is caught here too — the same settings `main.rs` resolves at startup.
+///
+/// - No `$XDG_CONFIG_HOME`/`$HOME`, or `config.toml` not found -> informational (defaults apply)
+///   as long as the resolved environment configuration is valid.
+/// - `config.toml` present but unreadable/unparsable -> **fatal** (`passed: false`).
+/// - Resolved configuration (file + env) is invalid, or `chrome_path`/`policy.file` would fail
+///   at startup -> **fatal** (`passed: false`).
+/// - Otherwise -> informational, detail includes a resolved-settings summary.
 fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, String, bool) {
-    let Some(path) = config::default_config_path_with(&lookup) else {
-        return (
-            true,
-            "home dir not detected — defaults will be used".to_string(),
-            true,
-        );
+    let path = config::default_config_path_with(&lookup);
+
+    let file_config = match &path {
+        Some(path) => match config::load_config_file(path) {
+            Ok(file_config) => file_config,
+            Err(err) => return (false, format!("{} — {err}", path.display()), false),
+        },
+        None => None,
     };
 
-    let file_config = match config::load_config_file(&path) {
-        Ok(None) => {
-            return (
-                true,
-                format!("{} (not found — defaults will be used)", path.display()),
-                true,
+    let label = path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "environment".to_string());
+
+    let resolved = match config::resolve_config(file_config.as_ref(), &lookup) {
+        Ok(resolved) => resolved,
+        Err(err) => return (false, format!("{label} — {err}"), false),
+    };
+
+    if let Err(err) = validate_resolved_paths(&resolved) {
+        return (false, format!("{label} — {err}"), false);
+    }
+
+    let summary = format!(
+        "chrome_path={}, prompt_injection.mode={:?}, policy.file={}",
+        resolved.chrome_path.as_deref().unwrap_or("<unset>"),
+        resolved.injection_mode,
+        resolved
+            .policy_file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unset>".to_string()),
+    );
+
+    let detail = match (&path, &file_config) {
+        (Some(path), Some(_)) => format!("{} ({summary})", path.display()),
+        (Some(path), None) => {
+            format!(
+                "{} (not found — defaults will be used; {summary})",
+                path.display()
             )
         }
-        Ok(Some(file_config)) => file_config,
-        Err(err) => return (false, format!("{} — {err}", path.display()), false),
+        (None, _) => format!("home dir not detected — defaults will be used; {summary}"),
     };
 
-    match config::resolve_config(Some(&file_config), &lookup) {
-        Ok(resolved) => (
-            true,
-            format!(
-                "{} (chrome_path={}, prompt_injection.mode={:?}, policy.file={})",
-                path.display(),
-                resolved.chrome_path.as_deref().unwrap_or("<unset>"),
-                resolved.injection_mode,
-                resolved
-                    .policy_file
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "<unset>".to_string()),
-            ),
-            true,
-        ),
-        Err(err) => (false, format!("{} — {err}", path.display()), false),
-    }
+    (true, detail, true)
 }
 
 fn config_file_detail() -> (bool, String, bool) {
@@ -308,6 +345,90 @@ mod tests {
             detail.contains("prompt_injection.mode=Redact"),
             "detail: {detail}"
         );
+    }
+
+    #[test]
+    fn config_check_fatal_for_invalid_injection_mode_env_without_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let xdg = dir.path().to_string_lossy().to_string();
+
+        // No dragon-head/config.toml exists under `xdg`, but the env-only setting is invalid.
+        let (passed, _detail, informational) = config_file_detail_with(|key| match key {
+            "XDG_CONFIG_HOME" => Some(xdg.clone()),
+            "PROMPT_INJECTION_MODE" => Some("verbose".to_string()),
+            _ => None,
+        });
+
+        assert!(
+            !passed,
+            "invalid PROMPT_INJECTION_MODE must fail even without config.toml"
+        );
+        assert!(!informational);
+    }
+
+    #[test]
+    fn config_check_fatal_for_nonexistent_chrome_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let dragon_head_dir = dir.path().join("dragon-head");
+        std::fs::create_dir_all(&dragon_head_dir).unwrap();
+        std::fs::write(
+            dragon_head_dir.join("config.toml"),
+            "chrome_path = \"/nonexistent/path/to/chrome\"",
+        )
+        .unwrap();
+        let xdg = dir.path().to_string_lossy().to_string();
+
+        let (passed, detail, informational) = config_file_detail_with(|key| match key {
+            "XDG_CONFIG_HOME" => Some(xdg.clone()),
+            _ => None,
+        });
+
+        assert!(!passed, "nonexistent chrome_path must fail the check");
+        assert!(!informational);
+        assert!(detail.contains("chrome_path"), "detail: {detail}");
+    }
+
+    #[test]
+    fn config_check_fatal_for_invalid_policy_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dragon_head_dir = dir.path().join("dragon-head");
+        std::fs::create_dir_all(&dragon_head_dir).unwrap();
+        std::fs::write(
+            dragon_head_dir.join("config.toml"),
+            "[policy]\nfile = \"/nonexistent/policy.json\"",
+        )
+        .unwrap();
+        let xdg = dir.path().to_string_lossy().to_string();
+
+        let (passed, detail, informational) = config_file_detail_with(|key| match key {
+            "XDG_CONFIG_HOME" => Some(xdg.clone()),
+            _ => None,
+        });
+
+        assert!(!passed, "invalid policy.file must fail the check");
+        assert!(!informational);
+        assert!(detail.contains("policy.file"), "detail: {detail}");
+    }
+
+    #[test]
+    fn config_check_fatal_for_invalid_audit_durability() {
+        let dir = tempfile::tempdir().unwrap();
+        let dragon_head_dir = dir.path().join("dragon-head");
+        std::fs::create_dir_all(&dragon_head_dir).unwrap();
+        std::fs::write(
+            dragon_head_dir.join("config.toml"),
+            "[audit]\ndurability = \"eventual\"",
+        )
+        .unwrap();
+        let xdg = dir.path().to_string_lossy().to_string();
+
+        let (passed, _detail, informational) = config_file_detail_with(|key| match key {
+            "XDG_CONFIG_HOME" => Some(xdg.clone()),
+            _ => None,
+        });
+
+        assert!(!passed, "invalid audit.durability must fail the check");
+        assert!(!informational);
     }
 
     #[test]

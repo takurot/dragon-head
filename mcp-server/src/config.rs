@@ -59,6 +59,8 @@ pub enum ConfigError {
     },
     #[error("invalid prompt_injection.mode '{0}' (expected 'off', 'report_only', or 'redact')")]
     InvalidInjectionMode(String),
+    #[error("invalid audit.durability '{0}' (expected 'flush' or 'sync')")]
+    InvalidAuditDurability(String),
 }
 
 /// The default config file path: `$XDG_CONFIG_HOME/dragon-head/config.toml`, falling back to
@@ -156,6 +158,11 @@ pub fn resolve_config(
     };
 
     let audit_durability = lookup("AUDIT_DURABILITY").or_else(|| fc.audit.durability.clone());
+    if let Some(durability) = &audit_durability {
+        if durability != "flush" && durability != "sync" {
+            return Err(ConfigError::InvalidAuditDurability(durability.clone()));
+        }
+    }
 
     Ok(ResolvedConfig {
         chrome_path,
@@ -421,6 +428,28 @@ durability = "sync"
         })
         .unwrap_err();
         assert!(matches!(err, ConfigError::InvalidInjectionMode(ref m) if m == "verbose"));
+    }
+
+    #[test]
+    fn resolve_config_rejects_invalid_audit_durability_from_file() {
+        let fc = FileConfig {
+            audit: AuditFileConfig {
+                durability: Some("eventual".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let err = resolve_config(Some(&fc), no_env).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidAuditDurability(ref d) if d == "eventual"));
+    }
+
+    #[test]
+    fn resolve_config_rejects_invalid_audit_durability_from_env() {
+        let err = resolve_config(None, |key| {
+            (key == "AUDIT_DURABILITY").then(|| "async".to_string())
+        })
+        .unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidAuditDurability(ref d) if d == "async"));
     }
 
     #[test]
