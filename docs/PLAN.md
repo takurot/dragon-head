@@ -171,6 +171,27 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - Exit Criteria
   - [x] `config.toml` で `chrome_path` / `prompt_injection.mode` / `policy.file` / `audit.*` がユーザー設定可能になり、`--doctor` がその内容を検証する。
 
+### PR-30: Chrome Crash/Disconnect Recovery in Long-Running MCP Sessions
+- Status: `DONE`
+- Spec Ref: ISSUE-149
+- Dependencies: PR-21
+- 実装タスク
+  - [x] `SessionError::{BrowserRestarted, BrowserRestartFailed}`（`core-runtime/src/error.rs`）と `AuditEvent::BrowserRestart`（`audit.rs`）を追加。
+  - [x] `is_browser_disconnected`（`headless_chrome::browser::ConnectionClosed` の型判定 + IOマーカーのフォールバック）と `BrowserClient::{process_id, relaunch}` を実装。
+  - [x] `mcp-server`: `McpServer::call_tool` が disconnect を検出した呼び出しを `CoreRuntimeBackend::handle_browser_disconnect` にディスパッチし、`SessionError::BrowserRestarted`/`BrowserRestartFailed` を `-32000` で返却。
+  - [x] 60秒に3回までのレート制限（`RESTART_RATE_LIMIT_MAX`/`RESTART_RATE_LIMIT_WINDOW`）で再起動ストームを防止。
+  - [x] `get_usage_report` に `browser_restarts` フィールドを追加。
+  - [x] `main.rs` を `CoreRuntimeBackend::new_with_client` / `set_policy_rules` に更新し、再起動後のページにポリシーを再適用。
+- テストタスク
+  - [x] `error.rs` / `browser.rs` の単体テスト6件（メッセージ・disconnect判定・relaunch構成）。
+  - [x] `mcp-server/src/lib.rs` の単体テスト5件（call_tool の disconnect 介入・レート制限対象外・usage report）。
+  - [x] 統合テスト: Chrome プロセスを kill して `process_id()` の変化・`relaunch` 後のページ動作・`call_tool` のリカバリ・レート制限到達を検証（`core-runtime/tests/browser_recovery.rs`, `mcp-server/tests/mcp_browser_recovery.rs`、`should_skip_browser_tests` でガード）。
+- Exit Criteria
+  - [x] Dead/disconnected な Chrome プロセスをページレベルエラーと区別して検出できる（型付きエラー）。
+  - [x] 検出時に自動再起動 + 新規ページを試行し、進行中の呼び出しに対してナビゲーション状態・Cookie・承認状態がリセットされたことを伝える構造化 JSON-RPC エラーを返す。
+  - [x] `get_usage_report` に再起動回数を表すフィールドを追加する。
+  - [x] 統合テスト: 実行中セッションで Chrome プロセスを kill し、直後の `get_state` が回復することを確認する（既存の browser-test skip helper でガード）。
+
 ### PR-00: Test Strategy & CI Foundation
 - Status: `DONE` (Local)
 - Spec Ref: Section 6（NFR 全体の測定可能性）

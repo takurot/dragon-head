@@ -4,9 +4,9 @@ pub mod doctor;
 use anyhow::{Context, Result};
 use core_runtime::{
     sre::{LoadProfile, SemanticNode},
-    ActionError, ApprovalScope, DeltaPolicy, PageSession, PromptInjectionMode,
-    PromptInjectionSanitizer, PromptInjectionSanitizerConfig, SemanticState, SemanticTarget,
-    SemanticWaitState, StateUpdate, VerifyError,
+    ActionError, ApprovalScope, BrowserClient, DeltaPolicy, PageSession, PolicyRule,
+    PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig, SemanticState,
+    SemanticTarget, SemanticWaitState, SessionError, StateUpdate, VerifyError,
 };
 use plugin_host::{ExtractionRule, SchemaRegistry};
 use serde::{Deserialize, Serialize};
@@ -17,8 +17,8 @@ use skills_engine::{
     SkillEngine, SkillRunStatus, SkillRuntime, VerifyStep, WaitStep,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
-    time::Duration,
+    collections::{BTreeMap, HashMap, VecDeque},
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -70,6 +70,9 @@ pub struct UsageReport {
     pub hitl_events: u64,
     pub audit_retention: AuditRetentionSnapshot,
     pub cost_microusd: UsageCostBreakdown,
+    /// Number of times the underlying Chrome process was automatically
+    /// restarted after a crash/disconnect (ISSUE-149).
+    pub browser_restarts: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -99,6 +102,7 @@ impl UsageMeters {
         &self,
         plan_tier: PlanTier,
         audit_retention: AuditRetentionSnapshot,
+        browser_restarts: u64,
     ) -> UsageReport {
         let cost_microusd = estimate_usage_cost(
             plan_tier,
@@ -117,6 +121,7 @@ impl UsageMeters {
             hitl_events: self.hitl_events,
             audit_retention,
             cost_microusd,
+            browser_restarts,
         }
     }
 }
@@ -275,6 +280,22 @@ pub trait McpBackend {
     fn take_skill_usage_delta(&mut self) -> SkillUsageDelta {
         SkillUsageDelta::default()
     }
+
+    /// Called when [`McpServer::call_tool`] detects that the underlying Chrome
+    /// process disconnected (ISSUE-149). On success, returns the updated
+    /// restart count; on failure, returns a human-readable reason.
+    ///
+    /// The default implementation reports that restart is not supported,
+    /// preserving backward compatibility for backends without a managed
+    /// browser process.
+    fn handle_browser_disconnect(&mut self) -> std::result::Result<u64, String> {
+        Err("browser restart not supported".to_string())
+    }
+
+    /// Total number of automatic browser restarts performed so far.
+    fn browser_restart_count(&self) -> u64 {
+        0
+    }
 }
 
 pub struct McpServer<B> {
@@ -359,6 +380,18 @@ impl<B: McpBackend> McpServer<B> {
             "run_skill" => self.backend.run_skill(arguments.clone()),
             "extract" => self.backend.extract(arguments.clone()),
             _ => anyhow::bail!("unknown MCP tool: {name}"),
+        };
+
+        let result = match result {
+            Err(err) if core_runtime::is_browser_disconnected(&err) => {
+                match self.backend.handle_browser_disconnect() {
+                    Ok(restart_count) => {
+                        Err(SessionError::BrowserRestarted { restart_count }.into())
+                    }
+                    Err(reason) => Err(SessionError::BrowserRestartFailed { reason }.into()),
+                }
+            }
+            other => other,
         };
 
         if let Ok(payload) = &result {
@@ -474,6 +507,7 @@ impl<B: McpBackend> McpServer<B> {
         let report = self.usage_meters.to_report(
             self.plan_tier,
             self.backend.audit_retention_snapshot().unwrap_or_default(),
+            self.backend.browser_restart_count(),
         );
         serde_json::to_value(report).context("failed to serialize usage report")
     }
@@ -814,6 +848,14 @@ pub struct ExternalInteractiveElement {
     pub security_flags: Vec<String>,
 }
 
+/// Maximum number of automatic browser restarts allowed within
+/// [`RESTART_RATE_LIMIT_WINDOW`] before [`CoreRuntimeBackend::handle_browser_disconnect`]
+/// gives up and reports a persistent failure (ISSUE-149 restart-storm guard).
+const RESTART_RATE_LIMIT_MAX: usize = 3;
+
+/// Sliding window over which [`RESTART_RATE_LIMIT_MAX`] restarts are counted.
+const RESTART_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+
 pub struct CoreRuntimeBackend {
     page: PageSession,
     state_cache: Option<ExternalSemanticState>,
@@ -824,6 +866,16 @@ pub struct CoreRuntimeBackend {
     schema_registry: SchemaRegistry,
     /// Prompt-injection sanitizer applied before any SemanticState is exposed to the LLM.
     injection_sanitizer: PromptInjectionSanitizer,
+    /// Managed Chrome process, used to relaunch on disconnect (ISSUE-149).
+    /// `None` for backends constructed via [`CoreRuntimeBackend::new`] (e.g. tests),
+    /// which cannot recover from a browser disconnect.
+    client: Option<BrowserClient>,
+    /// Policy rules to reapply to the page created by a browser restart.
+    policy_rules: Vec<PolicyRule>,
+    /// Total number of successful automatic browser restarts.
+    browser_restarts: u64,
+    /// Timestamps of recent restart attempts, used for rate limiting.
+    restart_history: VecDeque<Instant>,
 }
 
 impl CoreRuntimeBackend {
@@ -839,6 +891,20 @@ impl CoreRuntimeBackend {
             injection_sanitizer: PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
                 mode: PromptInjectionMode::ReportOnly,
             }),
+            client: None,
+            policy_rules: Vec::new(),
+            browser_restarts: 0,
+            restart_history: VecDeque::new(),
+        }
+    }
+
+    /// Like [`new`](Self::new), but retains the managed [`BrowserClient`] so that
+    /// the session can be automatically relaunched after a Chrome crash or
+    /// disconnect (ISSUE-149).
+    pub fn new_with_client(client: BrowserClient, page: PageSession) -> Self {
+        Self {
+            client: Some(client),
+            ..Self::new(page)
         }
     }
 
@@ -847,6 +913,14 @@ impl CoreRuntimeBackend {
     pub fn set_injection_mode(&mut self, mode: PromptInjectionMode) {
         self.injection_sanitizer =
             PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig { mode });
+    }
+
+    /// Applies `rules` to the current page session and stores them so they can be
+    /// reapplied to the page created by a future browser restart (ISSUE-149).
+    pub fn set_policy_rules(&mut self, rules: Vec<PolicyRule>) -> Result<()> {
+        self.page.set_policy_rules(rules.clone())?;
+        self.policy_rules = rules;
+        Ok(())
     }
 
     pub fn register_extraction_rule(&mut self, name: &str, value: &Value) -> Result<()> {
@@ -1267,6 +1341,51 @@ impl McpBackend for CoreRuntimeBackend {
 
     fn take_skill_usage_delta(&mut self) -> SkillUsageDelta {
         std::mem::take(&mut self.last_skill_delta)
+    }
+
+    fn handle_browser_disconnect(&mut self) -> std::result::Result<u64, String> {
+        let Some(client) = self.client.as_mut() else {
+            return Err("browser restart unavailable: no managed BrowserClient".to_string());
+        };
+
+        let now = Instant::now();
+        while let Some(oldest) = self.restart_history.front() {
+            if now.duration_since(*oldest) > RESTART_RATE_LIMIT_WINDOW {
+                self.restart_history.pop_front();
+            } else {
+                break;
+            }
+        }
+        if self.restart_history.len() >= RESTART_RATE_LIMIT_MAX {
+            return Err(format!(
+                "browser restart rate limit exceeded ({RESTART_RATE_LIMIT_MAX} restarts within \
+                 {}s); the Chrome process may be crash-looping",
+                RESTART_RATE_LIMIT_WINDOW.as_secs()
+            ));
+        }
+
+        let audit_logger = self.page.audit_logger_handle();
+        let restart_count = self.browser_restarts + 1;
+        let new_page = client
+            .relaunch(audit_logger, "chrome process disconnected", restart_count)
+            .map_err(|err| format!("relaunch failed: {err}"))?;
+
+        if !self.policy_rules.is_empty() {
+            new_page
+                .set_policy_rules(self.policy_rules.clone())
+                .map_err(|err| format!("failed to reapply policy rules after restart: {err}"))?;
+        }
+
+        self.page = new_page;
+        self.state_cache = None;
+        self.previous_semantic_state = None;
+        self.restart_history.push_back(now);
+        self.browser_restarts = restart_count;
+        Ok(self.browser_restarts)
+    }
+
+    fn browser_restart_count(&self) -> u64 {
+        self.browser_restarts
     }
 }
 
@@ -2103,6 +2222,157 @@ mod tests {
         // oneOf ensures exactly one of rule_name or inline is required
         assert!(schema["oneOf"].is_array());
         assert_eq!(schema["oneOf"].as_array().unwrap().len(), 2);
+    }
+
+    // --- browser disconnect/restart interception (ISSUE-149) ---
+
+    /// Backend whose `get_state` simulates a Chrome disconnect on the first
+    /// call (a `ConnectionClosed`-shaped error), and whose
+    /// `handle_browser_disconnect` returns a configurable outcome.
+    struct RestartMockBackend {
+        fail_get_state_with_disconnect: bool,
+        disconnect_outcome: std::result::Result<u64, String>,
+        browser_restarts: u64,
+    }
+
+    impl McpBackend for RestartMockBackend {
+        fn get_state(&mut self, _: Value) -> anyhow::Result<Value> {
+            if self.fail_get_state_with_disconnect {
+                self.fail_get_state_with_disconnect = false;
+                return Err(anyhow::anyhow!("connection is closed"));
+            }
+            Ok(json!({}))
+        }
+        fn act(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn verify(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn get_visual(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn ask_human(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn run_skill(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+        fn extract(&mut self, _: Value) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+
+        fn handle_browser_disconnect(&mut self) -> std::result::Result<u64, String> {
+            match &self.disconnect_outcome {
+                Ok(count) => {
+                    self.browser_restarts = *count;
+                    Ok(*count)
+                }
+                Err(reason) => Err(reason.clone()),
+            }
+        }
+
+        fn browser_restart_count(&self) -> u64 {
+            self.browser_restarts
+        }
+    }
+
+    #[test]
+    fn call_tool_intercepts_disconnect_and_reports_restart() {
+        let mut server = McpServer::new(RestartMockBackend {
+            fail_get_state_with_disconnect: true,
+            disconnect_outcome: Ok(1),
+            browser_restarts: 0,
+        });
+
+        let err = server
+            .call_tool("get_state", json!({}))
+            .expect_err("disconnect should surface as an error");
+        let message = err.to_string();
+        assert!(message.contains("restart #1"), "message: {message}");
+        assert!(
+            message.contains("automatically restarted"),
+            "message: {message}"
+        );
+    }
+
+    #[test]
+    fn call_tool_reports_restart_failure_when_relaunch_fails() {
+        let mut server = McpServer::new(RestartMockBackend {
+            fail_get_state_with_disconnect: true,
+            disconnect_outcome: Err("relaunch failed: Failed to launch browser".to_string()),
+            browser_restarts: 0,
+        });
+
+        let err = server
+            .call_tool("get_state", json!({}))
+            .expect_err("relaunch failure should surface as an error");
+        let message = err.to_string();
+        assert!(
+            message.contains("automatic restart failed"),
+            "message: {message}"
+        );
+        assert!(message.contains("relaunch failed"), "message: {message}");
+    }
+
+    #[test]
+    fn call_tool_does_not_intercept_page_level_errors() {
+        struct PageErrorBackend;
+        impl McpBackend for PageErrorBackend {
+            fn get_state(&mut self, _: Value) -> anyhow::Result<Value> {
+                Err(anyhow::anyhow!("Could not find node with given id"))
+            }
+            fn act(&mut self, _: Value) -> anyhow::Result<Value> {
+                Ok(json!({}))
+            }
+            fn verify(&mut self, _: Value) -> anyhow::Result<Value> {
+                Ok(json!({}))
+            }
+            fn get_visual(&mut self, _: Value) -> anyhow::Result<Value> {
+                Ok(json!({}))
+            }
+            fn ask_human(&mut self, _: Value) -> anyhow::Result<Value> {
+                Ok(json!({}))
+            }
+            fn run_skill(&mut self, _: Value) -> anyhow::Result<Value> {
+                Ok(json!({}))
+            }
+            fn extract(&mut self, _: Value) -> anyhow::Result<Value> {
+                Ok(json!({}))
+            }
+        }
+
+        let mut server = McpServer::new(PageErrorBackend);
+        let err = server
+            .call_tool("get_state", json!({}))
+            .expect_err("page-level error should propagate");
+        assert_eq!(err.to_string(), "Could not find node with given id");
+    }
+
+    #[test]
+    fn get_usage_report_includes_browser_restarts() {
+        let mut server = McpServer::new(RestartMockBackend {
+            fail_get_state_with_disconnect: false,
+            disconnect_outcome: Ok(0),
+            browser_restarts: 2,
+        });
+
+        let payload = server
+            .call_tool("get_usage_report", json!({}))
+            .expect("usage report should succeed");
+        assert_eq!(payload["browser_restarts"], 2);
+    }
+
+    #[test]
+    fn default_handle_browser_disconnect_reports_unsupported() {
+        let mut backend = MockBackend {
+            extract_result: None,
+        };
+        assert_eq!(
+            backend.handle_browser_disconnect(),
+            Err("browser restart not supported".to_string())
+        );
+        assert_eq!(backend.browser_restart_count(), 0);
     }
 
     #[test]

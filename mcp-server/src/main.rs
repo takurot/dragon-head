@@ -77,13 +77,14 @@ fn main() -> anyhow::Result<()> {
     let client = BrowserClient::new_with_chrome_path(resolved.chrome_path.clone())?;
     let page = client.new_page_with_audit_logger(audit_logger)?;
 
+    let mut backend = CoreRuntimeBackend::new_with_client(client, page);
+
     if let Some(policy_path) = &resolved.policy_file {
         let engine = PolicyEngine::try_from_file(policy_path)
             .with_context(|| format!("failed to load policy file {}", policy_path.display()))?;
-        page.set_policy_rules(engine.rules().to_vec())?;
+        backend.set_policy_rules(engine.rules().to_vec())?;
     }
 
-    let mut backend = CoreRuntimeBackend::new(page);
     backend.set_injection_mode(resolved.injection_mode);
     let mut server = McpServer::new(backend);
     eprintln!("dragon-head-mcp: ready, listening on stdio");
