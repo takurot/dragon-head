@@ -180,11 +180,12 @@ pub fn replay_events(events: &[AuditEvent]) -> Result<ReplayReport, ReplayError>
                 });
             }
 
-            // Visual captures and plugin events don't contribute to the state chain
-            // or decision records but are counted in total_events.
+            // Visual captures, plugin events, and browser restarts don't contribute
+            // to the state chain or decision records but are counted in total_events.
             AuditEvent::VisualCapture { .. }
             | AuditEvent::PluginStateTransform { .. }
-            | AuditEvent::PluginPolicyDecision { .. } => {}
+            | AuditEvent::PluginPolicyDecision { .. }
+            | AuditEvent::BrowserRestart { .. } => {}
         }
     }
 

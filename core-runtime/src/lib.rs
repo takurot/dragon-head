@@ -19,13 +19,13 @@ pub use sre::{
 };
 
 pub use browser::{
-    ActionLogEntry, BrowserClient, PageSession, SemanticTarget, SemanticWaitOptions,
-    SemanticWaitState, SomMark, SomTrigger, VisualCapture,
+    is_browser_disconnected, ActionLogEntry, BrowserClient, PageSession, SemanticTarget,
+    SemanticWaitOptions, SemanticWaitState, SomMark, SomTrigger, VisualCapture,
 };
 pub mod error;
 pub use audit_sink::DurabilityMode;
 pub use chrome_detection::chrome_available;
-pub use error::{ActionError, VerifyError, WaitError};
+pub use error::{ActionError, SessionError, VerifyError, WaitError};
 pub use plugin_hooks::PluginHookConfig;
 pub use policy::{
     ApprovalScope, OutcomeProjection, OutcomeProjectorConfig, PolicyAction, PolicyContext,

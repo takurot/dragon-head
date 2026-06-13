@@ -68,6 +68,14 @@ pub enum AuditEvent {
         reason: Option<String>,
         timestamp: u64,
     },
+    /// Emitted when the Chrome process disconnected and the session was
+    /// automatically relaunched with a fresh page (ISSUE-149).
+    #[serde(rename = "BROWSER_RESTART")]
+    BrowserRestart {
+        reason: String,
+        restart_count: u64,
+        timestamp: u64,
+    },
 }
 
 /// Handle to the metrics of a persistent `MeteredSink<RollingFileSink>`.

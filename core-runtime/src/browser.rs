@@ -149,6 +149,7 @@ pub struct BrowserClient {
     vault: Arc<dyn SessionVault>,
     plugin_hooks: Arc<PluginHookConfig>,
     viewport_size: Option<(u32, u32)>,
+    chrome_path: Option<String>,
 }
 
 impl BrowserClient {
@@ -216,8 +217,8 @@ impl BrowserClient {
     ) -> Result<Self> {
         let mut builder = LaunchOptions::default_builder();
         builder.headless(true);
-        if let Some(path) = chrome_path {
-            builder.path(Some(path.into()));
+        if let Some(path) = chrome_path.as_ref() {
+            builder.path(Some(path.clone().into()));
         }
         let options = builder.build().context("Failed to build launch options")?;
 
@@ -227,6 +228,7 @@ impl BrowserClient {
             vault,
             plugin_hooks: Arc::new(plugin_hooks),
             viewport_size: None,
+            chrome_path,
         })
     }
 
@@ -245,6 +247,7 @@ impl BrowserClient {
             vault,
             plugin_hooks: Arc::new(PluginHookConfig::default()),
             viewport_size: Some((width, height)),
+            chrome_path: None,
         })
     }
 
@@ -276,6 +279,74 @@ impl BrowserClient {
             dom_signature_cache: Arc::new(DOMSignatureCache::new()),
         })
     }
+
+    /// OS process ID of the underlying Chrome process, if it was launched
+    /// (not connected to via an existing debugger URL).
+    ///
+    /// Used by integration tests to simulate a Chrome crash (ISSUE-149).
+    pub fn process_id(&self) -> Option<u32> {
+        self.inner.get_process_id()
+    }
+
+    /// Relaunches the Chrome process after a crash/disconnect and returns a
+    /// fresh [`PageSession`] (ISSUE-149: Chrome crash/disconnect recovery).
+    ///
+    /// Reuses the original `chrome_path` and `viewport_size` so the new
+    /// process matches the original launch configuration. The
+    /// [`SessionVault`] and plugin hooks are shared (`Arc`) and therefore
+    /// survive the relaunch unchanged; in-page navigation state, cookies
+    /// outside the vault, and DOM-level recovery caches are reset because the
+    /// returned `PageSession` is newly constructed.
+    ///
+    /// Emits an [`AuditEvent::BrowserRestart`] via `audit_logger` before
+    /// returning the new session.
+    pub fn relaunch(
+        &mut self,
+        audit_logger: AuditLogger,
+        reason: &str,
+        restart_count: u64,
+    ) -> Result<PageSession> {
+        let mut builder = LaunchOptions::default_builder();
+        builder.headless(true);
+        if let Some(path) = self.chrome_path.as_ref() {
+            builder.path(Some(path.clone().into()));
+        }
+        if let Some((width, height)) = self.viewport_size {
+            builder.window_size(Some((width, height)));
+        }
+        let options = builder.build().context("Failed to build launch options")?;
+
+        self.inner = Browser::new(options).context("Failed to relaunch browser")?;
+
+        let page = self.new_page_with_audit_logger(audit_logger)?;
+        page.audit_logger.log(AuditEvent::BrowserRestart {
+            reason: reason.to_string(),
+            restart_count,
+            timestamp: epoch_millis_u64(),
+        });
+        Ok(page)
+    }
+}
+
+/// Returns `true` if `err`'s error chain indicates that the underlying Chrome
+/// process disconnected (crashed, was killed, or the CDP websocket dropped),
+/// as opposed to a page-level error (ISSUE-149).
+pub fn is_browser_disconnected(err: &anyhow::Error) -> bool {
+    if err.chain().any(|source| {
+        source
+            .downcast_ref::<headless_chrome::browser::ConnectionClosed>()
+            .is_some()
+    }) {
+        return true;
+    }
+
+    let markers = [
+        "connection is closed",
+        "broken pipe",
+        "connection reset",
+        "not connected",
+    ];
+    error_chain_contains_any(err, &markers)
 }
 
 fn apply_viewport_size(tab: &headless_chrome::Tab, width: u32, height: u32) -> Result<()> {
@@ -789,6 +860,26 @@ impl PageSession {
             .lock()
             .ok()
             .and_then(|index| index.get(stable_key).and_then(|entry| entry.alias.clone()))
+    }
+
+    /// Returns a clone of this session's [`AuditLogger`] handle.
+    ///
+    /// Used to carry the same audit logger (and its persistent sink) into the
+    /// fresh [`PageSession`] created by [`BrowserClient::relaunch`] (ISSUE-149).
+    pub fn audit_logger_handle(&self) -> AuditLogger {
+        (*self.audit_logger).clone()
+    }
+
+    /// Returns the currently configured policy rules for this page session.
+    ///
+    /// Used to reapply policy configuration to the fresh `PageSession`
+    /// created by [`BrowserClient::relaunch`] (ISSUE-149).
+    pub fn policy_rules(&self) -> Result<Vec<PolicyRule>> {
+        let guard = self
+            .policy_engine
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock policy engine"))?;
+        Ok(guard.rules().to_vec())
     }
 
     /// Replace policy rules for this page session.
@@ -2639,6 +2730,41 @@ mod tests {
             index.get("root/#document/html/body/section/input"),
             Some(&vec![0, 0, 2, 0])
         );
+    }
+
+    #[test]
+    fn is_browser_disconnected_detects_connection_closed_error() {
+        let err = anyhow::Error::new(headless_chrome::browser::ConnectionClosed {});
+        assert!(is_browser_disconnected(&err));
+    }
+
+    #[test]
+    fn is_browser_disconnected_detects_connection_closed_in_chain() {
+        let err = anyhow::Error::new(headless_chrome::browser::ConnectionClosed {})
+            .context("Failed to capture semantic state");
+        assert!(is_browser_disconnected(&err));
+    }
+
+    #[test]
+    fn is_browser_disconnected_detects_io_markers() {
+        for marker in [
+            "Connection is closed",
+            "Broken pipe",
+            "connection reset by peer",
+            "transport not connected",
+        ] {
+            let err = anyhow::anyhow!("{marker}");
+            assert!(
+                is_browser_disconnected(&err),
+                "expected disconnect marker '{marker}' to be detected"
+            );
+        }
+    }
+
+    #[test]
+    fn is_browser_disconnected_ignores_page_level_errors() {
+        let err = anyhow::anyhow!("Could not find node with given id");
+        assert!(!is_browser_disconnected(&err));
     }
 }
 
