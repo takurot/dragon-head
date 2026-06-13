@@ -21,11 +21,14 @@ pub fn print_init(client: Option<&str>) -> bool {
                 print_client(name);
                 println!();
             }
+            print_config_note();
             true
         }
         Some(name) => {
             if let Some(snippet) = config_snippet(name) {
                 print_client_with_snippet(name, &snippet);
+                println!();
+                print_config_note();
                 true
             } else {
                 eprintln!(
@@ -36,6 +39,12 @@ pub fn print_init(client: Option<&str>) -> bool {
             }
         }
     }
+}
+
+fn print_config_note() {
+    println!("# Optional: ~/.config/dragon-head/config.toml can set chrome_path,");
+    println!("# prompt_injection.mode (off/report_only/redact), policy.file, and [audit]");
+    println!("# (log_dir/max_bytes/durability). See README.md#configuration-configtoml.");
 }
 
 fn print_client(name: &str) {

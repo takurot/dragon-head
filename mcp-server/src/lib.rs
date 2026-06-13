@@ -1,3 +1,4 @@
+pub mod config;
 pub mod doctor;
 
 use anyhow::{Context, Result};
@@ -839,6 +840,13 @@ impl CoreRuntimeBackend {
                 mode: PromptInjectionMode::ReportOnly,
             }),
         }
+    }
+
+    /// Replaces the prompt-injection sanitizer with one configured for `mode`. Used at startup
+    /// to apply the resolved `prompt_injection.mode` from `config::resolve_config`.
+    pub fn set_injection_mode(&mut self, mode: PromptInjectionMode) {
+        self.injection_sanitizer =
+            PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig { mode });
     }
 
     pub fn register_extraction_rule(&mut self, name: &str, value: &Value) -> Result<()> {

@@ -41,7 +41,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 7 | Marketplace | PR-17 | 1/1 | DONE |
 | 8 | Robustness & Verification | PR-18 | 1/1 | DONE |
 | 9 | Comprehensive Evaluation Bench | PR-19 | 1/1 | DONE |
-| 10 | Cathedral Edition (Commercialization) | PR-20〜28 | 8/9 | IN_PROGRESS |
+| 10 | Cathedral Edition (Commercialization) | PR-20〜29 | 9/10 | IN_PROGRESS |
 
 ## 3. PRバックログ（進捗チェック付き）
 
@@ -153,6 +153,23 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] 代表的な EC/業務サイトでの削減率実測（browser `#[ignore]` テスト追加済）。
 - Exit Criteria
   - [x] 導入メリットを定量的に示す Markdown レポートが出力可能。
+
+### PR-29: config.toml Runtime Configuration Loading
+- Status: `DONE`
+- Spec Ref: ISSUE-146
+- Dependencies: PR-09, PR-24
+- 実装タスク
+  - [x] `mcp-server/src/config.rs` で `$XDG_CONFIG_HOME/dragon-head/config.toml`（`$HOME/.config` フォールバック）の読み込みと解決を実装。
+  - [x] `chrome_path` / `prompt_injection.mode` / `policy.file` / `audit.*` を環境変数優先で解決し、`main.rs` の起動シーケンスに統合。
+  - [x] `CoreRuntimeBackend::set_injection_mode` で起動時に `PromptInjectionSanitizer` を再構成。
+  - [x] `--doctor` が `config.toml` の存在確認に加え、パース失敗・不正な `prompt_injection.mode` を fatal として検出。
+  - [x] `--init` 出力と README に `config.toml` のスキーマと優先順位表を追記。
+- テストタスク
+  - [x] `config.rs` 単体テスト16件（パス解決・読み込み・優先順位・不正値）。
+  - [x] `doctor.rs` の config チェック3件（malformed/invalid mode/有効ファイルの解決サマリ）。
+  - [x] バイナリE2E `--doctor` テスト2件（`XDG_CONFIG_HOME` 経由で resolve_config の結果を検証）。
+- Exit Criteria
+  - [x] `config.toml` で `chrome_path` / `prompt_injection.mode` / `policy.file` / `audit.*` がユーザー設定可能になり、`--doctor` がその内容を検証する。
 
 ### PR-00: Test Strategy & CI Foundation
 - Status: `DONE` (Local)

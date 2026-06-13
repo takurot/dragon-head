@@ -247,6 +247,69 @@ fn binary_init_unknown_client_exits_nonzero() -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// --doctor + config.toml tests (fast — no Chrome required for the config check)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn binary_doctor_reports_resolved_summary_for_valid_config() -> anyhow::Result<()> {
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        "[prompt_injection]\nmode = \"redact\"",
+    )?;
+
+    let out = Command::new(&bin)
+        .arg("--doctor")
+        .env("XDG_CONFIG_HOME", dir.path())
+        .env_remove("PROMPT_INJECTION_MODE")
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("prompt_injection.mode=Redact"),
+        "stdout should report the resolved injection mode: {stdout}"
+    );
+    assert!(
+        !stdout.contains("✗ Config file"),
+        "a valid config file must not fail the Config file check: {stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn binary_doctor_fails_for_invalid_injection_mode_config() -> anyhow::Result<()> {
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        "[prompt_injection]\nmode = \"verbose\"",
+    )?;
+
+    let out = Command::new(&bin)
+        .arg("--doctor")
+        .env("XDG_CONFIG_HOME", dir.path())
+        .env_remove("PROMPT_INJECTION_MODE")
+        .output()?;
+
+    assert!(
+        !out.status.success(),
+        "an invalid prompt_injection.mode must exit non-zero, got: {}",
+        out.status
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("✗ Config file"),
+        "stdout should mark the Config file check as failed: {stdout}"
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Heavy binary E2E tests — spawn the real binary with Chrome
 //
 // These are marked #[ignore] because Chrome startup takes 30-60s per test,
