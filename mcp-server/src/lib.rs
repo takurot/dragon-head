@@ -3,6 +3,7 @@ pub mod doctor;
 
 use anyhow::{Context, Result};
 use core_runtime::{
+    speculative::{ActionSignature, SpeculativeEngine, SpeculativePrediction},
     sre::{LoadProfile, SemanticNode},
     ActionError, ApprovalScope, BrowserClient, DeltaPolicy, PageSession, PolicyRule,
     PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig, SemanticState,
@@ -18,6 +19,7 @@ use skills_engine::{
 };
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -59,6 +61,9 @@ pub struct StateGenerationUsage {
     pub fast: u64,
     pub full: u64,
     pub delta: u64,
+    /// Number of `get_state` calls served from a verified speculative
+    /// pre-generation (near-zero TTFT hit, Spec §3.5 / ISSUE-147).
+    pub speculative: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -73,6 +78,10 @@ pub struct UsageReport {
     /// Number of times the underlying Chrome process was automatically
     /// restarted after a crash/disconnect (ISSUE-149).
     pub browser_restarts: u64,
+    /// Number of `get_state` calls where a speculative prediction was
+    /// attempted but missed, falling back to a full state capture
+    /// (ISSUE-147).
+    pub speculative_misses: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -103,6 +112,7 @@ impl UsageMeters {
         plan_tier: PlanTier,
         audit_retention: AuditRetentionSnapshot,
         browser_restarts: u64,
+        speculative_misses: u64,
     ) -> UsageReport {
         let cost_microusd = estimate_usage_cost(
             plan_tier,
@@ -122,6 +132,7 @@ impl UsageMeters {
             audit_retention,
             cost_microusd,
             browser_restarts,
+            speculative_misses,
         }
     }
 }
@@ -156,6 +167,10 @@ struct PricingRateCard {
     state_fast: u64,
     state_full: u64,
     state_delta: u64,
+    /// Rate per speculative (cache-hit) state generation. Kept below
+    /// `state_fast` to reflect the near-zero marginal cost of serving a
+    /// pre-generated snapshot (Spec §3.5 / ISSUE-147).
+    state_speculative: u64,
     visual_capture: u64,
     action_executed: u64,
     hitl_event: u64,
@@ -168,6 +183,7 @@ fn pricing_rate_card(plan_tier: PlanTier) -> PricingRateCard {
             state_fast: 0,
             state_full: 0,
             state_delta: 0,
+            state_speculative: 0,
             visual_capture: 0,
             action_executed: 0,
             hitl_event: 0,
@@ -177,6 +193,7 @@ fn pricing_rate_card(plan_tier: PlanTier) -> PricingRateCard {
             state_fast: 100,
             state_full: 250,
             state_delta: 50,
+            state_speculative: 20,
             visual_capture: 1_000,
             action_executed: 75,
             hitl_event: 1_500,
@@ -186,6 +203,7 @@ fn pricing_rate_card(plan_tier: PlanTier) -> PricingRateCard {
             state_fast: 80,
             state_full: 200,
             state_delta: 40,
+            state_speculative: 15,
             visual_capture: 850,
             action_executed: 60,
             hitl_event: 1_200,
@@ -209,7 +227,12 @@ pub fn estimate_usage_cost(
         .fast
         .saturating_mul(rates.state_fast)
         .saturating_add(state_generations.full.saturating_mul(rates.state_full))
-        .saturating_add(state_generations.delta.saturating_mul(rates.state_delta));
+        .saturating_add(state_generations.delta.saturating_mul(rates.state_delta))
+        .saturating_add(
+            state_generations
+                .speculative
+                .saturating_mul(rates.state_speculative),
+        );
     let visual_captures_cost = visual_captures.saturating_mul(rates.visual_capture);
     let actions_executed_cost = actions_executed.saturating_mul(rates.action_executed);
     let hitl_events_cost = hitl_events.saturating_mul(rates.hitl_event);
@@ -296,6 +319,19 @@ pub trait McpBackend {
     fn browser_restart_count(&self) -> u64 {
         0
     }
+
+    /// Cumulative `(hits, misses)` of the speculative state generation
+    /// pipeline (Spec §3.5 / ISSUE-147). A hit is a `get_state` call served
+    /// from a verified pre-generated snapshot; a miss is a `get_state` call
+    /// where a prediction was attempted but did not yield a usable snapshot,
+    /// falling back to a full capture.
+    ///
+    /// The default implementation reports no speculative activity,
+    /// preserving backward compatibility for backends that don't wire the
+    /// speculative engine.
+    fn speculative_usage(&self) -> (u64, u64) {
+        (0, 0)
+    }
 }
 
 pub struct McpServer<B> {
@@ -371,6 +407,8 @@ impl<B: McpBackend> McpServer<B> {
             return Ok(payload);
         }
 
+        let speculative_hits_before = self.backend.speculative_usage().0;
+
         let result = match name {
             "get_state" => self.backend.get_state(arguments.clone()),
             "act" => self.backend.act(arguments.clone()),
@@ -395,7 +433,8 @@ impl<B: McpBackend> McpServer<B> {
         };
 
         if let Ok(payload) = &result {
-            self.record_usage(name, &arguments, payload);
+            let speculative_hit = self.backend.speculative_usage().0 > speculative_hits_before;
+            self.record_usage(name, &arguments, payload, speculative_hit);
         }
 
         result
@@ -504,10 +543,12 @@ impl<B: McpBackend> McpServer<B> {
     }
 
     fn get_usage_report_payload(&self) -> Result<Value> {
+        let (_, speculative_misses) = self.backend.speculative_usage();
         let report = self.usage_meters.to_report(
             self.plan_tier,
             self.backend.audit_retention_snapshot().unwrap_or_default(),
             self.backend.browser_restart_count(),
+            speculative_misses,
         );
         serde_json::to_value(report).context("failed to serialize usage report")
     }
@@ -573,13 +614,22 @@ impl<B: McpBackend> McpServer<B> {
         })
     }
 
-    fn record_usage(&mut self, name: &str, arguments: &Value, payload: &Value) {
+    fn record_usage(
+        &mut self,
+        name: &str,
+        arguments: &Value,
+        payload: &Value,
+        speculative_hit: bool,
+    ) {
         match name {
             "get_state" => {
                 let args = parse_get_state_arguments(arguments);
                 match args.delivery {
                     StateDelivery::Delta => {
                         self.usage_meters.state_generations.delta += 1;
+                    }
+                    StateDelivery::Full if speculative_hit => {
+                        self.usage_meters.state_generations.speculative += 1;
                     }
                     StateDelivery::Full => {
                         self.usage_meters.state_generations.fast += 1;
@@ -769,6 +819,24 @@ struct ActArguments {
     value: Option<String>,
 }
 
+/// Builds a [`ActionSignature`] identifying an `act` call for the speculative
+/// state generation pipeline (Spec §3.5 / ISSUE-147). The signature combines
+/// the action kind, target, and (for `type`) the value so that distinct
+/// inputs to the same element are tracked as distinct transitions.
+fn action_signature_for_act(args: &ActArguments) -> ActionSignature {
+    let target = args
+        .target_stable_key
+        .clone()
+        .or_else(|| args.target_id.map(|id| id.to_string()))
+        .unwrap_or_default();
+    let mut signature = format!("{}:{}", args.action, target);
+    if let Some(value) = &args.value {
+        signature.push(':');
+        signature.push_str(value);
+    }
+    ActionSignature::from(signature)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct VerifyArguments {
     target_id: i64,
@@ -818,6 +886,80 @@ fn parse_get_state_arguments(arguments: &Value) -> GetStateArguments {
     serde_json::from_value(arguments.clone()).unwrap_or_default()
 }
 
+/// Outcome of [`resolve_speculative_state`] — distinguishes a verified
+/// pre-generation hit from the various reasons a `get_state` call falls back
+/// to a full capture (Spec §3.5 / ISSUE-147).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpeculativeOutcome {
+    /// A verified pre-generated snapshot is available and can be served.
+    Hit,
+    /// `force_refresh` was requested; speculation is bypassed entirely.
+    MissForceRefresh,
+    /// There is no prior state or no action pending since the last
+    /// `get_state`, so there is nothing to predict from.
+    MissNoPendingAction,
+    /// The engine has not yet learned a next-action prediction for the
+    /// current state.
+    MissNoPrediction,
+    /// The predicted next action does not match the action that was actually
+    /// executed.
+    MissPredictionMismatch,
+    /// The predicted action matched, but no cached snapshot exists for the
+    /// predicted resulting state.
+    MissPreGenerateNone,
+}
+
+/// Pure decision function for the speculative `get_state` fast path
+/// (Spec §3.5 / ISSUE-147). Given the engine and the backend's tracked
+/// action/state history, determines whether a pre-generated snapshot can be
+/// served, and if not, why not.
+///
+/// `current_state_hash` (the state the AI is currently at) is
+/// `previous_state.state_hash()`; `last_action` is the action that led to
+/// that state. A hit additionally requires that the engine's predicted next
+/// action matches `pending_action` (the action just executed via `act`).
+fn resolve_speculative_state(
+    speculative: &SpeculativeEngine,
+    previous_state: Option<&SemanticState>,
+    last_action: Option<&ActionSignature>,
+    pending_action: Option<&ActionSignature>,
+    force_refresh: bool,
+) -> (
+    Option<Arc<SemanticState>>,
+    Option<SpeculativePrediction>,
+    SpeculativeOutcome,
+) {
+    if force_refresh {
+        return (None, None, SpeculativeOutcome::MissForceRefresh);
+    }
+
+    let (Some(previous_state), Some(pending_action)) = (previous_state, pending_action) else {
+        return (None, None, SpeculativeOutcome::MissNoPendingAction);
+    };
+
+    let current_state_hash = previous_state.state_hash();
+    let Some(prediction) = speculative.predict(current_state_hash, last_action) else {
+        return (None, None, SpeculativeOutcome::MissNoPrediction);
+    };
+
+    if prediction.predicted_action != *pending_action {
+        return (
+            None,
+            Some(prediction),
+            SpeculativeOutcome::MissPredictionMismatch,
+        );
+    }
+
+    match speculative.pre_generate(current_state_hash, last_action) {
+        Some(snapshot) => (Some(snapshot), Some(prediction), SpeculativeOutcome::Hit),
+        None => (
+            None,
+            Some(prediction),
+            SpeculativeOutcome::MissPreGenerateNone,
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExternalSemanticState {
     pub metadata: StateMetadata,
@@ -831,6 +973,10 @@ pub struct StateMetadata {
     pub state_hash: String,
     pub load_profile: String,
     pub timestamp: u64,
+    /// `true` when this state was served from a verified speculative
+    /// pre-generation rather than a fresh capture (Spec §3.5 / ISSUE-147).
+    #[serde(default)]
+    pub speculative: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -876,6 +1022,20 @@ pub struct CoreRuntimeBackend {
     browser_restarts: u64,
     /// Timestamps of recent restart attempts, used for rate limiting.
     restart_history: VecDeque<Instant>,
+    /// Speculative state generation engine (Spec §3.5 / ISSUE-147).
+    speculative: SpeculativeEngine,
+    /// The action that led to `previous_semantic_state`, used as the
+    /// `last_action` input to [`SpeculativeEngine::predict`]/`pre_generate`.
+    last_action: Option<ActionSignature>,
+    /// The action executed by the most recent successful `act` call, not yet
+    /// confirmed against a subsequent `get_state`.
+    pending_action: Option<ActionSignature>,
+    /// Count of `get_state` calls served from a verified speculative
+    /// pre-generation.
+    speculative_hits: u64,
+    /// Count of `get_state` calls where a prediction was attempted but did
+    /// not yield a usable snapshot.
+    speculative_misses: u64,
 }
 
 impl CoreRuntimeBackend {
@@ -895,6 +1055,11 @@ impl CoreRuntimeBackend {
             policy_rules: Vec::new(),
             browser_restarts: 0,
             restart_history: VecDeque::new(),
+            speculative: SpeculativeEngine::new(Vec::new()),
+            last_action: None,
+            pending_action: None,
+            speculative_hits: 0,
+            speculative_misses: 0,
         }
     }
 
@@ -954,23 +1119,73 @@ impl CoreRuntimeBackend {
             }
         }
 
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &self.speculative,
+            self.previous_semantic_state.as_ref(),
+            self.last_action.as_ref(),
+            self.pending_action.as_ref(),
+            force_refresh,
+        );
+
+        if let (SpeculativeOutcome::Hit, Some(snapshot)) = (&outcome, snapshot) {
+            let state = (*snapshot).clone();
+            let payload = self.build_external_state(state.clone(), true)?;
+            self.speculative_hits += 1;
+            self.last_action = self.pending_action.take();
+            self.previous_semantic_state = Some(state);
+            self.state_cache = Some(payload.clone());
+            return Ok(payload);
+        }
+
         let raw_state = self.page.capture_semantic_state(LoadProfile::Interactive)?;
         let state = raw_state.sanitized_with(&self.injection_sanitizer);
-        let state_copy = state.clone();
-        let payload = self.build_external_state(state)?;
 
+        self.speculative.observe_state(Arc::new(state.clone()));
+
+        if let (Some(previous), Some(pending)) = (
+            self.previous_semantic_state.as_ref(),
+            self.pending_action.as_ref(),
+        ) {
+            self.speculative
+                .record_transition(previous.state_hash(), pending, state.state_hash());
+        }
+
+        if matches!(outcome, SpeculativeOutcome::MissPreGenerateNone) {
+            if let Some(prediction) = &prediction {
+                self.speculative.verify(prediction, &state);
+            }
+        }
+
+        if matches!(
+            outcome,
+            SpeculativeOutcome::MissNoPrediction
+                | SpeculativeOutcome::MissPredictionMismatch
+                | SpeculativeOutcome::MissPreGenerateNone
+        ) {
+            self.speculative_misses += 1;
+        }
+
+        let state_copy = state.clone();
+        let payload = self.build_external_state(state, false)?;
+
+        self.last_action = self.pending_action.take();
         self.previous_semantic_state = Some(state_copy);
         self.state_cache = Some(payload.clone());
         Ok(payload)
     }
 
-    fn build_external_state(&mut self, state: SemanticState) -> Result<ExternalSemanticState> {
+    fn build_external_state(
+        &mut self,
+        state: SemanticState,
+        speculative: bool,
+    ) -> Result<ExternalSemanticState> {
         let metadata = StateMetadata {
             url: self.page.current_url()?,
             page_instance_id: state.page_instance_id().to_string(),
             state_hash: state.state_hash().to_string(),
             load_profile: load_profile_name(state.load_profile()).to_string(),
             timestamp: state.timestamp(),
+            speculative,
         };
 
         let interactive_elements = state
@@ -1068,7 +1283,7 @@ impl McpBackend for CoreRuntimeBackend {
                     }
                     StateUpdate::Full { state } => {
                         let sanitized = state.clone().sanitized_with(&self.injection_sanitizer);
-                        let ext = self.build_external_state(sanitized)?;
+                        let ext = self.build_external_state(sanitized, false)?;
                         // Keep state_cache in sync so a subsequent Full call is consistent.
                         self.state_cache = Some(ext.clone());
                         json!({
@@ -1105,6 +1320,7 @@ impl McpBackend for CoreRuntimeBackend {
         ) {
             Ok(()) => {
                 self.state_cache = None;
+                self.pending_action = Some(action_signature_for_act(&args));
                 Ok(json!({"status": "ok"}))
             }
             Err(err) => {
@@ -1394,6 +1610,10 @@ impl McpBackend for CoreRuntimeBackend {
 
     fn browser_restart_count(&self) -> u64 {
         self.browser_restarts
+    }
+
+    fn speculative_usage(&self) -> (u64, u64) {
+        (self.speculative_hits, self.speculative_misses)
     }
 }
 
@@ -1785,7 +2005,8 @@ pub fn semantic_state_json_schema() -> Value {
                     "page_instance_id": { "type": "string", "minLength": 1 },
                     "state_hash": { "type": "string", "minLength": 1 },
                     "load_profile": { "type": "string", "enum": ["minimal", "visual", "interactive"] },
-                    "timestamp": { "type": "integer", "minimum": 0 }
+                    "timestamp": { "type": "integer", "minimum": 0 },
+                    "speculative": { "type": "boolean" }
                 }
             },
             "interactive_elements": {
@@ -2004,6 +2225,154 @@ mod tests {
             backend_node_id: id,
             security_flags: vec![],
         }
+    }
+
+    // --- resolve_speculative_state ---
+
+    fn action(name: &str) -> ActionSignature {
+        ActionSignature::from(name)
+    }
+
+    fn state_with_label(label: &str) -> SemanticState {
+        SemanticState::new(
+            SemanticNode {
+                role: "root".to_string(),
+                label: Some(label.to_string()),
+                ..make_node(0, vec![])
+            },
+            LoadProfile::Interactive,
+        )
+    }
+
+    #[test]
+    fn resolve_speculative_state_force_refresh_short_circuits() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let pending = action("click:search_button");
+
+        let (snapshot, prediction, outcome) =
+            resolve_speculative_state(&engine, Some(&previous), None, Some(&pending), true);
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissForceRefresh);
+    }
+
+    #[test]
+    fn resolve_speculative_state_no_previous_state_is_miss_no_pending_action() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let pending = action("click:search_button");
+
+        let (snapshot, prediction, outcome) =
+            resolve_speculative_state(&engine, None, None, Some(&pending), false);
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissNoPendingAction);
+    }
+
+    #[test]
+    fn resolve_speculative_state_no_pending_action_is_miss_no_pending_action() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+
+        let (snapshot, prediction, outcome) =
+            resolve_speculative_state(&engine, Some(&previous), None, None, false);
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissNoPendingAction);
+    }
+
+    #[test]
+    fn resolve_speculative_state_cold_engine_is_miss_no_prediction() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let pending = action("click:search_button");
+
+        let (snapshot, prediction, outcome) =
+            resolve_speculative_state(&engine, Some(&previous), None, Some(&pending), false);
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissNoPrediction);
+    }
+
+    #[test]
+    fn resolve_speculative_state_prediction_mismatch() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+        let other = action("click:other_button");
+
+        // Train: click -> type_input from `previous`'s hash.
+        engine.record_transition(previous.state_hash(), &click, "hash_after_click");
+        engine.record_transition("hash_after_click", &type_input, "hash_after_type");
+
+        // The action actually executed (`other`) doesn't match the predicted
+        // next action (`type_input`).
+        let (snapshot, prediction, outcome) =
+            resolve_speculative_state(&engine, Some(&previous), Some(&click), Some(&other), false);
+
+        assert!(snapshot.is_none());
+        assert_eq!(prediction.unwrap().predicted_action, type_input);
+        assert_eq!(outcome, SpeculativeOutcome::MissPredictionMismatch);
+    }
+
+    #[test]
+    fn resolve_speculative_state_prediction_match_without_cached_snapshot_is_miss_pre_generate_none(
+    ) {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        // Train: click -> type_input from `previous`'s hash, but never call
+        // `observe_state` for "hash_after_type" so no snapshot is cached.
+        engine.record_transition(previous.state_hash(), &click, "hash_after_click");
+        engine.record_transition("hash_after_click", &type_input, "hash_after_type");
+
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &engine,
+            Some(&previous),
+            Some(&click),
+            Some(&type_input),
+            false,
+        );
+
+        assert!(snapshot.is_none());
+        assert_eq!(prediction.unwrap().predicted_action, type_input);
+        assert_eq!(outcome, SpeculativeOutcome::MissPreGenerateNone);
+    }
+
+    #[test]
+    fn resolve_speculative_state_hit_serves_cached_snapshot() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        let next_state = Arc::new(state_with_label("results page"));
+        let next_hash = next_state.state_hash().to_string();
+
+        engine.record_transition(previous.state_hash(), &click, &next_hash);
+        engine.record_transition(previous.state_hash(), &type_input, &next_hash);
+        engine.record_transition(previous.state_hash(), &type_input, &next_hash);
+        engine.observe_state(next_state.clone());
+
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &engine,
+            Some(&previous),
+            Some(&click),
+            Some(&type_input),
+            false,
+        );
+
+        let snapshot = snapshot.expect("expected a cached snapshot on hit");
+        assert_eq!(snapshot.state_hash(), next_state.state_hash());
+        assert_eq!(prediction.unwrap().predicted_action, type_input);
+        assert_eq!(outcome, SpeculativeOutcome::Hit);
     }
 
     // --- parse_semantic_wait_condition ---
@@ -2534,6 +2903,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,
@@ -2563,6 +2933,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,
@@ -2639,6 +3010,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,
@@ -2672,6 +3044,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,
@@ -2702,6 +3075,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,

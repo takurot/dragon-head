@@ -1882,15 +1882,33 @@ impl PageSession {
         let node_id_u32 =
             u32::try_from(backend_node_id).context("Invalid backend_node_id: must fit in u32")?;
 
-        let model = self
+        let result = self
             .inner
             .call_method(headless_chrome::protocol::cdp::DOM::GetBoxModel {
                 node_id: None,
                 backend_node_id: Some(node_id_u32),
                 object_id: None,
-            })
-            .context("Failed to get box model")?
-            .model;
+            });
+
+        let model = match result {
+            Ok(response) => response.model,
+            Err(err) => {
+                // A speculatively-served snapshot (Spec §3.5 / ISSUE-147) may
+                // reference a `backend_node_id` from a prior DOM that no
+                // longer exists. CDP reports this as an error rather than an
+                // empty box model; treat it the same as "no box" (`None`).
+                let node_error_markers = [
+                    "could not find node",
+                    "no node with given id",
+                    "could not compute box model",
+                    "node does not exist",
+                ];
+                if error_chain_contains_any(&err, &node_error_markers) {
+                    return Ok(None);
+                }
+                return Err(err).context("Failed to get box model");
+            }
+        };
 
         Ok(quad_to_bbox(&model.content))
     }

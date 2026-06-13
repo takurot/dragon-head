@@ -42,6 +42,9 @@
         "timestamp": {
           "type": "integer",
           "minimum": 0
+        },
+        "speculative": {
+          "type": "boolean"
         }
       }
     },

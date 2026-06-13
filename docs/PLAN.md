@@ -58,6 +58,15 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - Exit Criteria
   - [x] 予測的中時に TTFT < 10ms を達成。
 
+> **Follow-up (ISSUE-147, done)**: `SpeculativeEngine` を `mcp-server::CoreRuntimeBackend`
+> の `get_state`/`act` に接続。`act` の実行アクションを `ActionSignature` として記録し、
+> `get_state` 呼び出し時に `resolve_speculative_state` で予測検証・キャッシュ済み
+> スナップショットの提供 (`metadata.speculative: true`) または通常キャプチャへの
+> フォールバックを判定する。`get_usage_report` に `state_generations.speculative` /
+> `speculative_misses` を追加し、ヒット/ミス計測を可視化。Delta 配信経路・
+> `mismatch_log` の外部提示・スキル実行中の `pending_action` 追跡は範囲外
+> （別途検討）。E2E TTFT 検証: `mcp-server/tests/speculative_get_state_ttft.rs`。
+
 ### PR-21: Self-Healing Context Recovery Layer
 - Status: `DONE`
 - Spec Ref: Section 3.6, ISSUE-11
