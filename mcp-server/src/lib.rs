@@ -902,8 +902,12 @@ impl CoreRuntimeBackend {
     /// the session can be automatically relaunched after a Chrome crash or
     /// disconnect (ISSUE-149).
     pub fn new_with_client(client: BrowserClient, page: PageSession) -> Self {
+        // Capture any policy rules already configured on `page` so they
+        // survive a future browser restart (ISSUE-149 review feedback).
+        let policy_rules = page.policy_rules().unwrap_or_default();
         Self {
             client: Some(client),
+            policy_rules,
             ..Self::new(page)
         }
     }
@@ -1364,6 +1368,11 @@ impl McpBackend for CoreRuntimeBackend {
             ));
         }
 
+        // Record this attempt before the fallible relaunch so that repeated
+        // failures (e.g. a crash-looping Chrome that can't relaunch) are
+        // still counted against the rate limit, not just successes.
+        self.restart_history.push_back(now);
+
         let audit_logger = self.page.audit_logger_handle();
         let restart_count = self.browser_restarts + 1;
         let new_page = client
@@ -1379,7 +1388,6 @@ impl McpBackend for CoreRuntimeBackend {
         self.page = new_page;
         self.state_cache = None;
         self.previous_semantic_state = None;
-        self.restart_history.push_back(now);
         self.browser_restarts = restart_count;
         Ok(self.browser_restarts)
     }

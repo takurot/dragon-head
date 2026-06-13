@@ -5,6 +5,8 @@ use mcp_server::{CoreRuntimeBackend, McpBackend, McpServer};
 use serde_json::json;
 use std::time::Duration;
 
+// Uses the Unix `kill` command to simulate a Chrome crash; not supported on Windows.
+#[cfg(unix)]
 #[test]
 fn call_tool_recovers_from_chrome_crash_and_relaunches() -> anyhow::Result<()> {
     if test_bench_support::should_skip_browser_tests() {

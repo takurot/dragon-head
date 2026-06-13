@@ -8,6 +8,8 @@ use core_runtime::audit::AuditLogger;
 use core_runtime::{is_browser_disconnected, BrowserClient};
 use std::time::Duration;
 
+// Uses the Unix `kill` command to simulate a Chrome crash; not supported on Windows.
+#[cfg(unix)]
 #[test]
 fn relaunch_recovers_session_after_chrome_process_is_killed() -> anyhow::Result<()> {
     if test_bench_support::should_skip_browser_tests() {
