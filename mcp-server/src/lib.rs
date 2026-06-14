@@ -1036,6 +1036,11 @@ pub struct CoreRuntimeBackend {
     /// Count of `get_state` calls where a prediction was attempted but did
     /// not yield a usable snapshot.
     speculative_misses: u64,
+    /// The prediction behind the most recently served speculative hit, kept
+    /// so it can be verified against the next real DOM capture (Spec §3.5 /
+    /// ISSUE-147 review: a served hit is otherwise never checked against the
+    /// live page).
+    last_served_prediction: Option<SpeculativePrediction>,
 }
 
 impl CoreRuntimeBackend {
@@ -1060,6 +1065,7 @@ impl CoreRuntimeBackend {
             pending_action: None,
             speculative_hits: 0,
             speculative_misses: 0,
+            last_served_prediction: None,
         }
     }
 
@@ -1131,6 +1137,7 @@ impl CoreRuntimeBackend {
             let state = (*snapshot).clone();
             let payload = self.build_external_state(state.clone(), true)?;
             self.speculative_hits += 1;
+            self.last_served_prediction = prediction;
             self.last_action = self.pending_action.take();
             self.previous_semantic_state = Some(state);
             self.state_cache = Some(payload.clone());
@@ -1140,15 +1147,7 @@ impl CoreRuntimeBackend {
         let raw_state = self.page.capture_semantic_state(LoadProfile::Interactive)?;
         let state = raw_state.sanitized_with(&self.injection_sanitizer);
 
-        self.speculative.observe_state(Arc::new(state.clone()));
-
-        if let (Some(previous), Some(pending)) = (
-            self.previous_semantic_state.as_ref(),
-            self.pending_action.as_ref(),
-        ) {
-            self.speculative
-                .record_transition(previous.state_hash(), pending, state.state_hash());
-        }
+        self.record_speculative_observation(&state);
 
         if matches!(outcome, SpeculativeOutcome::MissPreGenerateNone) {
             if let Some(prediction) = &prediction {
@@ -1172,6 +1171,32 @@ impl CoreRuntimeBackend {
         self.previous_semantic_state = Some(state_copy);
         self.state_cache = Some(payload.clone());
         Ok(payload)
+    }
+
+    /// Records bookkeeping for the speculative engine after a real DOM
+    /// capture (Spec §3.5 / ISSUE-147):
+    ///
+    /// - Verifies the prediction behind the most recently served speculative
+    ///   hit (if any) against this freshly-captured `state`, logging a
+    ///   mismatch for replay/debugging when the served snapshot turns out to
+    ///   have been stale.
+    /// - Caches `state` so it can be served by a future pre-generation.
+    /// - Records the `previous_semantic_state -> state` transition under
+    ///   `pending_action`, if one was executed since the last capture.
+    fn record_speculative_observation(&mut self, state: &SemanticState) {
+        if let Some(served) = self.last_served_prediction.take() {
+            self.speculative.verify(&served, state);
+        }
+
+        self.speculative.observe_state(Arc::new(state.clone()));
+
+        if let (Some(previous), Some(pending)) = (
+            self.previous_semantic_state.as_ref(),
+            self.pending_action.as_ref(),
+        ) {
+            self.speculative
+                .record_transition(previous.state_hash(), pending, state.state_hash());
+        }
     }
 
     fn build_external_state(
@@ -1302,6 +1327,14 @@ impl McpBackend for CoreRuntimeBackend {
                     }
                 };
 
+                // Reconcile speculative bookkeeping against this real capture
+                // (Spec §3.5 / ISSUE-147 review): without this, `pending_action`
+                // and `last_action` would go stale across a delta read, causing
+                // a later full `get_state` to treat an already-applied action as
+                // newly executed and serve a snapshot for a state past the
+                // current one.
+                self.record_speculative_observation(&current);
+                self.last_action = self.pending_action.take();
                 self.previous_semantic_state = Some(current);
                 Ok(response)
             }
