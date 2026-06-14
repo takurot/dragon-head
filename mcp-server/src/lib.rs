@@ -840,6 +840,8 @@ fn action_signature_for_act(args: &ActArguments) -> ActionSignature {
 #[derive(Debug, Clone, Deserialize)]
 struct VerifyArguments {
     target_id: i64,
+    #[serde(default)]
+    target_stable_key: Option<String>,
     expected: VerifyExpected,
 }
 
@@ -1137,7 +1139,15 @@ impl CoreRuntimeBackend {
             let state = (*snapshot).clone();
             let payload = self.build_external_state(state.clone(), true)?;
             self.speculative_hits += 1;
-            self.last_served_prediction = prediction;
+            // Don't overwrite an existing unverified prediction (Spec §3.5 /
+            // ISSUE-147 review): a chained hit has no live capture to verify
+            // the prior prediction against, so verifying it later would
+            // compare against the wrong state. Keep the older prediction;
+            // `record_speculative_observation` discards it without
+            // verifying once a real capture occurs.
+            if self.last_served_prediction.is_none() {
+                self.last_served_prediction = prediction;
+            }
             self.last_action = self.pending_action.take();
             self.previous_semantic_state = Some(state);
             self.state_cache = Some(payload.clone());
@@ -1179,13 +1189,20 @@ impl CoreRuntimeBackend {
     /// - Verifies the prediction behind the most recently served speculative
     ///   hit (if any) against this freshly-captured `state`, logging a
     ///   mismatch for replay/debugging when the served snapshot turns out to
-    ///   have been stale.
+    ///   have been stale. This is only valid when no action has been
+    ///   executed since the hit was served (`pending_action.is_none()`):
+    ///   otherwise `state` reflects the page *after* that extra action, not
+    ///   the state the prediction described, and comparing the two would
+    ///   report a false mismatch (Spec §3.5 / ISSUE-147 review). In that
+    ///   case the stale prediction is discarded without verification.
     /// - Caches `state` so it can be served by a future pre-generation.
     /// - Records the `previous_semantic_state -> state` transition under
     ///   `pending_action`, if one was executed since the last capture.
     fn record_speculative_observation(&mut self, state: &SemanticState) {
         if let Some(served) = self.last_served_prediction.take() {
-            self.speculative.verify(&served, state);
+            if self.pending_action.is_none() {
+                self.speculative.verify(&served, state);
+            }
         }
 
         self.speculative.observe_state(Arc::new(state.clone()));
@@ -1229,19 +1246,19 @@ impl CoreRuntimeBackend {
     /// Maps a `SemanticNode` to its external representation.
     ///
     /// For a speculative snapshot (Spec §3.5 / ISSUE-147), `backend_node_id`
-    /// values were captured from a prior DOM render and do not resolve on the
-    /// live page until the predicted transition actually occurs. Reporting
-    /// them as `id` would let a target-id-only `act` call fail with
-    /// `verify_required` against a node that no longer exists. Use the
-    /// sentinel `0` instead, signaling clients to resolve via `stable_key`
-    /// (which `PageSession::act` falls back to and re-resolves against the
-    /// live DOM).
+    /// values were captured from a prior DOM render and may not resolve on
+    /// the live page until the predicted transition actually occurs. The id
+    /// and `stable_key` are still reported so `act`/`verify` can target the
+    /// element (`act` and `verify_text` both fall back to `stable_key` if the
+    /// id no longer resolves); only the `get_element_bbox` CDP lookup, which
+    /// would fail or return stale coordinates for a not-yet-rendered node, is
+    /// skipped.
     fn map_interactive_element(
         &self,
         node: SemanticNode,
         speculative: bool,
     ) -> Result<ExternalInteractiveElement> {
-        let id = if speculative { 0 } else { node.backend_node_id };
+        let id = node.backend_node_id;
         let stable_key = node
             .stable_key
             .clone()
@@ -1258,7 +1275,7 @@ impl CoreRuntimeBackend {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| alias.clone());
 
-        let bbox = if id > 0 {
+        let bbox = if !speculative && id > 0 {
             self.page
                 .get_element_bbox(id)?
                 .unwrap_or([0.0, 0.0, 0.0, 0.0])
@@ -1420,7 +1437,11 @@ impl McpBackend for CoreRuntimeBackend {
         let args: VerifyArguments =
             serde_json::from_value(arguments).context("invalid verify arguments")?;
 
-        match self.page.verify_text(args.target_id, &args.expected.text) {
+        match self.page.verify_text(
+            args.target_id,
+            args.target_stable_key.as_deref(),
+            &args.expected.text,
+        ) {
             Ok(()) => Ok(json!({ "matched": true })),
             Err(err) => {
                 if let Some(verify_err) = err.downcast_ref::<VerifyError>() {
@@ -1751,7 +1772,8 @@ impl SkillRuntime for PageSkillRuntime<'_> {
         let target = resolve_param(&step.target, self.params);
         let expected = resolve_param(&step.expected, self.params);
         if let Some(id) = parse_target_id(&target) {
-            return match self.page.verify_text(id, &expected) {
+            let stable_key = parse_target_stable_key(&target);
+            return match self.page.verify_text(id, stable_key.as_deref(), &expected) {
                 Ok(()) => OperationOutcome::Success,
                 Err(err) => OperationOutcome::Failure {
                     reason: err.to_string(),
@@ -2146,6 +2168,7 @@ fn verify_input_schema() -> Value {
         "required": ["target_id", "expected"],
         "properties": {
             "target_id": { "type": "integer" },
+            "target_stable_key": { "type": "string" },
             "expected": {
                 "type": "object",
                 "additionalProperties": false,

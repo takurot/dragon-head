@@ -179,7 +179,7 @@ fn test_som_generated_by_verify_failure_trigger() -> anyhow::Result<()> {
     let state = SemanticState::new(sem, LoadProfile::Minimal);
     let (button_id, _) = find_button_info(state.root()).expect("button should exist");
 
-    let result = page.verify_text(button_id, "Register");
+    let result = page.verify_text(button_id, None, "Register");
     assert!(result.is_err(), "verify should fail for mismatched text");
 
     let err = result.unwrap_err();
