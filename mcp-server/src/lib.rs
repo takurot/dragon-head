@@ -821,8 +821,13 @@ struct ActArguments {
 
 /// Builds a [`ActionSignature`] identifying an `act` call for the speculative
 /// state generation pipeline (Spec §3.5 / ISSUE-147). The signature combines
-/// the action kind, target, and (for `type`) the value so that distinct
-/// inputs to the same element are tracked as distinct transitions.
+/// the action kind, target, and (for `type`) a digest of the value so that
+/// distinct inputs to the same element are tracked as distinct transitions.
+///
+/// `value` is hashed rather than copied verbatim: for `type` actions it may
+/// contain passwords, tokens, or other personal data, and `ActionSignature`s
+/// are retained in the speculative engine's transition model beyond the
+/// request, bypassing the audit log's argument redaction.
 fn action_signature_for_act(args: &ActArguments) -> ActionSignature {
     let target = args
         .target_stable_key
@@ -831,8 +836,10 @@ fn action_signature_for_act(args: &ActArguments) -> ActionSignature {
         .unwrap_or_default();
     let mut signature = format!("{}:{}", args.action, target);
     if let Some(value) = &args.value {
+        let mut hasher = Sha256::new();
+        hasher.update(value.as_bytes());
         signature.push(':');
-        signature.push_str(value);
+        signature.push_str(&hex::encode(hasher.finalize()));
     }
     ActionSignature::from(signature)
 }
@@ -1150,7 +1157,15 @@ impl CoreRuntimeBackend {
             }
             self.last_action = self.pending_action.take();
             self.previous_semantic_state = Some(state);
-            self.state_cache = Some(payload.clone());
+            // Deliberately do NOT populate `state_cache` (Spec §3.5 /
+            // ISSUE-147 review): caching this unverified speculative payload
+            // would make every subsequent non-forced `get_state` return it
+            // via the early-return above, so `record_speculative_observation`
+            // would never run and `last_served_prediction` would never be
+            // checked against a real capture. Leaving the cache empty means
+            // the next `get_state` falls through to a real capture (since
+            // `pending_action` was just consumed above), reconciling this
+            // prediction against the live DOM.
             return Ok(payload);
         }
 
