@@ -1217,7 +1217,7 @@ impl CoreRuntimeBackend {
             .generate_fast_state()
             .interactive_elements
             .into_iter()
-            .map(|node| self.map_interactive_element(node))
+            .map(|node| self.map_interactive_element(node, speculative))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(ExternalSemanticState {
@@ -1226,8 +1226,22 @@ impl CoreRuntimeBackend {
         })
     }
 
-    fn map_interactive_element(&self, node: SemanticNode) -> Result<ExternalInteractiveElement> {
-        let id = node.backend_node_id;
+    /// Maps a `SemanticNode` to its external representation.
+    ///
+    /// For a speculative snapshot (Spec §3.5 / ISSUE-147), `backend_node_id`
+    /// values were captured from a prior DOM render and do not resolve on the
+    /// live page until the predicted transition actually occurs. Reporting
+    /// them as `id` would let a target-id-only `act` call fail with
+    /// `verify_required` against a node that no longer exists. Use the
+    /// sentinel `0` instead, signaling clients to resolve via `stable_key`
+    /// (which `PageSession::act` falls back to and re-resolves against the
+    /// live DOM).
+    fn map_interactive_element(
+        &self,
+        node: SemanticNode,
+        speculative: bool,
+    ) -> Result<ExternalInteractiveElement> {
+        let id = if speculative { 0 } else { node.backend_node_id };
         let stable_key = node
             .stable_key
             .clone()
@@ -1297,6 +1311,7 @@ impl McpBackend for CoreRuntimeBackend {
                 }
 
                 let current = self.page.capture_semantic_state(LoadProfile::Interactive)?;
+                let current = current.sanitized_with(&self.injection_sanitizer);
                 let update = current.select_update(
                     self.previous_semantic_state.as_ref(),
                     DeltaPolicy::default(),
@@ -1307,8 +1322,7 @@ impl McpBackend for CoreRuntimeBackend {
                         json!({ "type": "no_change", "hash": state_hash })
                     }
                     StateUpdate::Full { state } => {
-                        let sanitized = state.clone().sanitized_with(&self.injection_sanitizer);
-                        let ext = self.build_external_state(sanitized, false)?;
+                        let ext = self.build_external_state(state.clone(), false)?;
                         // Keep state_cache in sync so a subsequent Full call is consistent.
                         self.state_cache = Some(ext.clone());
                         json!({
