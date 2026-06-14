@@ -1155,15 +1155,15 @@ impl CoreRuntimeBackend {
             let state = (*snapshot).clone();
             let payload = self.build_external_state(state.clone(), true)?;
             self.speculative_hits += 1;
-            // Don't overwrite an existing unverified prediction (Spec §3.5 /
-            // ISSUE-147 review): a chained hit has no live capture to verify
-            // the prior prediction against, so verifying it later would
-            // compare against the wrong state. Keep the older prediction;
-            // `record_speculative_observation` discards it without
-            // verifying once a real capture occurs.
-            if self.last_served_prediction.is_none() {
-                self.last_served_prediction = prediction;
-            }
+            // Replace any existing unverified prediction with this hit's
+            // (Spec §3.5 / ISSUE-147 review): if a previous hit's prediction
+            // is still pending here, this hit's action has moved the page
+            // beyond the state that prediction described, so verifying it
+            // against a future real capture would report a false mismatch.
+            // The new prediction describes `state` (the snapshot just
+            // served), which the next real capture *can* validate against
+            // (assuming no further chaining), so it replaces the stale one.
+            self.last_served_prediction = prediction;
             self.last_action = self.pending_action.take();
             self.previous_semantic_state = Some(state);
             // Deliberately do NOT populate `state_cache` (Spec §3.5 /
@@ -1429,18 +1429,20 @@ impl McpBackend for CoreRuntimeBackend {
         ) {
             Ok(()) => {
                 self.state_cache = None;
-                if self.pending_action.is_some() {
-                    // A second successful `act` before the next `get_state`
-                    // (Spec §3.5 / ISSUE-147 review): no single
+                if self.pending_action.is_some() || self.action_chain_broken {
+                    // A second (or later) successful `act` before the next
+                    // `get_state` (Spec §3.5 / ISSUE-147 review): no single
                     // `ActionSignature` describes the combined effect of
-                    // both actions on `previous_semantic_state`, so recording
-                    // a `previous -> current` transition under just this
-                    // action would train the engine on an impossible
-                    // transition that could later serve a snapshot for the
-                    // wrong state. Discard the pending action and flag the
-                    // chain so `record_speculative_observation` skips both
-                    // training and `last_served_prediction` verification for
-                    // this capture.
+                    // multiple actions on `previous_semantic_state`, so
+                    // recording a `previous -> current` transition under
+                    // just this action would train the engine on an
+                    // impossible transition that could later serve a
+                    // snapshot for the wrong state. Discard the pending
+                    // action and keep the chain flagged (it stays flagged
+                    // until the next real capture resets it) so
+                    // `record_speculative_observation` skips both training
+                    // and `last_served_prediction` verification for this
+                    // capture, no matter how many actions were chained.
                     self.pending_action = None;
                     self.action_chain_broken = true;
                 } else {
@@ -1733,6 +1735,15 @@ impl McpBackend for CoreRuntimeBackend {
         self.page = new_page;
         self.state_cache = None;
         self.previous_semantic_state = None;
+        // The new page is a fresh CDP session with new backend node IDs and
+        // a new `page_instance_id` (Spec §3.5 / ISSUE-147 review): any
+        // pending speculative bookkeeping and cached snapshots refer to the
+        // crashed page and must not be reused or trained against.
+        self.pending_action = None;
+        self.last_action = None;
+        self.last_served_prediction = None;
+        self.action_chain_broken = false;
+        self.speculative.reset_session();
         self.browser_restarts = restart_count;
         Ok(self.browser_restarts)
     }

@@ -114,6 +114,21 @@ impl SpeculativeEngine {
             .expect("speculative engine mutex poisoned")
     }
 
+    /// Drops cached state snapshots and the engine-internal action-sequence
+    /// cursor after the underlying page session is replaced (e.g. a browser
+    /// restart, ISSUE-149). The cached `SemanticState` snapshots and the
+    /// last-observed action belong to the crashed page's DOM (backend node
+    /// IDs, `page_instance_id`) and would otherwise be served as if they
+    /// were still valid. The learned [`TransitionModel`] is keyed by
+    /// content-based state hashes and action signatures, which remain valid
+    /// across a restart, so it is preserved.
+    pub fn reset_session(&self) {
+        let mut inner = self.lock();
+        inner.snapshot_cache.clear();
+        inner.snapshot_order.clear();
+        inner.last_action = None;
+    }
+
     /// Cache an observed state by its hash, making it servable via
     /// [`Self::pre_generate`] on a future cache hit. Bounded by
     /// `SNAPSHOT_CACHE_CAPACITY`: the oldest-observed snapshot is evicted
