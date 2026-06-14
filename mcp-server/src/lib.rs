@@ -63,6 +63,7 @@ pub struct StateGenerationUsage {
     pub delta: u64,
     /// Number of `get_state` calls served from a verified speculative
     /// pre-generation (near-zero TTFT hit, Spec §3.5 / ISSUE-147).
+    #[serde(default)]
     pub speculative: u64,
 }
 
@@ -81,6 +82,7 @@ pub struct UsageReport {
     /// Number of `get_state` calls where a speculative prediction was
     /// attempted but missed, falling back to a full state capture
     /// (ISSUE-147).
+    #[serde(default)]
     pub speculative_misses: u64,
 }
 
@@ -1370,6 +1372,12 @@ impl McpBackend for CoreRuntimeBackend {
                     self.last_action = None;
                     self.last_served_prediction = None;
                     self.action_chain_broken = false;
+                    // Likewise reset the engine's own action-sequence cursor
+                    // (Spec §3.5 / ISSUE-147 review): otherwise the next
+                    // `record_transition` would link its action to whatever
+                    // action preceded this forced baseline reset, training a
+                    // false action-sequence edge.
+                    self.speculative.clear_action_cursor();
                 }
 
                 let current = self.page.capture_semantic_state(LoadProfile::Interactive)?;
@@ -1443,8 +1451,14 @@ impl McpBackend for CoreRuntimeBackend {
                     // `record_speculative_observation` skips both training
                     // and `last_served_prediction` verification for this
                     // capture, no matter how many actions were chained.
+                    // Also reset the engine's own action-sequence cursor
+                    // (Spec §3.5 / ISSUE-147 review): otherwise the next
+                    // `record_transition` would link its action to whatever
+                    // action preceded this discarded chain, training a
+                    // false action-sequence edge.
                     self.pending_action = None;
                     self.action_chain_broken = true;
+                    self.speculative.clear_action_cursor();
                 } else {
                     self.pending_action = Some(action_signature_for_act(&args));
                 }

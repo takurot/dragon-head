@@ -129,6 +129,18 @@ impl SpeculativeEngine {
         inner.last_action = None;
     }
 
+    /// Clears the engine-internal action-sequence cursor (`last_action`)
+    /// without touching the snapshot cache or learned [`TransitionModel`].
+    ///
+    /// Used when the caller discards a chained or otherwise un-attributable
+    /// action (Spec §3.5 / ISSUE-147 review): without this, the next
+    /// [`Self::record_transition`] would link its action to whatever action
+    /// preceded the discarded chain, training a false action-sequence edge
+    /// between two actions that were never observed back-to-back.
+    pub fn clear_action_cursor(&self) {
+        self.lock().last_action = None;
+    }
+
     /// Cache an observed state by its hash, making it servable via
     /// [`Self::pre_generate`] on a future cache hit. Bounded by
     /// `SNAPSHOT_CACHE_CAPACITY`: the oldest-observed snapshot is evicted
