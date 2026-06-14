@@ -1050,6 +1050,14 @@ pub struct CoreRuntimeBackend {
     /// ISSUE-147 review: a served hit is otherwise never checked against the
     /// live page).
     last_served_prediction: Option<SpeculativePrediction>,
+    /// Set when a second successful `act` occurs before the next
+    /// `get_state` (Spec §3.5 / ISSUE-147 review). No single
+    /// `ActionSignature` describes the combined effect of a chained action
+    /// sequence, so `record_speculative_observation` must neither record a
+    /// transition for it nor verify `last_served_prediction` against the
+    /// resulting capture (which reflects more than one action past the
+    /// prediction). Cleared once that capture has been processed.
+    action_chain_broken: bool,
 }
 
 impl CoreRuntimeBackend {
@@ -1075,6 +1083,7 @@ impl CoreRuntimeBackend {
             speculative_hits: 0,
             speculative_misses: 0,
             last_served_prediction: None,
+            action_chain_broken: false,
         }
     }
 
@@ -1205,17 +1214,19 @@ impl CoreRuntimeBackend {
     ///   hit (if any) against this freshly-captured `state`, logging a
     ///   mismatch for replay/debugging when the served snapshot turns out to
     ///   have been stale. This is only valid when no action has been
-    ///   executed since the hit was served (`pending_action.is_none()`):
-    ///   otherwise `state` reflects the page *after* that extra action, not
-    ///   the state the prediction described, and comparing the two would
-    ///   report a false mismatch (Spec §3.5 / ISSUE-147 review). In that
-    ///   case the stale prediction is discarded without verification.
+    ///   executed since the hit was served (`pending_action.is_none()`) and
+    ///   no chained-action sequence has been discarded
+    ///   (`!action_chain_broken`): in either case `state` reflects the page
+    ///   after more than the predicted single action, not the state the
+    ///   prediction described, and comparing the two would report a false
+    ///   mismatch (Spec §3.5 / ISSUE-147 review). In that case the stale
+    ///   prediction is discarded without verification.
     /// - Caches `state` so it can be served by a future pre-generation.
     /// - Records the `previous_semantic_state -> state` transition under
     ///   `pending_action`, if one was executed since the last capture.
     fn record_speculative_observation(&mut self, state: &SemanticState) {
         if let Some(served) = self.last_served_prediction.take() {
-            if self.pending_action.is_none() {
+            if self.pending_action.is_none() && !self.action_chain_broken {
                 self.speculative.verify(&served, state);
             }
         }
@@ -1229,6 +1240,8 @@ impl CoreRuntimeBackend {
             self.speculative
                 .record_transition(previous.state_hash(), pending, state.state_hash());
         }
+
+        self.action_chain_broken = false;
     }
 
     fn build_external_state(
@@ -1340,6 +1353,23 @@ impl McpBackend for CoreRuntimeBackend {
                     // Reset both caches so the next delta starts from a clean baseline.
                     self.state_cache = None;
                     self.previous_semantic_state = None;
+                    // Also clear the speculative action/prediction history
+                    // (Spec §3.5 / ISSUE-147 review): with
+                    // `previous_semantic_state` cleared,
+                    // `record_speculative_observation` below cannot record a
+                    // `previous -> current` transition for `pending_action`,
+                    // but it would still be promoted to `last_action`
+                    // afterwards. That would desync the backend's
+                    // `last_action` from the `SpeculativeEngine`'s internal
+                    // action history (only updated by `record_transition`),
+                    // causing the next prediction to train/query the wrong
+                    // action sequence. `last_served_prediction` similarly
+                    // referred to the now-discarded baseline state. Discard
+                    // all of it along with the state baseline.
+                    self.pending_action = None;
+                    self.last_action = None;
+                    self.last_served_prediction = None;
+                    self.action_chain_broken = false;
                 }
 
                 let current = self.page.capture_semantic_state(LoadProfile::Interactive)?;
@@ -1399,7 +1429,23 @@ impl McpBackend for CoreRuntimeBackend {
         ) {
             Ok(()) => {
                 self.state_cache = None;
-                self.pending_action = Some(action_signature_for_act(&args));
+                if self.pending_action.is_some() {
+                    // A second successful `act` before the next `get_state`
+                    // (Spec §3.5 / ISSUE-147 review): no single
+                    // `ActionSignature` describes the combined effect of
+                    // both actions on `previous_semantic_state`, so recording
+                    // a `previous -> current` transition under just this
+                    // action would train the engine on an impossible
+                    // transition that could later serve a snapshot for the
+                    // wrong state. Discard the pending action and flag the
+                    // chain so `record_speculative_observation` skips both
+                    // training and `last_served_prediction` verification for
+                    // this capture.
+                    self.pending_action = None;
+                    self.action_chain_broken = true;
+                } else {
+                    self.pending_action = Some(action_signature_for_act(&args));
+                }
                 Ok(json!({"status": "ok"}))
             }
             Err(err) => {
