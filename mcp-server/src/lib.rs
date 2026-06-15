@@ -906,6 +906,13 @@ enum SpeculativeOutcome {
     Hit,
     /// `force_refresh` was requested; speculation is bypassed entirely.
     MissForceRefresh,
+    /// The previous `get_state` served a speculative hit whose prediction
+    /// has not yet been checked against a real DOM capture. Speculation is
+    /// bypassed for this call to force a real capture, reconciling
+    /// `previous_semantic_state` with the live page before another
+    /// speculative hit can be served from it (Spec §3.5 / ISSUE-147
+    /// round-8 review).
+    MissUnverifiedPriorHit,
     /// There is no prior state or no action pending since the last
     /// `get_state`, so there is nothing to predict from.
     MissNoPendingAction,
@@ -935,6 +942,7 @@ fn resolve_speculative_state(
     last_action: Option<&ActionSignature>,
     pending_action: Option<&ActionSignature>,
     force_refresh: bool,
+    prior_hit_unverified: bool,
 ) -> (
     Option<Arc<SemanticState>>,
     Option<SpeculativePrediction>,
@@ -942,6 +950,10 @@ fn resolve_speculative_state(
 ) {
     if force_refresh {
         return (None, None, SpeculativeOutcome::MissForceRefresh);
+    }
+
+    if prior_hit_unverified {
+        return (None, None, SpeculativeOutcome::MissUnverifiedPriorHit);
     }
 
     let (Some(previous_state), Some(pending_action)) = (previous_state, pending_action) else {
@@ -1151,6 +1163,7 @@ impl CoreRuntimeBackend {
             self.last_action.as_ref(),
             self.pending_action.as_ref(),
             force_refresh,
+            self.last_served_prediction.is_some(),
         );
 
         if let (SpeculativeOutcome::Hit, Some(snapshot)) = (&outcome, snapshot) {
@@ -2034,6 +2047,7 @@ fn render_state_markdown(payload: &ExternalSemanticState) -> String {
         format!("- State Hash: {}", payload.metadata.state_hash),
         format!("- Load Profile: {}", payload.metadata.load_profile),
         format!("- Timestamp: {}", payload.metadata.timestamp),
+        format!("- Speculative: {}", payload.metadata.speculative),
         String::new(),
         "## Interactive Elements".to_string(),
     ];
@@ -2407,7 +2421,7 @@ mod tests {
         let pending = action("click:search_button");
 
         let (snapshot, prediction, outcome) =
-            resolve_speculative_state(&engine, Some(&previous), None, Some(&pending), true);
+            resolve_speculative_state(&engine, Some(&previous), None, Some(&pending), true, false);
 
         assert!(snapshot.is_none());
         assert!(prediction.is_none());
@@ -2420,7 +2434,7 @@ mod tests {
         let pending = action("click:search_button");
 
         let (snapshot, prediction, outcome) =
-            resolve_speculative_state(&engine, None, None, Some(&pending), false);
+            resolve_speculative_state(&engine, None, None, Some(&pending), false, false);
 
         assert!(snapshot.is_none());
         assert!(prediction.is_none());
@@ -2433,7 +2447,7 @@ mod tests {
         let previous = state_with_label("start");
 
         let (snapshot, prediction, outcome) =
-            resolve_speculative_state(&engine, Some(&previous), None, None, false);
+            resolve_speculative_state(&engine, Some(&previous), None, None, false, false);
 
         assert!(snapshot.is_none());
         assert!(prediction.is_none());
@@ -2447,7 +2461,7 @@ mod tests {
         let pending = action("click:search_button");
 
         let (snapshot, prediction, outcome) =
-            resolve_speculative_state(&engine, Some(&previous), None, Some(&pending), false);
+            resolve_speculative_state(&engine, Some(&previous), None, Some(&pending), false, false);
 
         assert!(snapshot.is_none());
         assert!(prediction.is_none());
@@ -2468,8 +2482,14 @@ mod tests {
 
         // The action actually executed (`other`) doesn't match the predicted
         // next action (`type_input`).
-        let (snapshot, prediction, outcome) =
-            resolve_speculative_state(&engine, Some(&previous), Some(&click), Some(&other), false);
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &engine,
+            Some(&previous),
+            Some(&click),
+            Some(&other),
+            false,
+            false,
+        );
 
         assert!(snapshot.is_none());
         assert_eq!(prediction.unwrap().predicted_action, type_input);
@@ -2494,6 +2514,7 @@ mod tests {
             Some(&previous),
             Some(&click),
             Some(&type_input),
+            false,
             false,
         );
 
@@ -2523,12 +2544,45 @@ mod tests {
             Some(&click),
             Some(&type_input),
             false,
+            false,
         );
 
         let snapshot = snapshot.expect("expected a cached snapshot on hit");
         assert_eq!(snapshot.state_hash(), next_state.state_hash());
         assert_eq!(prediction.unwrap().predicted_action, type_input);
         assert_eq!(outcome, SpeculativeOutcome::Hit);
+    }
+
+    #[test]
+    fn resolve_speculative_state_unverified_prior_hit_bypasses_speculation() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        let next_state = Arc::new(state_with_label("results page"));
+        let next_hash = next_state.state_hash().to_string();
+
+        engine.record_transition(previous.state_hash(), &click, &next_hash);
+        engine.record_transition(previous.state_hash(), &type_input, &next_hash);
+        engine.record_transition(previous.state_hash(), &type_input, &next_hash);
+        engine.observe_state(next_state.clone());
+
+        // Even though the engine would otherwise serve a Hit for this
+        // state/action pair, a still-unverified prior hit must force a real
+        // capture first (Spec §3.5 / ISSUE-147 round-8 review).
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &engine,
+            Some(&previous),
+            Some(&click),
+            Some(&type_input),
+            false,
+            true,
+        );
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissUnverifiedPriorHit);
     }
 
     // --- parse_semantic_wait_condition ---
@@ -3077,6 +3131,34 @@ mod tests {
         assert!(
             md.contains("security_flags=prompt_injection_risk"),
             "markdown must include security_flags: {md}"
+        );
+    }
+
+    #[test]
+    fn render_state_markdown_includes_speculative_flag() {
+        let mut payload = ExternalSemanticState {
+            metadata: StateMetadata {
+                url: "https://example.com".to_string(),
+                page_instance_id: "pid".to_string(),
+                state_hash: "hash".to_string(),
+                load_profile: "interactive".to_string(),
+                timestamp: 0,
+                speculative: true,
+            },
+            interactive_elements: vec![],
+        };
+
+        let md = render_state_markdown(&payload);
+        assert!(
+            md.contains("- Speculative: true"),
+            "markdown must include the speculative flag when true: {md}"
+        );
+
+        payload.metadata.speculative = false;
+        let md = render_state_markdown(&payload);
+        assert!(
+            md.contains("- Speculative: false"),
+            "markdown must include the speculative flag when false: {md}"
         );
     }
 
