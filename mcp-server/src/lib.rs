@@ -983,6 +983,24 @@ fn resolve_speculative_state(
     }
 }
 
+/// Whether [`CoreRuntimeBackend::record_speculative_observation`] should
+/// record a `previous_semantic_state -> state` transition under
+/// `pending_action` (Spec §3.5 / ISSUE-147 round-9 review).
+///
+/// A transition is only recorded when `pending_action` was executed since
+/// the last capture AND `previous_state` itself reflects a verified (real)
+/// DOM capture rather than an unverified speculative snapshot served by the
+/// `Hit` branch. Training a transition from an unverified snapshot risks
+/// recording an edge that does not exist in the live page's transition
+/// graph if that snapshot turns out to have been stale.
+fn should_record_transition(
+    previous_state_verified: bool,
+    previous_state: Option<&SemanticState>,
+    pending_action: Option<&ActionSignature>,
+) -> bool {
+    previous_state_verified && previous_state.is_some() && pending_action.is_some()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExternalSemanticState {
     pub metadata: StateMetadata,
@@ -1072,6 +1090,15 @@ pub struct CoreRuntimeBackend {
     /// resulting capture (which reflects more than one action past the
     /// prediction). Cleared once that capture has been processed.
     action_chain_broken: bool,
+    /// Whether `previous_semantic_state` reflects a real DOM capture that has
+    /// been observed by the speculative engine, as opposed to an unverified
+    /// speculative snapshot served by the `Hit` branch (Spec §3.5 /
+    /// ISSUE-147 round-9 review). `record_speculative_observation` must not
+    /// record a `previous -> current` transition from an unverified
+    /// speculative snapshot: if that snapshot was stale, the recorded edge
+    /// would train the engine on a transition that does not exist in the
+    /// live page's transition graph.
+    previous_state_verified: bool,
 }
 
 impl CoreRuntimeBackend {
@@ -1098,6 +1125,7 @@ impl CoreRuntimeBackend {
             speculative_misses: 0,
             last_served_prediction: None,
             action_chain_broken: false,
+            previous_state_verified: true,
         }
     }
 
@@ -1181,6 +1209,11 @@ impl CoreRuntimeBackend {
             self.last_served_prediction = prediction;
             self.last_action = self.pending_action.take();
             self.previous_semantic_state = Some(state);
+            // `state` is an unverified speculative snapshot (Spec §3.5 /
+            // ISSUE-147 round-9 review): until a real capture reconciles it,
+            // `record_speculative_observation` must not train a transition
+            // from it.
+            self.previous_state_verified = false;
             // Deliberately do NOT populate `state_cache` (Spec §3.5 /
             // ISSUE-147 review): caching this unverified speculative payload
             // would make every subsequent non-forced `get_state` return it
@@ -1238,7 +1271,12 @@ impl CoreRuntimeBackend {
     ///   prediction is discarded without verification.
     /// - Caches `state` so it can be served by a future pre-generation.
     /// - Records the `previous_semantic_state -> state` transition under
-    ///   `pending_action`, if one was executed since the last capture.
+    ///   `pending_action`, if one was executed since the last capture and
+    ///   `previous_semantic_state` is itself a verified (real) capture
+    ///   (`previous_state_verified`). If `previous_semantic_state` is an
+    ///   unverified speculative snapshot, training a transition from it
+    ///   risks recording an edge that does not exist in the live page's
+    ///   transition graph (Spec §3.5 / ISSUE-147 round-9 review).
     fn record_speculative_observation(&mut self, state: &SemanticState) {
         if let Some(served) = self.last_served_prediction.take() {
             if self.pending_action.is_none() && !self.action_chain_broken {
@@ -1248,15 +1286,28 @@ impl CoreRuntimeBackend {
 
         self.speculative.observe_state(Arc::new(state.clone()));
 
-        if let (Some(previous), Some(pending)) = (
+        if should_record_transition(
+            self.previous_state_verified,
             self.previous_semantic_state.as_ref(),
             self.pending_action.as_ref(),
         ) {
+            let previous = self
+                .previous_semantic_state
+                .as_ref()
+                .expect("checked by should_record_transition");
+            let pending = self
+                .pending_action
+                .as_ref()
+                .expect("checked by should_record_transition");
             self.speculative
                 .record_transition(previous.state_hash(), pending, state.state_hash());
         }
 
         self.action_chain_broken = false;
+        // `state` is this real DOM capture, which the caller is about to
+        // assign to `previous_semantic_state` (Spec §3.5 / ISSUE-147
+        // round-9 review): future transitions may be trained from it.
+        self.previous_state_verified = true;
     }
 
     fn build_external_state(
@@ -1368,6 +1419,7 @@ impl McpBackend for CoreRuntimeBackend {
                     // Reset both caches so the next delta starts from a clean baseline.
                     self.state_cache = None;
                     self.previous_semantic_state = None;
+                    self.previous_state_verified = true;
                     // Also clear the speculative action/prediction history
                     // (Spec §3.5 / ISSUE-147 review): with
                     // `previous_semantic_state` cleared,
@@ -1762,6 +1814,7 @@ impl McpBackend for CoreRuntimeBackend {
         self.page = new_page;
         self.state_cache = None;
         self.previous_semantic_state = None;
+        self.previous_state_verified = true;
         // The new page is a fresh CDP session with new backend node IDs and
         // a new `page_instance_id` (Spec §3.5 / ISSUE-147 review): any
         // pending speculative bookkeeping and cached snapshots refer to the
@@ -2583,6 +2636,46 @@ mod tests {
         assert!(snapshot.is_none());
         assert!(prediction.is_none());
         assert_eq!(outcome, SpeculativeOutcome::MissUnverifiedPriorHit);
+    }
+
+    // --- should_record_transition ---
+
+    #[test]
+    fn should_record_transition_false_when_previous_state_unverified() {
+        let previous = state_with_label("start");
+        let pending = action("click:search_button");
+
+        assert!(!should_record_transition(
+            false,
+            Some(&previous),
+            Some(&pending)
+        ));
+    }
+
+    #[test]
+    fn should_record_transition_true_when_previous_state_verified_and_pending_action_set() {
+        let previous = state_with_label("start");
+        let pending = action("click:search_button");
+
+        assert!(should_record_transition(
+            true,
+            Some(&previous),
+            Some(&pending)
+        ));
+    }
+
+    #[test]
+    fn should_record_transition_false_when_no_pending_action() {
+        let previous = state_with_label("start");
+
+        assert!(!should_record_transition(true, Some(&previous), None));
+    }
+
+    #[test]
+    fn should_record_transition_false_when_no_previous_state() {
+        let pending = action("click:search_button");
+
+        assert!(!should_record_transition(true, None, Some(&pending)));
     }
 
     // --- parse_semantic_wait_condition ---

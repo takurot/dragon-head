@@ -5,15 +5,16 @@
 //! calls through the MCP layer. After enough repetitions, the speculative
 //! engine learns the action sequence and the final `get_state` call is served
 //! from a verified pre-generated snapshot (`metadata.speculative == true`),
-//! with lower TTFT than an earlier full-capture call.
-use std::time::Instant;
-
+//! bypassing the CDP DOM capture entirely. The bypass is verified directly
+//! via `metadata.speculative` and the `get_usage_report` counters rather than
+//! by comparing elapsed wall-clock time, which is prone to scheduler jitter
+//! on loaded or virtualized CI hosts (Spec §3.5 / ISSUE-147 round-9 review).
 use core_runtime::BrowserClient;
 use mcp_server::{CoreRuntimeBackend, McpServer};
 use serde_json::json;
 
 #[test]
-fn repeat_traversal_serves_speculative_hit_with_lower_ttft() -> anyhow::Result<()> {
+fn repeat_traversal_serves_speculative_hit_without_real_capture() -> anyhow::Result<()> {
     if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
@@ -78,10 +79,8 @@ fn repeat_traversal_serves_speculative_hit_with_lower_ttft() -> anyhow::Result<(
     assert_eq!(state_1["metadata"]["speculative"], json!(false));
     click_current_button(&mut server, &state_1)?; // -> page B
 
-    // Call 3: full capture of page B (a speculative miss — baseline TTFT).
-    let started = Instant::now();
+    // Call 3: full capture of page B (a speculative miss).
     let state_3 = server.call_tool("get_state", json!({ "format": "json" }))?;
-    let baseline_ttft = started.elapsed();
     assert_eq!(state_3["metadata"]["speculative"], json!(false));
     click_current_button(&mut server, &state_3)?; // -> page A
 
@@ -98,9 +97,7 @@ fn repeat_traversal_serves_speculative_hit_with_lower_ttft() -> anyhow::Result<(
 
     // Call 9: the engine should now predict "back-to-list, then show-details"
     // and serve the cached page-A snapshot directly — a speculative hit.
-    let started = Instant::now();
     let state_9 = server.call_tool("get_state", json!({ "format": "json" }))?;
-    let hit_ttft = started.elapsed();
 
     assert_eq!(
         state_9["metadata"]["speculative"],
@@ -115,12 +112,6 @@ fn repeat_traversal_serves_speculative_hit_with_lower_ttft() -> anyhow::Result<(
     assert_eq!(
         state_9["interactive_elements"][0]["alias"],
         state_5["interactive_elements"][0]["alias"]
-    );
-
-    assert!(
-        hit_ttft < baseline_ttft,
-        "speculative-hit TTFT {hit_ttft:?} should be faster than the full-capture baseline \
-         TTFT {baseline_ttft:?} (no CDP DOM capture round-trip on a verified hit)"
     );
 
     let usage_report = server.call_tool("get_usage_report", json!({}))?;
