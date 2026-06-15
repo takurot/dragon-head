@@ -141,6 +141,20 @@ impl SpeculativeEngine {
         self.lock().last_action = None;
     }
 
+    /// Sets the engine-internal action-sequence cursor (`last_action`) to
+    /// `action` without recording a transition (Spec §3.5 / ISSUE-147
+    /// round-10 review).
+    ///
+    /// Used when [`Self::record_transition`] is skipped because
+    /// `previous_semantic_state` was an unverified speculative snapshot, but
+    /// `action` was nonetheless executed and observed by the caller: without
+    /// this, the engine's cursor would remain on the action *before* `action`,
+    /// so the next [`Self::record_transition`] would link its action to the
+    /// wrong predecessor, training a false action-sequence edge.
+    pub fn advance_action_cursor(&self, action: &ActionSignature) {
+        self.lock().last_action = Some(action.clone());
+    }
+
     /// Cache an observed state by its hash, making it servable via
     /// [`Self::pre_generate`] on a future cache hit. Bounded by
     /// `SNAPSHOT_CACHE_CAPACITY`: the oldest-observed snapshot is evicted
@@ -266,6 +280,32 @@ impl SpeculativeEngine {
             actual_state_hash,
             snapshot,
         }
+    }
+
+    /// Corrects the transition model after a speculative-hit mismatch
+    /// (Spec §3.5 / ISSUE-147 round-10 review): removes the stale
+    /// `from_state_hash --action--> stale_to_state_hash` entry (so the
+    /// known-wrong snapshot is not predicted again) and records the
+    /// actually-observed `from_state_hash --action--> actual_to_state_hash`
+    /// transition, then advances the engine-internal action cursor to
+    /// `action` (consistent with [`Self::record_transition`]).
+    pub fn correct_transition(
+        &self,
+        from_state_hash: &str,
+        action: &ActionSignature,
+        stale_to_state_hash: &str,
+        actual_to_state_hash: &str,
+    ) {
+        let mut inner = self.lock();
+        let prior = inner.last_action.clone();
+        inner.model.correct_transition(
+            from_state_hash,
+            action,
+            stale_to_state_hash,
+            actual_to_state_hash,
+            prior.as_ref(),
+        );
+        inner.last_action = Some(action.clone());
     }
 
     /// Export the portable action-sequence table as a FlatBuffers byte
@@ -541,6 +581,52 @@ mod tests {
         let prediction = imported.predict("hash_b", Some(&click)).unwrap();
         assert_eq!(prediction.predicted_action, type_input);
         assert_eq!(prediction.confidence, 1.0);
+    }
+
+    #[test]
+    fn correct_transition_stops_serving_stale_snapshot_and_serves_actual_one() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let click = action("click:search_button");
+
+        // The engine learned (incorrectly) that hash_a --click--> hash_stale.
+        engine.record_transition("hash_a", &click, "hash_stale");
+
+        engine.correct_transition("hash_a", &click, "hash_stale", "hash_actual");
+
+        let inner = engine.lock();
+        assert_eq!(
+            inner.model.predict_state("hash_a", &click),
+            Some(("hash_actual".to_string(), 1.0))
+        );
+    }
+
+    #[test]
+    fn correct_transition_advances_action_cursor() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        engine.correct_transition("hash_a", &click, "hash_stale", "hash_actual");
+
+        // The cursor now points at `click`, so the next recorded transition
+        // links `click -> type_input` in the portable action-sequence table.
+        engine.record_transition("hash_actual", &type_input, "hash_b");
+
+        let prediction = engine.predict("hash_actual", Some(&click)).unwrap();
+        assert_eq!(prediction.predicted_action, type_input);
+    }
+
+    #[test]
+    fn advance_action_cursor_sets_prior_action_for_next_transition() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        engine.advance_action_cursor(&click);
+        engine.record_transition("hash_a", &type_input, "hash_b");
+
+        let prediction = engine.predict("hash_a", Some(&click)).unwrap();
+        assert_eq!(prediction.predicted_action, type_input);
     }
 
     #[test]

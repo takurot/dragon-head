@@ -3,7 +3,7 @@ pub mod doctor;
 
 use anyhow::{Context, Result};
 use core_runtime::{
-    speculative::{ActionSignature, SpeculativeEngine, SpeculativePrediction},
+    speculative::{ActionSignature, SpeculativeEngine, SpeculativePrediction, StateDelta},
     sre::{LoadProfile, SemanticNode},
     ActionError, ApprovalScope, BrowserClient, DeltaPolicy, PageSession, PolicyRule,
     PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig, SemanticState,
@@ -1099,6 +1099,16 @@ pub struct CoreRuntimeBackend {
     /// would train the engine on a transition that does not exist in the
     /// live page's transition graph.
     previous_state_verified: bool,
+    /// The `state_hash` of `previous_semantic_state` at the time
+    /// `last_served_prediction` was generated, i.e. the `from_state_hash`
+    /// of the `(from_state_hash, predicted_action) -> predicted_state_hash`
+    /// transition that prediction represents (Spec §3.5 / ISSUE-147
+    /// round-10 review). Needed to correct that transition in the
+    /// transition model if `last_served_prediction` turns out to have been
+    /// stale, since by the time it is verified `previous_semantic_state`
+    /// has already been overwritten with the (unverified) speculative
+    /// snapshot the prediction described.
+    last_served_prediction_source_hash: Option<String>,
 }
 
 impl CoreRuntimeBackend {
@@ -1126,6 +1136,7 @@ impl CoreRuntimeBackend {
             last_served_prediction: None,
             action_chain_broken: false,
             previous_state_verified: true,
+            last_served_prediction_source_hash: None,
         }
     }
 
@@ -1206,6 +1217,16 @@ impl CoreRuntimeBackend {
             // The new prediction describes `state` (the snapshot just
             // served), which the next real capture *can* validate against
             // (assuming no further chaining), so it replaces the stale one.
+            // Capture the `from_state_hash` this prediction was generated
+            // from *before* it is overwritten below (Spec §3.5 /
+            // ISSUE-147 round-10 review): if the prediction turns out to be
+            // stale, `record_speculative_observation` needs this hash to
+            // correct the `(from_state_hash, predicted_action)` entry in
+            // the transition model.
+            self.last_served_prediction_source_hash = self
+                .previous_semantic_state
+                .as_ref()
+                .map(|s| s.state_hash().to_string());
             self.last_served_prediction = prediction;
             self.last_action = self.pending_action.take();
             self.previous_semantic_state = Some(state);
@@ -1268,7 +1289,13 @@ impl CoreRuntimeBackend {
     ///   after more than the predicted single action, not the state the
     ///   prediction described, and comparing the two would report a false
     ///   mismatch (Spec §3.5 / ISSUE-147 review). In that case the stale
-    ///   prediction is discarded without verification.
+    ///   prediction is discarded without verification. When verification
+    ///   *does* report a mismatch, the stale
+    ///   `(last_served_prediction_source_hash, served.predicted_action) ->
+    ///   predicted_state_hash` transition is corrected to point at
+    ///   `actual_state_hash` instead, so the same known-wrong snapshot is
+    ///   not served again on a repeat of this action (Spec §3.5 /
+    ///   ISSUE-147 round-10 review).
     /// - Caches `state` so it can be served by a future pre-generation.
     /// - Records the `previous_semantic_state -> state` transition under
     ///   `pending_action`, if one was executed since the last capture and
@@ -1276,11 +1303,39 @@ impl CoreRuntimeBackend {
     ///   (`previous_state_verified`). If `previous_semantic_state` is an
     ///   unverified speculative snapshot, training a transition from it
     ///   risks recording an edge that does not exist in the live page's
-    ///   transition graph (Spec §3.5 / ISSUE-147 round-9 review).
+    ///   transition graph (Spec §3.5 / ISSUE-147 round-9 review). Either
+    ///   way, the engine's internal action-sequence cursor is advanced to
+    ///   `pending_action` (or cleared if none), keeping it in sync with
+    ///   `self.last_action` once the caller promotes `pending_action`
+    ///   (Spec §3.5 / ISSUE-147 round-10 review).
     fn record_speculative_observation(&mut self, state: &SemanticState) {
         if let Some(served) = self.last_served_prediction.take() {
+            let source_hash = self.last_served_prediction_source_hash.take();
             if self.pending_action.is_none() && !self.action_chain_broken {
-                self.speculative.verify(&served, state);
+                let delta = self.speculative.verify(&served, state);
+                // A mismatch means the snapshot served by the `Hit` branch
+                // was stale (Spec §3.5 / ISSUE-147 round-10 review):
+                // without correction, the transition model keeps predicting
+                // that same known-wrong snapshot for
+                // `(source_hash, served.predicted_action)` on every repeat
+                // of this action. Replace it with the actually-observed
+                // outcome.
+                if let (
+                    StateDelta::Mismatch {
+                        predicted_state_hash,
+                        actual_state_hash,
+                        ..
+                    },
+                    Some(from_hash),
+                ) = (&delta, &source_hash)
+                {
+                    self.speculative.correct_transition(
+                        from_hash,
+                        &served.predicted_action,
+                        predicted_state_hash,
+                        actual_state_hash,
+                    );
+                }
             }
         }
 
@@ -1301,6 +1356,18 @@ impl CoreRuntimeBackend {
                 .expect("checked by should_record_transition");
             self.speculative
                 .record_transition(previous.state_hash(), pending, state.state_hash());
+        } else if let Some(pending) = self.pending_action.as_ref() {
+            // `record_transition` was skipped, but `pending` was still
+            // executed and is about to be promoted to `self.last_action`
+            // below (Spec §3.5 / ISSUE-147 round-10 review). Advance the
+            // engine's internal action-sequence cursor to match, so the
+            // next `record_transition` links its action to `pending` rather
+            // than to whichever action the cursor was last left on.
+            self.speculative.advance_action_cursor(pending);
+        } else {
+            // No action is pending, so `self.last_action` is about to become
+            // `None` too; keep the engine's cursor in sync.
+            self.speculative.clear_action_cursor();
         }
 
         self.action_chain_broken = false;
@@ -1436,6 +1503,7 @@ impl McpBackend for CoreRuntimeBackend {
                     self.pending_action = None;
                     self.last_action = None;
                     self.last_served_prediction = None;
+                    self.last_served_prediction_source_hash = None;
                     self.action_chain_broken = false;
                     // Likewise reset the engine's own action-sequence cursor
                     // (Spec §3.5 / ISSUE-147 review): otherwise the next
@@ -1822,6 +1890,7 @@ impl McpBackend for CoreRuntimeBackend {
         self.pending_action = None;
         self.last_action = None;
         self.last_served_prediction = None;
+        self.last_served_prediction_source_hash = None;
         self.action_chain_broken = false;
         self.speculative.reset_session();
         self.browser_restarts = restart_count;

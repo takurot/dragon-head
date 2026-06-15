@@ -131,6 +131,30 @@ impl TransitionModel {
         Some(most_frequent(observed))
     }
 
+    /// Corrects the model after a speculative-hit mismatch (Spec §3.5 /
+    /// ISSUE-147 round-10 review): removes the stale
+    /// `from_state_hash --action--> stale_to_state_hash` count so the
+    /// known-wrong snapshot is no longer predicted, then records the
+    /// actually-observed `from_state_hash --action--> actual_to_state_hash`
+    /// transition (and its `prior_action` link) via [`Self::record`].
+    pub fn correct_transition(
+        &mut self,
+        from_state_hash: &str,
+        action: &ActionSignature,
+        stale_to_state_hash: &str,
+        actual_to_state_hash: &str,
+        prior_action: Option<&ActionSignature>,
+    ) {
+        let key = (from_state_hash.to_string(), action.clone());
+        if let Some(targets) = self.state_transitions.get_mut(&key) {
+            targets.remove(stale_to_state_hash);
+            if targets.is_empty() {
+                self.state_transitions.remove(&key);
+            }
+        }
+        self.record(from_state_hash, action, actual_to_state_hash, prior_action);
+    }
+
     /// Snapshot the portable action-sequence table as `(from, to, count)`
     /// records, suitable for FlatBuffers export via [`super::codec`].
     pub fn action_sequence_records(&self) -> Vec<(ActionSignature, ActionSignature, u32)> {
@@ -305,6 +329,61 @@ mod tests {
         assert_eq!(
             model.action_sequence_records(),
             vec![(click, type_input, 5)]
+        );
+    }
+
+    #[test]
+    fn correct_transition_replaces_stale_prediction_with_actual_outcome() {
+        let mut model = TransitionModel::new();
+        let click = action("click:search_button");
+
+        // The engine previously learned hash_a --click--> hash_stale.
+        model.record("hash_a", &click, "hash_stale", None);
+
+        model.correct_transition("hash_a", &click, "hash_stale", "hash_actual", None);
+
+        // The stale prediction is gone; the actually-observed outcome wins.
+        assert_eq!(
+            model.predict_state("hash_a", &click),
+            Some(("hash_actual".to_string(), 1.0))
+        );
+    }
+
+    #[test]
+    fn correct_transition_records_prior_action_link() {
+        let mut model = TransitionModel::new();
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        model.record("hash_a", &click, "hash_stale", None);
+
+        model.correct_transition(
+            "hash_a",
+            &click,
+            "hash_stale",
+            "hash_actual",
+            Some(&type_input),
+        );
+
+        let (predicted, _) = model.predict_action(Some(&type_input), &[]).unwrap();
+        assert_eq!(predicted, click);
+    }
+
+    #[test]
+    fn correct_transition_leaves_other_targets_for_same_action_intact() {
+        let mut model = TransitionModel::new();
+        let click = action("click:search_button");
+
+        model.record("hash_a", &click, "hash_stale", None);
+        model.record("hash_a", &click, "hash_other", None);
+        model.record("hash_a", &click, "hash_other", None);
+
+        model.correct_transition("hash_a", &click, "hash_stale", "hash_actual", None);
+
+        // hash_other (count 2) still outweighs the freshly-recorded hash_actual (count 1).
+        assert_eq!(
+            model.predict_state("hash_a", &click),
+            Some(("hash_other".to_string(), 2.0 / 3.0))
         );
     }
 
