@@ -147,7 +147,17 @@ impl TransitionModel {
     ) {
         let key = (from_state_hash.to_string(), action.clone());
         if let Some(targets) = self.state_transitions.get_mut(&key) {
-            targets.remove(stale_to_state_hash);
+            // Decrement one count rather than erasing all evidence, so
+            // nondeterministic transitions (same state/action legitimately
+            // producing multiple outcomes) don't lose accumulated observations
+            // on a single mismatch (Spec §3.5 / ISSUE-147 round-11 review).
+            if let Some(count) = targets.get_mut(stale_to_state_hash) {
+                if *count <= 1 {
+                    targets.remove(stale_to_state_hash);
+                } else {
+                    *count -= 1;
+                }
+            }
             if targets.is_empty() {
                 self.state_transitions.remove(&key);
             }
@@ -367,6 +377,23 @@ mod tests {
 
         let (predicted, _) = model.predict_action(Some(&type_input), &[]).unwrap();
         assert_eq!(predicted, click);
+    }
+
+    #[test]
+    fn correct_transition_decrements_stale_count_without_erasing_all_evidence() {
+        let mut model = TransitionModel::new();
+        let click = action("click:search_button");
+
+        for _ in 0..4 {
+            model.record("hash_a", &click, "hash_stale", None);
+        }
+
+        model.correct_transition("hash_a", &click, "hash_stale", "hash_actual", None);
+
+        // hash_stale decremented to 3; hash_actual added with count 1.
+        let (predicted, confidence) = model.predict_state("hash_a", &click).unwrap();
+        assert_eq!(predicted, "hash_stale");
+        assert_eq!(confidence, 3.0 / 4.0);
     }
 
     #[test]
