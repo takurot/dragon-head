@@ -1001,6 +1001,44 @@ fn should_record_transition(
     previous_state_verified && previous_state.is_some() && pending_action.is_some()
 }
 
+/// Verifies the most recently served speculative hit against a real DOM
+/// capture and corrects the transition model when the cached snapshot was
+/// stale.
+fn reconcile_served_prediction(
+    speculative: &SpeculativeEngine,
+    last_served_prediction: &mut Option<SpeculativePrediction>,
+    last_served_prediction_source_hash: &mut Option<String>,
+    pending_action: Option<&ActionSignature>,
+    action_chain_broken: bool,
+    state: &SemanticState,
+) {
+    let Some(served) = last_served_prediction.take() else {
+        return;
+    };
+    let source_hash = last_served_prediction_source_hash.take();
+    if pending_action.is_some() || action_chain_broken {
+        return;
+    }
+
+    let delta = speculative.verify(&served, state);
+    if let (
+        StateDelta::Mismatch {
+            predicted_state_hash,
+            actual_state_hash,
+            ..
+        },
+        Some(from_hash),
+    ) = (&delta, &source_hash)
+    {
+        speculative.correct_transition(
+            from_hash,
+            &served.predicted_action,
+            predicted_state_hash,
+            actual_state_hash,
+        );
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExternalSemanticState {
     pub metadata: StateMetadata,
@@ -1250,6 +1288,7 @@ impl CoreRuntimeBackend {
         let raw_state = self.page.capture_semantic_state(LoadProfile::Interactive)?;
         let state = raw_state.sanitized_with(&self.injection_sanitizer);
 
+        let was_chain_broken = self.action_chain_broken;
         self.record_speculative_observation(&state);
 
         if matches!(outcome, SpeculativeOutcome::MissPreGenerateNone) {
@@ -1270,7 +1309,19 @@ impl CoreRuntimeBackend {
         let state_copy = state.clone();
         let payload = self.build_external_state(state, false)?;
 
-        self.last_action = self.pending_action.take();
+        // Only promote `pending_action` to `last_action` when an action
+        // actually occurred (Spec §3.5 / ISSUE-147 round-11 review):
+        // leaving `last_action` unchanged on duplicate captures (no
+        // intervening `act`) preserves the learned action-sequence history
+        // so future speculation can still use it. Chain breaks (where
+        // `act()` already cleared both cursors) are identified via
+        // `was_chain_broken` captured before `record_speculative_observation`
+        // reset `action_chain_broken`.
+        if let Some(action) = self.pending_action.take() {
+            self.last_action = Some(action);
+        } else if was_chain_broken {
+            self.last_action = None;
+        }
         self.previous_semantic_state = Some(state_copy);
         self.state_cache = Some(payload.clone());
         Ok(payload)
@@ -1304,40 +1355,21 @@ impl CoreRuntimeBackend {
     ///   unverified speculative snapshot, training a transition from it
     ///   risks recording an edge that does not exist in the live page's
     ///   transition graph (Spec §3.5 / ISSUE-147 round-9 review). Either
-    ///   way, the engine's internal action-sequence cursor is advanced to
-    ///   `pending_action` (or cleared if none), keeping it in sync with
-    ///   `self.last_action` once the caller promotes `pending_action`
-    ///   (Spec §3.5 / ISSUE-147 round-10 review).
+    ///   way, if `pending_action` is set, the engine's action-sequence
+    ///   cursor is advanced to match so the next `record_transition` links
+    ///   to the correct prior action (Spec §3.5 / ISSUE-147 round-10
+    ///   review). If `pending_action` is `None` (duplicate capture, no
+    ///   intervening `act`), both cursors are left unchanged to preserve
+    ///   the learned action-sequence history (round-11 review).
     fn record_speculative_observation(&mut self, state: &SemanticState) {
-        if let Some(served) = self.last_served_prediction.take() {
-            let source_hash = self.last_served_prediction_source_hash.take();
-            if self.pending_action.is_none() && !self.action_chain_broken {
-                let delta = self.speculative.verify(&served, state);
-                // A mismatch means the snapshot served by the `Hit` branch
-                // was stale (Spec §3.5 / ISSUE-147 round-10 review):
-                // without correction, the transition model keeps predicting
-                // that same known-wrong snapshot for
-                // `(source_hash, served.predicted_action)` on every repeat
-                // of this action. Replace it with the actually-observed
-                // outcome.
-                if let (
-                    StateDelta::Mismatch {
-                        predicted_state_hash,
-                        actual_state_hash,
-                        ..
-                    },
-                    Some(from_hash),
-                ) = (&delta, &source_hash)
-                {
-                    self.speculative.correct_transition(
-                        from_hash,
-                        &served.predicted_action,
-                        predicted_state_hash,
-                        actual_state_hash,
-                    );
-                }
-            }
-        }
+        reconcile_served_prediction(
+            &self.speculative,
+            &mut self.last_served_prediction,
+            &mut self.last_served_prediction_source_hash,
+            self.pending_action.as_ref(),
+            self.action_chain_broken,
+            state,
+        );
 
         self.speculative.observe_state(Arc::new(state.clone()));
 
@@ -1364,11 +1396,15 @@ impl CoreRuntimeBackend {
             // next `record_transition` links its action to `pending` rather
             // than to whichever action the cursor was last left on.
             self.speculative.advance_action_cursor(pending);
-        } else {
-            // No action is pending, so `self.last_action` is about to become
-            // `None` too; keep the engine's cursor in sync.
-            self.speculative.clear_action_cursor();
         }
+        // When `pending_action` is `None` and no chain was broken: a real
+        // capture happened with no intervening action (e.g. two consecutive
+        // `get_state` calls). Leave the engine cursor and `self.last_action`
+        // unchanged so the learned action-sequence history is preserved
+        // (Spec §3.5 / ISSUE-147 round-11 review). For the chain-break
+        // case (`action_chain_broken == true`), `clear_action_cursor()` was
+        // already called in `act()` before this capture, so no reset needed
+        // here either.
 
         self.action_chain_broken = false;
         // `state` is this real DOM capture, which the caller is about to
@@ -1550,8 +1586,13 @@ impl McpBackend for CoreRuntimeBackend {
                 // a later full `get_state` to treat an already-applied action as
                 // newly executed and serve a snapshot for a state past the
                 // current one.
+                let was_chain_broken = self.action_chain_broken;
                 self.record_speculative_observation(&current);
-                self.last_action = self.pending_action.take();
+                if let Some(action) = self.pending_action.take() {
+                    self.last_action = Some(action);
+                } else if was_chain_broken {
+                    self.last_action = None;
+                }
                 self.previous_semantic_state = Some(current);
                 Ok(response)
             }
@@ -1561,6 +1602,42 @@ impl McpBackend for CoreRuntimeBackend {
     fn act(&mut self, arguments: Value) -> Result<Value> {
         let args: ActArguments =
             serde_json::from_value(arguments).context("invalid act arguments")?;
+
+        // When a speculative hit was served but not yet verified against the
+        // real DOM (no `get_state` real-capture since the hit), verify it
+        // *before* this action alters the page (Spec §3.5 / ISSUE-147
+        // round-11 review). Verification is only valid when no action has
+        // been chained since the hit (`pending_action.is_none() &&
+        // !action_chain_broken`). On mismatch, the stale transition is
+        // corrected immediately so the same wrong snapshot isn't served again.
+        // On capture failure, the verification block is skipped and
+        // `last_served_prediction` is discarded later by
+        // `record_speculative_observation` as in the pre-round-11 path.
+        if self.last_served_prediction.is_some()
+            && self.pending_action.is_none()
+            && !self.action_chain_broken
+        {
+            if let Ok(real_pre) = self.page.capture_semantic_state(LoadProfile::Interactive) {
+                let real_pre = real_pre.sanitized_with(&self.injection_sanitizer);
+                reconcile_served_prediction(
+                    &self.speculative,
+                    &mut self.last_served_prediction,
+                    &mut self.last_served_prediction_source_hash,
+                    self.pending_action.as_ref(),
+                    self.action_chain_broken,
+                    &real_pre,
+                );
+                // Cache the verified real pre-action state. The engine cursor
+                // is updated by `correct_transition` above (or left at the
+                // previous action's cursor if the prediction was correct),
+                // so `self.last_action` and `inner.last_action` both still
+                // point at the action that led to `real_pre` — which is
+                // correct for training the upcoming `record_transition`.
+                self.speculative.observe_state(Arc::new(real_pre.clone()));
+                self.previous_semantic_state = Some(real_pre);
+                self.previous_state_verified = true;
+            }
+        }
 
         match self.page.act(
             args.target_id,
@@ -2745,6 +2822,75 @@ mod tests {
         let pending = action("click:search_button");
 
         assert!(!should_record_transition(true, None, Some(&pending)));
+    }
+
+    #[test]
+    fn reconcile_served_prediction_corrects_stale_hit_transition() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let prior = action("click:open_details");
+        let click = action("click:back_to_list");
+        let previous = state_with_label("details page");
+        let stale = Arc::new(state_with_label("stale list page"));
+        let actual = state_with_label("fresh list page");
+
+        engine.record_transition("intro", &prior, previous.state_hash());
+        engine.record_transition(previous.state_hash(), &click, stale.state_hash());
+        engine.observe_state(stale.clone());
+        engine.observe_state(Arc::new(actual.clone()));
+
+        let mut served = Some(SpeculativePrediction {
+            predicted_action: click.clone(),
+            predicted_state_hash: Some(stale.state_hash().to_string()),
+            confidence: 1.0,
+        });
+        let mut source_hash = Some(previous.state_hash().to_string());
+
+        reconcile_served_prediction(&engine, &mut served, &mut source_hash, None, false, &actual);
+
+        assert!(served.is_none());
+        assert!(source_hash.is_none());
+        let corrected = engine
+            .pre_generate(previous.state_hash(), Some(&prior))
+            .expect("corrected transition should serve the actual snapshot");
+        assert_eq!(corrected.state_hash(), actual.state_hash());
+    }
+
+    #[test]
+    fn reconcile_served_prediction_skips_correction_during_action_chain() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let prior = action("click:open_details");
+        let click = action("click:back_to_list");
+        let pending = action("click:next_page");
+        let previous = state_with_label("details page");
+        let stale = Arc::new(state_with_label("stale list page"));
+        let actual = state_with_label("fresh list page");
+
+        engine.record_transition("intro", &prior, previous.state_hash());
+        engine.record_transition(previous.state_hash(), &click, stale.state_hash());
+        engine.observe_state(stale.clone());
+
+        let mut served = Some(SpeculativePrediction {
+            predicted_action: click.clone(),
+            predicted_state_hash: Some(stale.state_hash().to_string()),
+            confidence: 1.0,
+        });
+        let mut source_hash = Some(previous.state_hash().to_string());
+
+        reconcile_served_prediction(
+            &engine,
+            &mut served,
+            &mut source_hash,
+            Some(&pending),
+            false,
+            &actual,
+        );
+
+        assert!(served.is_none());
+        assert!(source_hash.is_none());
+        let still_stale = engine
+            .pre_generate(previous.state_hash(), Some(&prior))
+            .expect("chained actions must not rewrite the single-action transition");
+        assert_eq!(still_stale.state_hash(), stale.state_hash());
     }
 
     // --- parse_semantic_wait_condition ---
