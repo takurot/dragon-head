@@ -3,6 +3,7 @@ pub mod doctor;
 
 use anyhow::{Context, Result};
 use core_runtime::{
+    speculative::{ActionSignature, SpeculativeEngine, SpeculativePrediction, StateDelta},
     sre::{LoadProfile, SemanticNode},
     ActionError, ApprovalScope, BrowserClient, DeltaPolicy, PageSession, PolicyRule,
     PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig, SemanticState,
@@ -18,6 +19,7 @@ use skills_engine::{
 };
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -59,6 +61,10 @@ pub struct StateGenerationUsage {
     pub fast: u64,
     pub full: u64,
     pub delta: u64,
+    /// Number of `get_state` calls served from a verified speculative
+    /// pre-generation (near-zero TTFT hit, Spec §3.5 / ISSUE-147).
+    #[serde(default)]
+    pub speculative: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -73,6 +79,11 @@ pub struct UsageReport {
     /// Number of times the underlying Chrome process was automatically
     /// restarted after a crash/disconnect (ISSUE-149).
     pub browser_restarts: u64,
+    /// Number of `get_state` calls where a speculative prediction was
+    /// attempted but missed, falling back to a full state capture
+    /// (ISSUE-147).
+    #[serde(default)]
+    pub speculative_misses: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -103,6 +114,7 @@ impl UsageMeters {
         plan_tier: PlanTier,
         audit_retention: AuditRetentionSnapshot,
         browser_restarts: u64,
+        speculative_misses: u64,
     ) -> UsageReport {
         let cost_microusd = estimate_usage_cost(
             plan_tier,
@@ -122,6 +134,7 @@ impl UsageMeters {
             audit_retention,
             cost_microusd,
             browser_restarts,
+            speculative_misses,
         }
     }
 }
@@ -156,6 +169,10 @@ struct PricingRateCard {
     state_fast: u64,
     state_full: u64,
     state_delta: u64,
+    /// Rate per speculative (cache-hit) state generation. Kept below
+    /// `state_fast` to reflect the near-zero marginal cost of serving a
+    /// pre-generated snapshot (Spec §3.5 / ISSUE-147).
+    state_speculative: u64,
     visual_capture: u64,
     action_executed: u64,
     hitl_event: u64,
@@ -168,6 +185,7 @@ fn pricing_rate_card(plan_tier: PlanTier) -> PricingRateCard {
             state_fast: 0,
             state_full: 0,
             state_delta: 0,
+            state_speculative: 0,
             visual_capture: 0,
             action_executed: 0,
             hitl_event: 0,
@@ -177,6 +195,7 @@ fn pricing_rate_card(plan_tier: PlanTier) -> PricingRateCard {
             state_fast: 100,
             state_full: 250,
             state_delta: 50,
+            state_speculative: 20,
             visual_capture: 1_000,
             action_executed: 75,
             hitl_event: 1_500,
@@ -186,6 +205,7 @@ fn pricing_rate_card(plan_tier: PlanTier) -> PricingRateCard {
             state_fast: 80,
             state_full: 200,
             state_delta: 40,
+            state_speculative: 15,
             visual_capture: 850,
             action_executed: 60,
             hitl_event: 1_200,
@@ -209,7 +229,12 @@ pub fn estimate_usage_cost(
         .fast
         .saturating_mul(rates.state_fast)
         .saturating_add(state_generations.full.saturating_mul(rates.state_full))
-        .saturating_add(state_generations.delta.saturating_mul(rates.state_delta));
+        .saturating_add(state_generations.delta.saturating_mul(rates.state_delta))
+        .saturating_add(
+            state_generations
+                .speculative
+                .saturating_mul(rates.state_speculative),
+        );
     let visual_captures_cost = visual_captures.saturating_mul(rates.visual_capture);
     let actions_executed_cost = actions_executed.saturating_mul(rates.action_executed);
     let hitl_events_cost = hitl_events.saturating_mul(rates.hitl_event);
@@ -296,6 +321,19 @@ pub trait McpBackend {
     fn browser_restart_count(&self) -> u64 {
         0
     }
+
+    /// Cumulative `(hits, misses)` of the speculative state generation
+    /// pipeline (Spec §3.5 / ISSUE-147). A hit is a `get_state` call served
+    /// from a verified pre-generated snapshot; a miss is a `get_state` call
+    /// where a prediction was attempted but did not yield a usable snapshot,
+    /// falling back to a full capture.
+    ///
+    /// The default implementation reports no speculative activity,
+    /// preserving backward compatibility for backends that don't wire the
+    /// speculative engine.
+    fn speculative_usage(&self) -> (u64, u64) {
+        (0, 0)
+    }
 }
 
 pub struct McpServer<B> {
@@ -371,6 +409,8 @@ impl<B: McpBackend> McpServer<B> {
             return Ok(payload);
         }
 
+        let speculative_hits_before = self.backend.speculative_usage().0;
+
         let result = match name {
             "get_state" => self.backend.get_state(arguments.clone()),
             "act" => self.backend.act(arguments.clone()),
@@ -395,7 +435,8 @@ impl<B: McpBackend> McpServer<B> {
         };
 
         if let Ok(payload) = &result {
-            self.record_usage(name, &arguments, payload);
+            let speculative_hit = self.backend.speculative_usage().0 > speculative_hits_before;
+            self.record_usage(name, &arguments, payload, speculative_hit);
         }
 
         result
@@ -504,10 +545,12 @@ impl<B: McpBackend> McpServer<B> {
     }
 
     fn get_usage_report_payload(&self) -> Result<Value> {
+        let (_, speculative_misses) = self.backend.speculative_usage();
         let report = self.usage_meters.to_report(
             self.plan_tier,
             self.backend.audit_retention_snapshot().unwrap_or_default(),
             self.backend.browser_restart_count(),
+            speculative_misses,
         );
         serde_json::to_value(report).context("failed to serialize usage report")
     }
@@ -573,13 +616,22 @@ impl<B: McpBackend> McpServer<B> {
         })
     }
 
-    fn record_usage(&mut self, name: &str, arguments: &Value, payload: &Value) {
+    fn record_usage(
+        &mut self,
+        name: &str,
+        arguments: &Value,
+        payload: &Value,
+        speculative_hit: bool,
+    ) {
         match name {
             "get_state" => {
                 let args = parse_get_state_arguments(arguments);
                 match args.delivery {
                     StateDelivery::Delta => {
                         self.usage_meters.state_generations.delta += 1;
+                    }
+                    StateDelivery::Full if speculative_hit => {
+                        self.usage_meters.state_generations.speculative += 1;
                     }
                     StateDelivery::Full => {
                         self.usage_meters.state_generations.fast += 1;
@@ -769,9 +821,36 @@ struct ActArguments {
     value: Option<String>,
 }
 
+/// Builds a [`ActionSignature`] identifying an `act` call for the speculative
+/// state generation pipeline (Spec §3.5 / ISSUE-147). The signature combines
+/// the action kind, target, and (for `type`) a digest of the value so that
+/// distinct inputs to the same element are tracked as distinct transitions.
+///
+/// `value` is hashed rather than copied verbatim: for `type` actions it may
+/// contain passwords, tokens, or other personal data, and `ActionSignature`s
+/// are retained in the speculative engine's transition model beyond the
+/// request, bypassing the audit log's argument redaction.
+fn action_signature_for_act(args: &ActArguments) -> ActionSignature {
+    let target = args
+        .target_stable_key
+        .clone()
+        .or_else(|| args.target_id.map(|id| id.to_string()))
+        .unwrap_or_default();
+    let mut signature = format!("{}:{}", args.action, target);
+    if let Some(value) = &args.value {
+        let mut hasher = Sha256::new();
+        hasher.update(value.as_bytes());
+        signature.push(':');
+        signature.push_str(&hex::encode(hasher.finalize()));
+    }
+    ActionSignature::from(signature)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct VerifyArguments {
     target_id: i64,
+    #[serde(default)]
+    target_stable_key: Option<String>,
     expected: VerifyExpected,
 }
 
@@ -818,6 +897,110 @@ fn parse_get_state_arguments(arguments: &Value) -> GetStateArguments {
     serde_json::from_value(arguments.clone()).unwrap_or_default()
 }
 
+/// Outcome of [`resolve_speculative_state`] — distinguishes a verified
+/// pre-generation hit from the various reasons a `get_state` call falls back
+/// to a full capture (Spec §3.5 / ISSUE-147).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpeculativeOutcome {
+    /// A verified pre-generated snapshot is available and can be served.
+    Hit,
+    /// `force_refresh` was requested; speculation is bypassed entirely.
+    MissForceRefresh,
+    /// The previous `get_state` served a speculative hit whose prediction
+    /// has not yet been checked against a real DOM capture. Speculation is
+    /// bypassed for this call to force a real capture, reconciling
+    /// `previous_semantic_state` with the live page before another
+    /// speculative hit can be served from it (Spec §3.5 / ISSUE-147
+    /// round-8 review).
+    MissUnverifiedPriorHit,
+    /// There is no prior state or no action pending since the last
+    /// `get_state`, so there is nothing to predict from.
+    MissNoPendingAction,
+    /// The engine has not yet learned a next-action prediction for the
+    /// current state.
+    MissNoPrediction,
+    /// The predicted next action does not match the action that was actually
+    /// executed.
+    MissPredictionMismatch,
+    /// The predicted action matched, but no cached snapshot exists for the
+    /// predicted resulting state.
+    MissPreGenerateNone,
+}
+
+/// Pure decision function for the speculative `get_state` fast path
+/// (Spec §3.5 / ISSUE-147). Given the engine and the backend's tracked
+/// action/state history, determines whether a pre-generated snapshot can be
+/// served, and if not, why not.
+///
+/// `current_state_hash` (the state the AI is currently at) is
+/// `previous_state.state_hash()`; `last_action` is the action that led to
+/// that state. A hit additionally requires that the engine's predicted next
+/// action matches `pending_action` (the action just executed via `act`).
+fn resolve_speculative_state(
+    speculative: &SpeculativeEngine,
+    previous_state: Option<&SemanticState>,
+    last_action: Option<&ActionSignature>,
+    pending_action: Option<&ActionSignature>,
+    force_refresh: bool,
+    prior_hit_unverified: bool,
+) -> (
+    Option<Arc<SemanticState>>,
+    Option<SpeculativePrediction>,
+    SpeculativeOutcome,
+) {
+    if force_refresh {
+        return (None, None, SpeculativeOutcome::MissForceRefresh);
+    }
+
+    if prior_hit_unverified {
+        return (None, None, SpeculativeOutcome::MissUnverifiedPriorHit);
+    }
+
+    let (Some(previous_state), Some(pending_action)) = (previous_state, pending_action) else {
+        return (None, None, SpeculativeOutcome::MissNoPendingAction);
+    };
+
+    let current_state_hash = previous_state.state_hash();
+    let Some(prediction) = speculative.predict(current_state_hash, last_action) else {
+        return (None, None, SpeculativeOutcome::MissNoPrediction);
+    };
+
+    if prediction.predicted_action != *pending_action {
+        return (
+            None,
+            Some(prediction),
+            SpeculativeOutcome::MissPredictionMismatch,
+        );
+    }
+
+    match speculative.pre_generate(current_state_hash, last_action) {
+        Some(snapshot) => (Some(snapshot), Some(prediction), SpeculativeOutcome::Hit),
+        None => (
+            None,
+            Some(prediction),
+            SpeculativeOutcome::MissPreGenerateNone,
+        ),
+    }
+}
+
+/// Whether [`CoreRuntimeBackend::record_speculative_observation`] should
+/// record a `previous_semantic_state -> state` transition under
+/// `pending_action` (Spec §3.5 / ISSUE-147 round-9 review).
+///
+/// A transition is only recorded when `pending_action` was executed since
+/// the last capture AND `previous_state` itself reflects a verified (real)
+/// DOM capture rather than an unverified speculative snapshot served by the
+/// `Hit` branch. Training a transition from an unverified snapshot risks
+/// recording an edge that does not exist in the live page's transition
+/// graph if that snapshot turns out to have been stale.
+fn should_record_transition(
+    previous_state_verified: bool,
+    previous_state: Option<&SemanticState>,
+    pending_action: Option<&ActionSignature>,
+) -> bool {
+    previous_state_verified && previous_state.is_some() && pending_action.is_some()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExternalSemanticState {
     pub metadata: StateMetadata,
@@ -831,6 +1014,10 @@ pub struct StateMetadata {
     pub state_hash: String,
     pub load_profile: String,
     pub timestamp: u64,
+    /// `true` when this state was served from a verified speculative
+    /// pre-generation rather than a fresh capture (Spec §3.5 / ISSUE-147).
+    #[serde(default)]
+    pub speculative: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -876,6 +1063,52 @@ pub struct CoreRuntimeBackend {
     browser_restarts: u64,
     /// Timestamps of recent restart attempts, used for rate limiting.
     restart_history: VecDeque<Instant>,
+    /// Speculative state generation engine (Spec §3.5 / ISSUE-147).
+    speculative: SpeculativeEngine,
+    /// The action that led to `previous_semantic_state`, used as the
+    /// `last_action` input to [`SpeculativeEngine::predict`]/`pre_generate`.
+    last_action: Option<ActionSignature>,
+    /// The action executed by the most recent successful `act` call, not yet
+    /// confirmed against a subsequent `get_state`.
+    pending_action: Option<ActionSignature>,
+    /// Count of `get_state` calls served from a verified speculative
+    /// pre-generation.
+    speculative_hits: u64,
+    /// Count of `get_state` calls where a prediction was attempted but did
+    /// not yield a usable snapshot.
+    speculative_misses: u64,
+    /// The prediction behind the most recently served speculative hit, kept
+    /// so it can be verified against the next real DOM capture (Spec §3.5 /
+    /// ISSUE-147 review: a served hit is otherwise never checked against the
+    /// live page).
+    last_served_prediction: Option<SpeculativePrediction>,
+    /// Set when a second successful `act` occurs before the next
+    /// `get_state` (Spec §3.5 / ISSUE-147 review). No single
+    /// `ActionSignature` describes the combined effect of a chained action
+    /// sequence, so `record_speculative_observation` must neither record a
+    /// transition for it nor verify `last_served_prediction` against the
+    /// resulting capture (which reflects more than one action past the
+    /// prediction). Cleared once that capture has been processed.
+    action_chain_broken: bool,
+    /// Whether `previous_semantic_state` reflects a real DOM capture that has
+    /// been observed by the speculative engine, as opposed to an unverified
+    /// speculative snapshot served by the `Hit` branch (Spec §3.5 /
+    /// ISSUE-147 round-9 review). `record_speculative_observation` must not
+    /// record a `previous -> current` transition from an unverified
+    /// speculative snapshot: if that snapshot was stale, the recorded edge
+    /// would train the engine on a transition that does not exist in the
+    /// live page's transition graph.
+    previous_state_verified: bool,
+    /// The `state_hash` of `previous_semantic_state` at the time
+    /// `last_served_prediction` was generated, i.e. the `from_state_hash`
+    /// of the `(from_state_hash, predicted_action) -> predicted_state_hash`
+    /// transition that prediction represents (Spec §3.5 / ISSUE-147
+    /// round-10 review). Needed to correct that transition in the
+    /// transition model if `last_served_prediction` turns out to have been
+    /// stale, since by the time it is verified `previous_semantic_state`
+    /// has already been overwritten with the (unverified) speculative
+    /// snapshot the prediction described.
+    last_served_prediction_source_hash: Option<String>,
 }
 
 impl CoreRuntimeBackend {
@@ -895,6 +1128,15 @@ impl CoreRuntimeBackend {
             policy_rules: Vec::new(),
             browser_restarts: 0,
             restart_history: VecDeque::new(),
+            speculative: SpeculativeEngine::new(Vec::new()),
+            last_action: None,
+            pending_action: None,
+            speculative_hits: 0,
+            speculative_misses: 0,
+            last_served_prediction: None,
+            action_chain_broken: false,
+            previous_state_verified: true,
+            last_served_prediction_source_hash: None,
         }
     }
 
@@ -954,30 +1196,206 @@ impl CoreRuntimeBackend {
             }
         }
 
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &self.speculative,
+            self.previous_semantic_state.as_ref(),
+            self.last_action.as_ref(),
+            self.pending_action.as_ref(),
+            force_refresh,
+            self.last_served_prediction.is_some(),
+        );
+
+        if let (SpeculativeOutcome::Hit, Some(snapshot)) = (&outcome, snapshot) {
+            let state = (*snapshot).clone();
+            let payload = self.build_external_state(state.clone(), true)?;
+            self.speculative_hits += 1;
+            // Replace any existing unverified prediction with this hit's
+            // (Spec §3.5 / ISSUE-147 review): if a previous hit's prediction
+            // is still pending here, this hit's action has moved the page
+            // beyond the state that prediction described, so verifying it
+            // against a future real capture would report a false mismatch.
+            // The new prediction describes `state` (the snapshot just
+            // served), which the next real capture *can* validate against
+            // (assuming no further chaining), so it replaces the stale one.
+            // Capture the `from_state_hash` this prediction was generated
+            // from *before* it is overwritten below (Spec §3.5 /
+            // ISSUE-147 round-10 review): if the prediction turns out to be
+            // stale, `record_speculative_observation` needs this hash to
+            // correct the `(from_state_hash, predicted_action)` entry in
+            // the transition model.
+            self.last_served_prediction_source_hash = self
+                .previous_semantic_state
+                .as_ref()
+                .map(|s| s.state_hash().to_string());
+            self.last_served_prediction = prediction;
+            self.last_action = self.pending_action.take();
+            self.previous_semantic_state = Some(state);
+            // `state` is an unverified speculative snapshot (Spec §3.5 /
+            // ISSUE-147 round-9 review): until a real capture reconciles it,
+            // `record_speculative_observation` must not train a transition
+            // from it.
+            self.previous_state_verified = false;
+            // Deliberately do NOT populate `state_cache` (Spec §3.5 /
+            // ISSUE-147 review): caching this unverified speculative payload
+            // would make every subsequent non-forced `get_state` return it
+            // via the early-return above, so `record_speculative_observation`
+            // would never run and `last_served_prediction` would never be
+            // checked against a real capture. Leaving the cache empty means
+            // the next `get_state` falls through to a real capture (since
+            // `pending_action` was just consumed above), reconciling this
+            // prediction against the live DOM.
+            return Ok(payload);
+        }
+
         let raw_state = self.page.capture_semantic_state(LoadProfile::Interactive)?;
         let state = raw_state.sanitized_with(&self.injection_sanitizer);
-        let state_copy = state.clone();
-        let payload = self.build_external_state(state)?;
 
+        self.record_speculative_observation(&state);
+
+        if matches!(outcome, SpeculativeOutcome::MissPreGenerateNone) {
+            if let Some(prediction) = &prediction {
+                self.speculative.verify(prediction, &state);
+            }
+        }
+
+        if matches!(
+            outcome,
+            SpeculativeOutcome::MissNoPrediction
+                | SpeculativeOutcome::MissPredictionMismatch
+                | SpeculativeOutcome::MissPreGenerateNone
+        ) {
+            self.speculative_misses += 1;
+        }
+
+        let state_copy = state.clone();
+        let payload = self.build_external_state(state, false)?;
+
+        self.last_action = self.pending_action.take();
         self.previous_semantic_state = Some(state_copy);
         self.state_cache = Some(payload.clone());
         Ok(payload)
     }
 
-    fn build_external_state(&mut self, state: SemanticState) -> Result<ExternalSemanticState> {
+    /// Records bookkeeping for the speculative engine after a real DOM
+    /// capture (Spec §3.5 / ISSUE-147):
+    ///
+    /// - Verifies the prediction behind the most recently served speculative
+    ///   hit (if any) against this freshly-captured `state`, logging a
+    ///   mismatch for replay/debugging when the served snapshot turns out to
+    ///   have been stale. This is only valid when no action has been
+    ///   executed since the hit was served (`pending_action.is_none()`) and
+    ///   no chained-action sequence has been discarded
+    ///   (`!action_chain_broken`): in either case `state` reflects the page
+    ///   after more than the predicted single action, not the state the
+    ///   prediction described, and comparing the two would report a false
+    ///   mismatch (Spec §3.5 / ISSUE-147 review). In that case the stale
+    ///   prediction is discarded without verification. When verification
+    ///   *does* report a mismatch, the stale
+    ///   `(last_served_prediction_source_hash, served.predicted_action) ->
+    ///   predicted_state_hash` transition is corrected to point at
+    ///   `actual_state_hash` instead, so the same known-wrong snapshot is
+    ///   not served again on a repeat of this action (Spec §3.5 /
+    ///   ISSUE-147 round-10 review).
+    /// - Caches `state` so it can be served by a future pre-generation.
+    /// - Records the `previous_semantic_state -> state` transition under
+    ///   `pending_action`, if one was executed since the last capture and
+    ///   `previous_semantic_state` is itself a verified (real) capture
+    ///   (`previous_state_verified`). If `previous_semantic_state` is an
+    ///   unverified speculative snapshot, training a transition from it
+    ///   risks recording an edge that does not exist in the live page's
+    ///   transition graph (Spec §3.5 / ISSUE-147 round-9 review). Either
+    ///   way, the engine's internal action-sequence cursor is advanced to
+    ///   `pending_action` (or cleared if none), keeping it in sync with
+    ///   `self.last_action` once the caller promotes `pending_action`
+    ///   (Spec §3.5 / ISSUE-147 round-10 review).
+    fn record_speculative_observation(&mut self, state: &SemanticState) {
+        if let Some(served) = self.last_served_prediction.take() {
+            let source_hash = self.last_served_prediction_source_hash.take();
+            if self.pending_action.is_none() && !self.action_chain_broken {
+                let delta = self.speculative.verify(&served, state);
+                // A mismatch means the snapshot served by the `Hit` branch
+                // was stale (Spec §3.5 / ISSUE-147 round-10 review):
+                // without correction, the transition model keeps predicting
+                // that same known-wrong snapshot for
+                // `(source_hash, served.predicted_action)` on every repeat
+                // of this action. Replace it with the actually-observed
+                // outcome.
+                if let (
+                    StateDelta::Mismatch {
+                        predicted_state_hash,
+                        actual_state_hash,
+                        ..
+                    },
+                    Some(from_hash),
+                ) = (&delta, &source_hash)
+                {
+                    self.speculative.correct_transition(
+                        from_hash,
+                        &served.predicted_action,
+                        predicted_state_hash,
+                        actual_state_hash,
+                    );
+                }
+            }
+        }
+
+        self.speculative.observe_state(Arc::new(state.clone()));
+
+        if should_record_transition(
+            self.previous_state_verified,
+            self.previous_semantic_state.as_ref(),
+            self.pending_action.as_ref(),
+        ) {
+            let previous = self
+                .previous_semantic_state
+                .as_ref()
+                .expect("checked by should_record_transition");
+            let pending = self
+                .pending_action
+                .as_ref()
+                .expect("checked by should_record_transition");
+            self.speculative
+                .record_transition(previous.state_hash(), pending, state.state_hash());
+        } else if let Some(pending) = self.pending_action.as_ref() {
+            // `record_transition` was skipped, but `pending` was still
+            // executed and is about to be promoted to `self.last_action`
+            // below (Spec §3.5 / ISSUE-147 round-10 review). Advance the
+            // engine's internal action-sequence cursor to match, so the
+            // next `record_transition` links its action to `pending` rather
+            // than to whichever action the cursor was last left on.
+            self.speculative.advance_action_cursor(pending);
+        } else {
+            // No action is pending, so `self.last_action` is about to become
+            // `None` too; keep the engine's cursor in sync.
+            self.speculative.clear_action_cursor();
+        }
+
+        self.action_chain_broken = false;
+        // `state` is this real DOM capture, which the caller is about to
+        // assign to `previous_semantic_state` (Spec §3.5 / ISSUE-147
+        // round-9 review): future transitions may be trained from it.
+        self.previous_state_verified = true;
+    }
+
+    fn build_external_state(
+        &mut self,
+        state: SemanticState,
+        speculative: bool,
+    ) -> Result<ExternalSemanticState> {
         let metadata = StateMetadata {
             url: self.page.current_url()?,
             page_instance_id: state.page_instance_id().to_string(),
             state_hash: state.state_hash().to_string(),
             load_profile: load_profile_name(state.load_profile()).to_string(),
             timestamp: state.timestamp(),
+            speculative,
         };
 
         let interactive_elements = state
             .generate_fast_state()
             .interactive_elements
             .into_iter()
-            .map(|node| self.map_interactive_element(node))
+            .map(|node| self.map_interactive_element(node, speculative))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(ExternalSemanticState {
@@ -986,7 +1404,21 @@ impl CoreRuntimeBackend {
         })
     }
 
-    fn map_interactive_element(&self, node: SemanticNode) -> Result<ExternalInteractiveElement> {
+    /// Maps a `SemanticNode` to its external representation.
+    ///
+    /// For a speculative snapshot (Spec §3.5 / ISSUE-147), `backend_node_id`
+    /// values were captured from a prior DOM render and may not resolve on
+    /// the live page until the predicted transition actually occurs. The id
+    /// and `stable_key` are still reported so `act`/`verify` can target the
+    /// element (`act` and `verify_text` both fall back to `stable_key` if the
+    /// id no longer resolves); only the `get_element_bbox` CDP lookup, which
+    /// would fail or return stale coordinates for a not-yet-rendered node, is
+    /// skipped.
+    fn map_interactive_element(
+        &self,
+        node: SemanticNode,
+        speculative: bool,
+    ) -> Result<ExternalInteractiveElement> {
         let id = node.backend_node_id;
         let stable_key = node
             .stable_key
@@ -1004,7 +1436,7 @@ impl CoreRuntimeBackend {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| alias.clone());
 
-        let bbox = if id > 0 {
+        let bbox = if !speculative && id > 0 {
             self.page
                 .get_element_bbox(id)?
                 .unwrap_or([0.0, 0.0, 0.0, 0.0])
@@ -1054,9 +1486,35 @@ impl McpBackend for CoreRuntimeBackend {
                     // Reset both caches so the next delta starts from a clean baseline.
                     self.state_cache = None;
                     self.previous_semantic_state = None;
+                    self.previous_state_verified = true;
+                    // Also clear the speculative action/prediction history
+                    // (Spec §3.5 / ISSUE-147 review): with
+                    // `previous_semantic_state` cleared,
+                    // `record_speculative_observation` below cannot record a
+                    // `previous -> current` transition for `pending_action`,
+                    // but it would still be promoted to `last_action`
+                    // afterwards. That would desync the backend's
+                    // `last_action` from the `SpeculativeEngine`'s internal
+                    // action history (only updated by `record_transition`),
+                    // causing the next prediction to train/query the wrong
+                    // action sequence. `last_served_prediction` similarly
+                    // referred to the now-discarded baseline state. Discard
+                    // all of it along with the state baseline.
+                    self.pending_action = None;
+                    self.last_action = None;
+                    self.last_served_prediction = None;
+                    self.last_served_prediction_source_hash = None;
+                    self.action_chain_broken = false;
+                    // Likewise reset the engine's own action-sequence cursor
+                    // (Spec §3.5 / ISSUE-147 review): otherwise the next
+                    // `record_transition` would link its action to whatever
+                    // action preceded this forced baseline reset, training a
+                    // false action-sequence edge.
+                    self.speculative.clear_action_cursor();
                 }
 
                 let current = self.page.capture_semantic_state(LoadProfile::Interactive)?;
+                let current = current.sanitized_with(&self.injection_sanitizer);
                 let update = current.select_update(
                     self.previous_semantic_state.as_ref(),
                     DeltaPolicy::default(),
@@ -1067,8 +1525,7 @@ impl McpBackend for CoreRuntimeBackend {
                         json!({ "type": "no_change", "hash": state_hash })
                     }
                     StateUpdate::Full { state } => {
-                        let sanitized = state.clone().sanitized_with(&self.injection_sanitizer);
-                        let ext = self.build_external_state(sanitized)?;
+                        let ext = self.build_external_state(state.clone(), false)?;
                         // Keep state_cache in sync so a subsequent Full call is consistent.
                         self.state_cache = Some(ext.clone());
                         json!({
@@ -1087,6 +1544,14 @@ impl McpBackend for CoreRuntimeBackend {
                     }
                 };
 
+                // Reconcile speculative bookkeeping against this real capture
+                // (Spec §3.5 / ISSUE-147 review): without this, `pending_action`
+                // and `last_action` would go stale across a delta read, causing
+                // a later full `get_state` to treat an already-applied action as
+                // newly executed and serve a snapshot for a state past the
+                // current one.
+                self.record_speculative_observation(&current);
+                self.last_action = self.pending_action.take();
                 self.previous_semantic_state = Some(current);
                 Ok(response)
             }
@@ -1105,6 +1570,31 @@ impl McpBackend for CoreRuntimeBackend {
         ) {
             Ok(()) => {
                 self.state_cache = None;
+                if self.pending_action.is_some() || self.action_chain_broken {
+                    // A second (or later) successful `act` before the next
+                    // `get_state` (Spec §3.5 / ISSUE-147 review): no single
+                    // `ActionSignature` describes the combined effect of
+                    // multiple actions on `previous_semantic_state`, so
+                    // recording a `previous -> current` transition under
+                    // just this action would train the engine on an
+                    // impossible transition that could later serve a
+                    // snapshot for the wrong state. Discard the pending
+                    // action and keep the chain flagged (it stays flagged
+                    // until the next real capture resets it) so
+                    // `record_speculative_observation` skips both training
+                    // and `last_served_prediction` verification for this
+                    // capture, no matter how many actions were chained.
+                    // Also reset the engine's own action-sequence cursor
+                    // (Spec §3.5 / ISSUE-147 review): otherwise the next
+                    // `record_transition` would link its action to whatever
+                    // action preceded this discarded chain, training a
+                    // false action-sequence edge.
+                    self.pending_action = None;
+                    self.action_chain_broken = true;
+                    self.speculative.clear_action_cursor();
+                } else {
+                    self.pending_action = Some(action_signature_for_act(&args));
+                }
                 Ok(json!({"status": "ok"}))
             }
             Err(err) => {
@@ -1157,7 +1647,11 @@ impl McpBackend for CoreRuntimeBackend {
         let args: VerifyArguments =
             serde_json::from_value(arguments).context("invalid verify arguments")?;
 
-        match self.page.verify_text(args.target_id, &args.expected.text) {
+        match self.page.verify_text(
+            args.target_id,
+            args.target_stable_key.as_deref(),
+            &args.expected.text,
+        ) {
             Ok(()) => Ok(json!({ "matched": true })),
             Err(err) => {
                 if let Some(verify_err) = err.downcast_ref::<VerifyError>() {
@@ -1388,12 +1882,27 @@ impl McpBackend for CoreRuntimeBackend {
         self.page = new_page;
         self.state_cache = None;
         self.previous_semantic_state = None;
+        self.previous_state_verified = true;
+        // The new page is a fresh CDP session with new backend node IDs and
+        // a new `page_instance_id` (Spec §3.5 / ISSUE-147 review): any
+        // pending speculative bookkeeping and cached snapshots refer to the
+        // crashed page and must not be reused or trained against.
+        self.pending_action = None;
+        self.last_action = None;
+        self.last_served_prediction = None;
+        self.last_served_prediction_source_hash = None;
+        self.action_chain_broken = false;
+        self.speculative.reset_session();
         self.browser_restarts = restart_count;
         Ok(self.browser_restarts)
     }
 
     fn browser_restart_count(&self) -> u64 {
         self.browser_restarts
+    }
+
+    fn speculative_usage(&self) -> (u64, u64) {
+        (self.speculative_hits, self.speculative_misses)
     }
 }
 
@@ -1484,7 +1993,8 @@ impl SkillRuntime for PageSkillRuntime<'_> {
         let target = resolve_param(&step.target, self.params);
         let expected = resolve_param(&step.expected, self.params);
         if let Some(id) = parse_target_id(&target) {
-            return match self.page.verify_text(id, &expected) {
+            let stable_key = parse_target_stable_key(&target);
+            return match self.page.verify_text(id, stable_key.as_deref(), &expected) {
                 Ok(()) => OperationOutcome::Success,
                 Err(err) => OperationOutcome::Failure {
                     reason: err.to_string(),
@@ -1659,6 +2169,7 @@ fn render_state_markdown(payload: &ExternalSemanticState) -> String {
         format!("- State Hash: {}", payload.metadata.state_hash),
         format!("- Load Profile: {}", payload.metadata.load_profile),
         format!("- Timestamp: {}", payload.metadata.timestamp),
+        format!("- Speculative: {}", payload.metadata.speculative),
         String::new(),
         "## Interactive Elements".to_string(),
     ];
@@ -1785,7 +2296,8 @@ pub fn semantic_state_json_schema() -> Value {
                     "page_instance_id": { "type": "string", "minLength": 1 },
                     "state_hash": { "type": "string", "minLength": 1 },
                     "load_profile": { "type": "string", "enum": ["minimal", "visual", "interactive"] },
-                    "timestamp": { "type": "integer", "minimum": 0 }
+                    "timestamp": { "type": "integer", "minimum": 0 },
+                    "speculative": { "type": "boolean" }
                 }
             },
             "interactive_elements": {
@@ -1878,6 +2390,7 @@ fn verify_input_schema() -> Value {
         "required": ["target_id", "expected"],
         "properties": {
             "target_id": { "type": "integer" },
+            "target_stable_key": { "type": "string" },
             "expected": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2004,6 +2517,234 @@ mod tests {
             backend_node_id: id,
             security_flags: vec![],
         }
+    }
+
+    // --- resolve_speculative_state ---
+
+    fn action(name: &str) -> ActionSignature {
+        ActionSignature::from(name)
+    }
+
+    fn state_with_label(label: &str) -> SemanticState {
+        SemanticState::new(
+            SemanticNode {
+                role: "root".to_string(),
+                label: Some(label.to_string()),
+                ..make_node(0, vec![])
+            },
+            LoadProfile::Interactive,
+        )
+    }
+
+    #[test]
+    fn resolve_speculative_state_force_refresh_short_circuits() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let pending = action("click:search_button");
+
+        let (snapshot, prediction, outcome) =
+            resolve_speculative_state(&engine, Some(&previous), None, Some(&pending), true, false);
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissForceRefresh);
+    }
+
+    #[test]
+    fn resolve_speculative_state_no_previous_state_is_miss_no_pending_action() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let pending = action("click:search_button");
+
+        let (snapshot, prediction, outcome) =
+            resolve_speculative_state(&engine, None, None, Some(&pending), false, false);
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissNoPendingAction);
+    }
+
+    #[test]
+    fn resolve_speculative_state_no_pending_action_is_miss_no_pending_action() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+
+        let (snapshot, prediction, outcome) =
+            resolve_speculative_state(&engine, Some(&previous), None, None, false, false);
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissNoPendingAction);
+    }
+
+    #[test]
+    fn resolve_speculative_state_cold_engine_is_miss_no_prediction() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let pending = action("click:search_button");
+
+        let (snapshot, prediction, outcome) =
+            resolve_speculative_state(&engine, Some(&previous), None, Some(&pending), false, false);
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissNoPrediction);
+    }
+
+    #[test]
+    fn resolve_speculative_state_prediction_mismatch() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+        let other = action("click:other_button");
+
+        // Train: click -> type_input from `previous`'s hash.
+        engine.record_transition(previous.state_hash(), &click, "hash_after_click");
+        engine.record_transition("hash_after_click", &type_input, "hash_after_type");
+
+        // The action actually executed (`other`) doesn't match the predicted
+        // next action (`type_input`).
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &engine,
+            Some(&previous),
+            Some(&click),
+            Some(&other),
+            false,
+            false,
+        );
+
+        assert!(snapshot.is_none());
+        assert_eq!(prediction.unwrap().predicted_action, type_input);
+        assert_eq!(outcome, SpeculativeOutcome::MissPredictionMismatch);
+    }
+
+    #[test]
+    fn resolve_speculative_state_prediction_match_without_cached_snapshot_is_miss_pre_generate_none(
+    ) {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        // Train: click -> type_input from `previous`'s hash, but never call
+        // `observe_state` for "hash_after_type" so no snapshot is cached.
+        engine.record_transition(previous.state_hash(), &click, "hash_after_click");
+        engine.record_transition("hash_after_click", &type_input, "hash_after_type");
+
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &engine,
+            Some(&previous),
+            Some(&click),
+            Some(&type_input),
+            false,
+            false,
+        );
+
+        assert!(snapshot.is_none());
+        assert_eq!(prediction.unwrap().predicted_action, type_input);
+        assert_eq!(outcome, SpeculativeOutcome::MissPreGenerateNone);
+    }
+
+    #[test]
+    fn resolve_speculative_state_hit_serves_cached_snapshot() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        let next_state = Arc::new(state_with_label("results page"));
+        let next_hash = next_state.state_hash().to_string();
+
+        engine.record_transition(previous.state_hash(), &click, &next_hash);
+        engine.record_transition(previous.state_hash(), &type_input, &next_hash);
+        engine.record_transition(previous.state_hash(), &type_input, &next_hash);
+        engine.observe_state(next_state.clone());
+
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &engine,
+            Some(&previous),
+            Some(&click),
+            Some(&type_input),
+            false,
+            false,
+        );
+
+        let snapshot = snapshot.expect("expected a cached snapshot on hit");
+        assert_eq!(snapshot.state_hash(), next_state.state_hash());
+        assert_eq!(prediction.unwrap().predicted_action, type_input);
+        assert_eq!(outcome, SpeculativeOutcome::Hit);
+    }
+
+    #[test]
+    fn resolve_speculative_state_unverified_prior_hit_bypasses_speculation() {
+        let engine = SpeculativeEngine::new(vec![]);
+        let previous = state_with_label("start");
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+
+        let next_state = Arc::new(state_with_label("results page"));
+        let next_hash = next_state.state_hash().to_string();
+
+        engine.record_transition(previous.state_hash(), &click, &next_hash);
+        engine.record_transition(previous.state_hash(), &type_input, &next_hash);
+        engine.record_transition(previous.state_hash(), &type_input, &next_hash);
+        engine.observe_state(next_state.clone());
+
+        // Even though the engine would otherwise serve a Hit for this
+        // state/action pair, a still-unverified prior hit must force a real
+        // capture first (Spec §3.5 / ISSUE-147 round-8 review).
+        let (snapshot, prediction, outcome) = resolve_speculative_state(
+            &engine,
+            Some(&previous),
+            Some(&click),
+            Some(&type_input),
+            false,
+            true,
+        );
+
+        assert!(snapshot.is_none());
+        assert!(prediction.is_none());
+        assert_eq!(outcome, SpeculativeOutcome::MissUnverifiedPriorHit);
+    }
+
+    // --- should_record_transition ---
+
+    #[test]
+    fn should_record_transition_false_when_previous_state_unverified() {
+        let previous = state_with_label("start");
+        let pending = action("click:search_button");
+
+        assert!(!should_record_transition(
+            false,
+            Some(&previous),
+            Some(&pending)
+        ));
+    }
+
+    #[test]
+    fn should_record_transition_true_when_previous_state_verified_and_pending_action_set() {
+        let previous = state_with_label("start");
+        let pending = action("click:search_button");
+
+        assert!(should_record_transition(
+            true,
+            Some(&previous),
+            Some(&pending)
+        ));
+    }
+
+    #[test]
+    fn should_record_transition_false_when_no_pending_action() {
+        let previous = state_with_label("start");
+
+        assert!(!should_record_transition(true, Some(&previous), None));
+    }
+
+    #[test]
+    fn should_record_transition_false_when_no_previous_state() {
+        let pending = action("click:search_button");
+
+        assert!(!should_record_transition(true, None, Some(&pending)));
     }
 
     // --- parse_semantic_wait_condition ---
@@ -2534,6 +3275,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,
@@ -2555,6 +3297,34 @@ mod tests {
     }
 
     #[test]
+    fn render_state_markdown_includes_speculative_flag() {
+        let mut payload = ExternalSemanticState {
+            metadata: StateMetadata {
+                url: "https://example.com".to_string(),
+                page_instance_id: "pid".to_string(),
+                state_hash: "hash".to_string(),
+                load_profile: "interactive".to_string(),
+                timestamp: 0,
+                speculative: true,
+            },
+            interactive_elements: vec![],
+        };
+
+        let md = render_state_markdown(&payload);
+        assert!(
+            md.contains("- Speculative: true"),
+            "markdown must include the speculative flag when true: {md}"
+        );
+
+        payload.metadata.speculative = false;
+        let md = render_state_markdown(&payload);
+        assert!(
+            md.contains("- Speculative: false"),
+            "markdown must include the speculative flag when false: {md}"
+        );
+    }
+
+    #[test]
     fn render_state_markdown_omits_security_flags_line_when_empty() {
         let payload = ExternalSemanticState {
             metadata: StateMetadata {
@@ -2563,6 +3333,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,
@@ -2639,6 +3410,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,
@@ -2672,6 +3444,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,
@@ -2702,6 +3475,7 @@ mod tests {
                 state_hash: "hash".to_string(),
                 load_profile: "interactive".to_string(),
                 timestamp: 0,
+                speculative: false,
             },
             interactive_elements: vec![ExternalInteractiveElement {
                 id: 1,

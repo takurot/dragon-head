@@ -9,6 +9,7 @@ fn test_usage_pricing_snapshot_diff() {
             fast: 42,
             full: 17,
             delta: 128,
+            speculative: 0,
         },
         9,
         64,

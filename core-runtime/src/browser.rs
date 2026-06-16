@@ -978,24 +978,59 @@ impl PageSession {
 
     /// Verify element text against an expected value.
     /// On mismatch, triggers a SoM capture to help disambiguate recovery.
-    pub fn verify_text(&self, target_id: i64, expected_text: &str) -> Result<()> {
+    ///
+    /// If `target_id` does not resolve (e.g. a stale id reported by a
+    /// speculative `get_state` response, Spec §3.5 / ISSUE-147), falls back
+    /// to `stable_key`: refreshes the stable-key index from the live DOM and
+    /// retries against the resolved id, mirroring `act`'s recovery path.
+    pub fn verify_text(
+        &self,
+        target_id: i64,
+        stable_key: Option<&str>,
+        expected_text: &str,
+    ) -> Result<()> {
         self.audit_logger.log(AuditEvent::ToolCall {
             tool_name: "verify_text".to_string(),
             args: serde_json::json!({
                 "target_id": target_id,
+                "stable_key": stable_key,
                 "expected_text": expected_text
             }),
             timestamp: epoch_millis_u64(),
         });
 
-        let actual_text = self.get_element_text(target_id)?;
+        let (resolved_id, actual_text) = match self.get_element_text(target_id) {
+            Ok(text) => (target_id, text),
+            Err(e) => {
+                let node_error_markers = [
+                    "could not find node",
+                    "no node with given id",
+                    "could not find object with given id",
+                    "no object with given id",
+                    "node does not exist",
+                ];
+                if !error_chain_contains_any(&e, &node_error_markers) {
+                    return Err(e);
+                }
+                let Some(key) = stable_key else {
+                    return Err(e);
+                };
+                self.refresh_stable_key_index(crate::sre::LoadProfile::Interactive)?;
+                let Some(new_id) = self.lookup_backend_node_id_by_stable_key(key) else {
+                    return Err(e);
+                };
+                let text = self.get_element_text(new_id)?;
+                (new_id, text)
+            }
+        };
+
         if normalize_text(&actual_text) == normalize_text(expected_text) {
             return Ok(());
         }
 
         self.trigger_som_capture_best_effort(SomTrigger::VerifyFailed);
         Err(VerifyError::ExpectationMismatch {
-            target_id,
+            target_id: resolved_id,
             expected: expected_text.to_string(),
             actual: actual_text,
         }
@@ -1882,15 +1917,33 @@ impl PageSession {
         let node_id_u32 =
             u32::try_from(backend_node_id).context("Invalid backend_node_id: must fit in u32")?;
 
-        let model = self
+        let result = self
             .inner
             .call_method(headless_chrome::protocol::cdp::DOM::GetBoxModel {
                 node_id: None,
                 backend_node_id: Some(node_id_u32),
                 object_id: None,
-            })
-            .context("Failed to get box model")?
-            .model;
+            });
+
+        let model = match result {
+            Ok(response) => response.model,
+            Err(err) => {
+                // A speculatively-served snapshot (Spec §3.5 / ISSUE-147) may
+                // reference a `backend_node_id` from a prior DOM that no
+                // longer exists. CDP reports this as an error rather than an
+                // empty box model; treat it the same as "no box" (`None`).
+                let node_error_markers = [
+                    "could not find node",
+                    "no node with given id",
+                    "could not compute box model",
+                    "node does not exist",
+                ];
+                if error_chain_contains_any(&err, &node_error_markers) {
+                    return Ok(None);
+                }
+                return Err(err).context("Failed to get box model");
+            }
+        };
 
         Ok(quad_to_bbox(&model.content))
     }

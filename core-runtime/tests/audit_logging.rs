@@ -166,6 +166,7 @@ fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
     page.clear_audit_events();
     let result = page.verify_text(
         target_id,
+        None,
         "MySecretP@ssw0rd! alice@example.com 4000 1234 5678 9012 345",
     );
     assert!(
