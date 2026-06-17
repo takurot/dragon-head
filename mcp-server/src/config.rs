@@ -25,6 +25,9 @@ pub struct FileConfig {
 pub struct PromptInjectionFileConfig {
     /// `"off"`, `"report_only"`, or `"redact"`.
     pub mode: Option<String>,
+    /// Additional literal phrases matched by the prompt-injection sanitizer.
+    #[serde(default)]
+    pub additional_phrases: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -110,6 +113,7 @@ pub fn load_config_file(path: &Path) -> Result<Option<FileConfig>, ConfigError> 
 pub struct ResolvedConfig {
     pub chrome_path: Option<String>,
     pub injection_mode: PromptInjectionMode,
+    pub injection_additional_phrases: Vec<String>,
     pub policy_file: Option<PathBuf>,
     pub audit_log_dir: Option<String>,
     pub audit_max_bytes: Option<u64>,
@@ -167,6 +171,7 @@ pub fn resolve_config(
     Ok(ResolvedConfig {
         chrome_path,
         injection_mode,
+        injection_additional_phrases: fc.prompt_injection.additional_phrases.clone(),
         policy_file,
         audit_log_dir,
         audit_max_bytes,
@@ -253,6 +258,7 @@ chrome_path = "/usr/bin/chromium"
 
 [prompt_injection]
 mode = "redact"
+additional_phrases = ["reveal developer message"]
 
 [policy]
 file = "/etc/dragon-head/policy.json"
@@ -270,6 +276,7 @@ durability = "sync"
                 chrome_path: Some("/usr/bin/chromium".to_string()),
                 prompt_injection: PromptInjectionFileConfig {
                     mode: Some("redact".to_string()),
+                    additional_phrases: vec!["reveal developer message".to_string()],
                 },
                 policy: PolicyFileConfig {
                     file: Some("/etc/dragon-head/policy.json".to_string()),
@@ -336,6 +343,7 @@ durability = "sync"
             ResolvedConfig {
                 chrome_path: None,
                 injection_mode: PromptInjectionMode::ReportOnly,
+                injection_additional_phrases: vec![],
                 policy_file: None,
                 audit_log_dir: None,
                 audit_max_bytes: None,
@@ -350,6 +358,7 @@ durability = "sync"
             chrome_path: Some("/usr/bin/chromium".to_string()),
             prompt_injection: PromptInjectionFileConfig {
                 mode: Some("redact".to_string()),
+                additional_phrases: vec!["reveal developer message".to_string()],
             },
             policy: PolicyFileConfig {
                 file: Some("/etc/policy.json".to_string()),
@@ -363,6 +372,10 @@ durability = "sync"
         let resolved = resolve_config(Some(&fc), no_env).unwrap();
         assert_eq!(resolved.chrome_path, Some("/usr/bin/chromium".to_string()));
         assert_eq!(resolved.injection_mode, PromptInjectionMode::Redact);
+        assert_eq!(
+            resolved.injection_additional_phrases,
+            vec!["reveal developer message".to_string()]
+        );
         assert_eq!(
             resolved.policy_file,
             Some(PathBuf::from("/etc/policy.json"))
@@ -378,6 +391,7 @@ durability = "sync"
             chrome_path: Some("/usr/bin/chromium".to_string()),
             prompt_injection: PromptInjectionFileConfig {
                 mode: Some("redact".to_string()),
+                additional_phrases: vec!["reveal developer message".to_string()],
             },
             policy: PolicyFileConfig {
                 file: Some("/etc/policy.json".to_string()),
@@ -401,6 +415,10 @@ durability = "sync"
         assert_eq!(resolved.chrome_path, Some("/opt/chrome".to_string()));
         assert_eq!(resolved.injection_mode, PromptInjectionMode::Off);
         assert_eq!(
+            resolved.injection_additional_phrases,
+            vec!["reveal developer message".to_string()]
+        );
+        assert_eq!(
             resolved.policy_file,
             Some(PathBuf::from("/opt/policy.json"))
         );
@@ -414,6 +432,7 @@ durability = "sync"
         let fc = FileConfig {
             prompt_injection: PromptInjectionFileConfig {
                 mode: Some("redct".to_string()),
+                ..Default::default()
             },
             ..Default::default()
         };

@@ -1,6 +1,8 @@
 use anyhow::Context;
 use core_runtime::audit::AuditLogger;
-use core_runtime::{BrowserClient, PolicyEngine, PromptInjectionMode};
+use core_runtime::{
+    BrowserClient, PolicyEngine, PromptInjectionMode, PromptInjectionSanitizerConfig,
+};
 use mcp_server::{config, doctor, CoreRuntimeBackend, McpServer};
 use std::io::{self, BufRead, Write};
 
@@ -85,7 +87,10 @@ fn main() -> anyhow::Result<()> {
         backend.set_policy_rules(engine.rules().to_vec())?;
     }
 
-    backend.set_injection_mode(resolved.injection_mode);
+    backend.set_injection_config(PromptInjectionSanitizerConfig {
+        mode: resolved.injection_mode,
+        additional_phrases: resolved.injection_additional_phrases.clone(),
+    });
     let mut server = McpServer::new(backend);
     eprintln!("dragon-head-mcp: ready, listening on stdio");
 

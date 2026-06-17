@@ -408,6 +408,7 @@ fn pii_redactor_preserves_pre_set_security_flags() {
 fn unit_sanitizer_then_redactor_on_pii_and_injection_node() {
     let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
         mode: PromptInjectionMode::Redact,
+        ..Default::default()
     });
     let redactor = PiiRedactor::new();
 
@@ -602,6 +603,7 @@ fn redact_password_value_masked_and_aria_label_injection_replaced() -> anyhow::R
 fn sanitizer_does_not_modify_pii_mask_placeholders_report_only() {
     let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
         mode: PromptInjectionMode::ReportOnly,
+        ..Default::default()
     });
 
     // A node whose label already contains PII-masked tokens plus an injection phrase.
@@ -642,6 +644,7 @@ fn sanitizer_does_not_modify_pii_mask_placeholders_report_only() {
 fn sanitizer_does_not_modify_pii_mask_placeholders_redact() {
     let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
         mode: PromptInjectionMode::Redact,
+        ..Default::default()
     });
 
     let node = SemanticNode {

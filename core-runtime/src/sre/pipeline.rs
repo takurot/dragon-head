@@ -141,6 +141,7 @@ impl AsyncPipeline {
         let sanitizer = Arc::new(PromptInjectionSanitizer::new(
             PromptInjectionSanitizerConfig {
                 mode: config.injection_mode,
+                ..Default::default()
             },
         ));
 

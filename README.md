@@ -123,6 +123,8 @@ chrome_path = "/usr/bin/chromium"
 [prompt_injection]
 # "off" | "report_only" (default) | "redact". Overridden by PROMPT_INJECTION_MODE.
 mode = "report_only"
+# Extra literal phrases to flag after the built-in prompt-injection patterns.
+additional_phrases = ["reveal developer message"]
 
 [policy]
 # Path to a PolicyRule JSON file (see examples/policies/). Overridden by POLICY_FILE.
@@ -141,6 +143,7 @@ durability = "flush"  # "flush" (default) or "sync"
 | --- | --- | --- |
 | Chrome path | `CHROME_PATH` | `chrome_path` |
 | Prompt-injection mode | `PROMPT_INJECTION_MODE` | `prompt_injection.mode` |
+| Prompt-injection additional phrases | none | `prompt_injection.additional_phrases` |
 | Policy file | `POLICY_FILE` | `policy.file` |
 | Audit log directory | `AUDIT_LOG_DIR` | `audit.log_dir` |
 | Audit max bytes | `AUDIT_LOG_MAX_BYTES` | `audit.max_bytes` |
@@ -314,16 +317,21 @@ with `[REDACTED_SECURITY]`.
 }
 ```
 
-### Limitations (v1)
+### Detection Scope and Limitations
 
-- **Fixed patterns only.** Detection is based on a conservative list of known
-  ASCII phrases. Novel or obfuscated injection attempts are not detected.
-- **ASCII case-folding only.** Unicode homoglyphs, Cyrillic lookalikes, and
-  HTML-entity-encoded variants are not handled.
-- **No user-defined patterns.** Custom regex is not supported in v1.
+- **Phrase-list based.** Detection uses built-in known-risk phrases plus optional
+  `prompt_injection.additional_phrases` literals from `config.toml`. Full custom
+  regex and ML classification are not supported.
+- **Pre-normalized matching.** Detection matches against a decoded and normalized
+  copy of each scanned string: HTML entities are decoded, NFKC normalization is
+  applied, zero-width/control characters are stripped, and common Latin
+  confusables are mapped. `ReportOnly` mode still returns the original page text.
+- **Confusables are best-effort.** The mapping covers common homoglyphs used to
+  disguise the built-in English phrases; it is not a complete Unicode security
+  classifier.
 - **Not a complete defence.** Even with `Redact` mode enabled, a determined
-  attacker can craft injections that evade the fixed pattern set. Treat
-  `security_flags` as a risk signal, not a security guarantee.
+  attacker can craft injections that evade phrase matching. Treat `security_flags`
+  as a risk signal, not a security guarantee.
 
 For the full specification see [docs/SPEC.md — SEC-03](docs/SPEC.md).
 

@@ -517,6 +517,7 @@ fn scenario_injection_report_only() -> anyhow::Result<Value> {
     let sanitized = state.sanitized_with(&PromptInjectionSanitizer::new(
         PromptInjectionSanitizerConfig {
             mode: PromptInjectionMode::ReportOnly,
+            ..Default::default()
         },
     ));
     let fast = sanitized.generate_fast_state();
@@ -580,6 +581,7 @@ fn scenario_injection_redact() -> anyhow::Result<Value> {
     let sanitized = state.sanitized_with(&PromptInjectionSanitizer::new(
         PromptInjectionSanitizerConfig {
             mode: PromptInjectionMode::Redact,
+            ..Default::default()
         },
     ));
     let fast = sanitized.generate_fast_state();
@@ -651,6 +653,7 @@ fn scenario_injection_pii_composition() -> anyhow::Result<Value> {
     let sanitized = state.sanitized_with(&PromptInjectionSanitizer::new(
         PromptInjectionSanitizerConfig {
             mode: PromptInjectionMode::ReportOnly,
+            ..Default::default()
         },
     ));
     let fast = sanitized.generate_fast_state();
