@@ -568,6 +568,14 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
   - [x] PR では短尺 smoke、nightly では full 評価が自動実行される。
   - [x] 追加された主要機能は評価ベンチへの登録なしでは完了扱いにできない運用ルールが `docs/` に明記されている。
 
+> **Follow-up (ISSUE-154, done)**: Prompt-injection sanitizer v2 として、検出入力専用の
+> HTML entity decode / NFKC / zero-width・control 文字除去 / common confusables mapping を追加。
+> `PromptInjectionSanitizerConfig::additional_phrases` と `config.toml`
+> `prompt_injection.additional_phrases` により追加リテラル phrase を指定可能にした。
+> ReportOnly は元テキストを保持し、Redact は直接一致 phrase を部分置換、正規化後のみ一致する
+> obfuscation は安全にフィールド全体を `[REDACTED_SECURITY]` へ置換する。
+> stable_key は sanitizer 適用前生成の値を保持する回帰テストで固定した。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。

@@ -1161,6 +1161,7 @@ impl CoreRuntimeBackend {
             schema_registry: SchemaRegistry::new(),
             injection_sanitizer: PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
                 mode: PromptInjectionMode::ReportOnly,
+                ..Default::default()
             }),
             client: None,
             policy_rules: Vec::new(),
@@ -1195,8 +1196,15 @@ impl CoreRuntimeBackend {
     /// Replaces the prompt-injection sanitizer with one configured for `mode`. Used at startup
     /// to apply the resolved `prompt_injection.mode` from `config::resolve_config`.
     pub fn set_injection_mode(&mut self, mode: PromptInjectionMode) {
-        self.injection_sanitizer =
-            PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig { mode });
+        self.set_injection_config(PromptInjectionSanitizerConfig {
+            mode,
+            ..Default::default()
+        });
+    }
+
+    /// Replaces the prompt-injection sanitizer with the resolved startup config.
+    pub fn set_injection_config(&mut self, config: PromptInjectionSanitizerConfig) {
+        self.injection_sanitizer = PromptInjectionSanitizer::new(config);
     }
 
     /// Applies `rules` to the current page session and stores them so they can be

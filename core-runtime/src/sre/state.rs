@@ -535,6 +535,7 @@ mod tests {
         let state = SemanticState::new(node, LoadProfile::Minimal);
         let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
             mode: PromptInjectionMode::ReportOnly,
+            ..Default::default()
         });
         let sanitized = state.sanitized_with(&sanitizer);
         assert!(
@@ -561,6 +562,7 @@ mod tests {
 
         let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
             mode: PromptInjectionMode::ReportOnly,
+            ..Default::default()
         });
         let sanitized = original.sanitized_with(&sanitizer);
 
@@ -585,6 +587,7 @@ mod tests {
         let state = SemanticState::new(node, LoadProfile::Minimal);
         let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
             mode: PromptInjectionMode::ReportOnly,
+            ..Default::default()
         });
         let sanitized = state.sanitized_with(&sanitizer);
 
@@ -610,6 +613,7 @@ mod tests {
 
         let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
             mode: PromptInjectionMode::ReportOnly,
+            ..Default::default()
         });
         let sanitized = original.sanitized_with(&sanitizer);
 
