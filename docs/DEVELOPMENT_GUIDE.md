@@ -97,7 +97,7 @@ release.ymlの全ジョブ詳細は未確認)。
 | `AUDIT_LOG_DIR` | 監査ログの永続化先ディレクトリ | 未設定(永続化なし) |
 | `AUDIT_LOG_MAX_BYTES` | ログローテーション閾値(バイト) | 10485760 (10MiB) |
 | `AUDIT_DURABILITY` | `flush` または `sync` | `flush` |
-| `AUDIT_LOG_STDOUT` | 標準出力への監査ログ出力 | 未確認(詳細仕様は要コード確認) |
+| `AUDIT_LOG_STDOUT` | 設定されていれば(値は任意)監査ログを標準出力にも出力 | 未設定(出力なし) |
 | `CHROME_INSTALLED` | CIでChrome利用可能を示すフラグ(テストゲート用) | 未設定 |
 | `CI` | 汎用CI検出 | — |
 
