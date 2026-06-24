@@ -1,6 +1,6 @@
 # Dragon Head: Neural-Browser Runtime
 
-**Last updated:** 2026-05-10
+**Last updated:** 2026-06-24
 
 Dragon Head is an AI-native headless browser runtime for LLM and VLM agents.
 It exposes a browser session as a compact, structured **Semantic State** and
@@ -340,14 +340,20 @@ For the full specification see [docs/SPEC.md — SEC-03](docs/SPEC.md).
 Dragon Head is organized as a Rust workspace:
 
 - `core-runtime`: Chrome/CDP browser session, semantic state capture, action
-  execution, policy, audit, privacy, visual capture, and session vault.
+  execution, policy, audit, privacy, visual capture, speculative state
+  generation, and session vault.
 - `mcp-server`: stdio MCP server and tool contract.
 - `skills-engine`: declarative workflow execution.
 - `plugin-host`: Wasm plugin validation and runtime execution.
 - `marketplace`: plugin/domain-pack marketplace primitives.
+- `hitl-bridge`: Slack/Teams human-in-the-loop reference bridge for `ask_human`.
+- `bench`: NFR/ROI benchmarking harness and dashboard report generation.
+- `test-bench-support`: shared test helpers used across crate test suites.
 
 ## Secondary Distribution Paths
 
+- **GitHub Releases**: prebuilt binaries for macOS, Linux, and Windows are
+  published automatically (see [Install](#install) above).
 - **Homebrew**: A `takurot/tap` formula is planned.
 - **Docker**: A multi-platform image for CI and Linux evaluation is planned.
 - **cargo install**: Available once workspace crate publishing is ready.
@@ -360,12 +366,13 @@ Near-term:
 - Docker multi-platform image.
 - `cargo install` / crates.io publishing.
 
-Product roadmap:
+Already shipped:
 
 - Deep Lens zero-code extraction DSL.
 - Guardian Angel outcome projection for proactive policy decisions.
-- Speculative state generation for near-zero TTFT targets.
-- Slack/Teams HITL reference integration.
+- Speculative state generation for near-zero TTFT targets (wired into
+  `get_state`, with hit/miss metrics in `get_usage_report`).
+- Slack/Teams HITL reference integration (`hitl-bridge`).
 - Shared Wasm engine and module caching.
 
 ---
