@@ -1,6 +1,6 @@
 # Dragon Head: Neural-Browser Runtime
 
-**Last updated:** 2026-06-24
+**Last updated:** 2026-06-25
 
 Dragon Head is an AI-native headless browser runtime for LLM and VLM agents.
 It exposes a browser session as a compact, structured **Semantic State** and
