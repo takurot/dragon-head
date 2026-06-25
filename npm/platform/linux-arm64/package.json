@@ -1,0 +1,17 @@
+{
+  "name": "dragon-head-mcp-linux-arm64",
+  "version": "0.1.0",
+  "description": "dragon-head-mcp prebuilt binary for Linux arm64 (glibc)",
+  "license": "MIT",
+  "repository": "github:takurot/dragon-head",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "dragonHeadBinary": "bin/dragon-head-mcp",
+  "files": [
+    "bin/dragon-head-mcp"
+  ]
+}

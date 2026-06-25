@@ -1,0 +1,17 @@
+{
+  "name": "dragon-head-mcp-darwin-x64",
+  "version": "0.1.0",
+  "description": "dragon-head-mcp prebuilt binary for macOS (Intel)",
+  "license": "MIT",
+  "repository": "github:takurot/dragon-head",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "dragonHeadBinary": "bin/dragon-head-mcp",
+  "files": [
+    "bin/dragon-head-mcp"
+  ]
+}
