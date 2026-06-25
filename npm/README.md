@@ -29,3 +29,13 @@ where to find it relative to that package's own `package.json`.
 See [issue #167](https://github.com/takurot/dragon-head/issues/167) for the
 full rollout plan, including the npm Trusted Publishing (OIDC) setup this
 depends on and the CI integration work still to be done.
+
+## For the future CI publish step
+
+`.github/workflows/release.yml`'s existing build job already runs
+`chmod +x` on the release artifact, but `actions/upload-artifact` /
+`actions/download-artifact` do not reliably preserve the executable bit.
+Whichever job stages a binary into `platform/<name>/bin/` **must re-apply
+`chmod +x` (all platforms except `win32-x64`) after staging, before
+`npm publish`** — otherwise `npm install` succeeds but the installed binary
+fails to spawn with `EACCES`.

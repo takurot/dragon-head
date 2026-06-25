@@ -11,6 +11,9 @@
   "files": [
     "bin/run.js"
   ],
+  "scripts": {
+    "test": "node --test test/run.test.js"
+  },
   "engines": {
     "node": ">=18"
   },

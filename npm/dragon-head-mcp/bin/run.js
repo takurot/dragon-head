@@ -5,6 +5,11 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
+// Keep this map in sync with the wrapper package.json's optionalDependencies
+// and the 5 npm/platform/*/package.json names (see test/run.test.js, which
+// asserts all three agree). scripts/install.sh and .github/workflows/release.yml
+// maintain their own parallel platform lists in different languages/formats —
+// check those too when adding or removing a platform here.
 const PLATFORM_PACKAGES = {
   'darwin,arm64': 'dragon-head-mcp-darwin-arm64',
   'darwin,x64': 'dragon-head-mcp-darwin-x64',
@@ -13,15 +18,21 @@ const PLATFORM_PACKAGES = {
   'win32,x64': 'dragon-head-mcp-win32-x64',
 };
 
-function resolveBinaryPath() {
-  const key = `${process.platform},${process.arch}`;
+// Architectures we publish glibc Linux builds for. Used only to decide
+// whether the musl/Alpine hint below is relevant — an unsupported Linux
+// architecture outside this set (e.g. ia32, arm) is an arch problem, not a
+// libc problem, and the hint would be misleading there.
+const SUPPORTED_LINUX_ARCHS = new Set(['x64', 'arm64']);
+
+function resolveBinaryPath(platform = process.platform, arch = process.arch) {
+  const key = `${platform},${arch}`;
   const pkgName = PLATFORM_PACKAGES[key];
 
   if (!pkgName) {
-    const isLinux = process.platform === 'linux';
-    const muslHint = isLinux
-      ? ' Note: only glibc Linux builds are published (no musl/Alpine support yet).'
-      : '';
+    const muslHint =
+      platform === 'linux' && SUPPORTED_LINUX_ARCHS.has(arch)
+        ? ' Note: only glibc Linux builds are published (no musl/Alpine support yet).'
+        : '';
     console.error(
       `dragon-head-mcp: unsupported platform "${key}".${muslHint}\n` +
         'Use scripts/install.sh or build from source: https://github.com/takurot/dragon-head#install'
@@ -45,7 +56,17 @@ function resolveBinaryPath() {
     process.exit(1);
   }
 
-  const pkgJson = require(pkgJsonPath);
+  let pkgJson;
+  try {
+    pkgJson = require(pkgJsonPath);
+  } catch (err) {
+    console.error(
+      `dragon-head-mcp: "${pkgName}"'s package.json is corrupted (${err.message}).\n` +
+        'Re-run npm install to repair it.'
+    );
+    process.exit(1);
+  }
+
   const relativeBinaryPath = pkgJson.dragonHeadBinary;
   if (!relativeBinaryPath) {
     console.error(`dragon-head-mcp: "${pkgName}" is missing its dragonHeadBinary field.`);
@@ -87,4 +108,8 @@ function main() {
   });
 }
 
-main();
+module.exports = { PLATFORM_PACKAGES, resolveBinaryPath };
+
+if (require.main === module) {
+  main();
+}

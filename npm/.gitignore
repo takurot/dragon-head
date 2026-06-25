@@ -1,3 +1,10 @@
 node_modules/
 *.tgz
-platform/*/bin/
+
+# Real binaries are staged here only at CI publish time — never commit one.
+# Listed by filename (not a blanket bin/ ignore) so dragon-head-mcp/bin/run.js
+# stays tracked.
+platform/*/bin/dragon-head-mcp
+platform/*/bin/dragon-head-mcp.exe
+dragon-head-mcp/bin/dragon-head-mcp
+dragon-head-mcp/bin/dragon-head-mcp.exe
