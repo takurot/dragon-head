@@ -1,0 +1,17 @@
+{
+  "name": "dragon-head-mcp-win32-x64",
+  "version": "0.1.0",
+  "description": "dragon-head-mcp prebuilt binary for Windows x86-64",
+  "license": "MIT",
+  "repository": "github:takurot/dragon-head",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "dragonHeadBinary": "bin/dragon-head-mcp.exe",
+  "files": [
+    "bin/dragon-head-mcp.exe"
+  ]
+}
