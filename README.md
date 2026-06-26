@@ -1,6 +1,6 @@
 # Dragon Head: Neural-Browser Runtime
 
-**Last updated:** 2026-06-25
+**Last updated:** 2026-06-26
 
 Dragon Head is an AI-native headless browser runtime for LLM and VLM agents.
 It exposes a browser session as a compact, structured **Semantic State** and
@@ -15,7 +15,31 @@ dragon-head-mcp
 
 ## Install
 
-### Option 1: Download a prebuilt binary (recommended)
+### Option 1: npm (recommended)
+
+The fastest path for Claude Desktop / Claude Code / MCP users. Requires
+Node.js 18 or later and works with npm, pnpm, and yarn.
+
+```bash
+npm install -g dragon-head-mcp
+dragon-head-mcp --doctor
+```
+
+The correct prebuilt binary for your platform is selected automatically via
+`optionalDependencies`. No postinstall script runs, so it works in corporate
+and CI environments where `--ignore-scripts` is set.
+
+> **Don't want a global install?** You can also run it on-demand without
+> installing:
+>
+> ```bash
+> npx dragon-head-mcp --doctor
+> ```
+>
+> Using `npx` in MCP client config is covered in the
+> [MCP Client Setup](#mcp-client-setup) section.
+
+### Option 2: Download a prebuilt binary
 
 Download the binary for your platform from the
 [GitHub Releases page](https://github.com/takurot/dragon-head/releases/latest):
@@ -38,19 +62,6 @@ shasum -a 256 -c dragon-head-mcp-macos-arm64.sha256
 chmod +x dragon-head-mcp-macos-arm64
 sudo mv dragon-head-mcp-macos-arm64 /usr/local/bin/dragon-head-mcp
 ```
-
-### Option 2: npm (global install)
-
-Requires Node.js 18 or later. Works with npm, pnpm, and yarn.
-
-```bash
-npm install -g dragon-head-mcp
-dragon-head-mcp --doctor
-```
-
-The correct prebuilt binary for your platform is selected automatically via
-`optionalDependencies`. No postinstall script is involved, so it works in
-environments where `--ignore-scripts` is set.
 
 ### Option 3: Install script (macOS and Linux)
 
@@ -178,7 +189,9 @@ passes JSON-RPC messages on stdin, and reads responses from stdout.
 
 ### Claude Desktop
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`.
+
+**If installed globally via npm or prebuilt binary** (binary is in `PATH`):
 
 ```json
 {
@@ -193,9 +206,28 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
+**If you prefer not to install globally** (uses `npx`, requires Node.js 18+):
+
+```json
+{
+  "mcpServers": {
+    "dragon-head": {
+      "command": "npx",
+      "args": ["dragon-head-mcp"],
+      "env": {
+        "CHROME_PATH": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      }
+    }
+  }
+}
+```
+
+Run `dragon-head-mcp --init claude-desktop` to print the correct snippet for
+your current installation.
+
 ### Claude Code
 
-Add to your project's `.mcp.json` or run:
+**If installed globally** — add to your project's `.mcp.json`:
 
 ```bash
 claude mcp add dragon-head -- dragon-head-mcp
@@ -216,9 +248,31 @@ Or edit `.mcp.json` directly:
 }
 ```
 
+**If you prefer not to install globally** (uses `npx`):
+
+```bash
+claude mcp add dragon-head -- npx dragon-head-mcp
+```
+
+Or in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "dragon-head": {
+      "command": "npx",
+      "args": ["dragon-head-mcp"]
+    }
+  }
+}
+```
+
+Run `dragon-head-mcp --init claude-code` to print the correct snippet for
+your current installation.
+
 ### Other MCP clients
 
-Use this JSON snippet in any client that supports `mcpServers`:
+**Globally installed binary:**
 
 ```json
 {
@@ -230,15 +284,36 @@ Use this JSON snippet in any client that supports `mcpServers`:
 }
 ```
 
+**Via npx (no global install required):**
+
+```json
+{
+  "mcpServers": {
+    "dragon-head": {
+      "command": "npx",
+      "args": ["dragon-head-mcp"]
+    }
+  }
+}
+```
+
 If Chrome is installed in a standard location, `CHROME_PATH` can be omitted.
 Set it explicitly when the server cannot find Chrome or when you want to use a
 specific Chromium build.
 
 ### Troubleshooting
 
-- Use absolute paths when configuring `command` in GUI clients.
+- Use absolute paths when configuring `command` in GUI clients. GUI apps do
+  not source shell startup files, so `PATH` may not include the directory
+  where `npm install -g` placed the binary.
+  - macOS (npm default): `/Users/<you>/.npm-global/bin/dragon-head-mcp`
+  - macOS (Homebrew Node): `/opt/homebrew/bin/dragon-head-mcp`
+  - Linux: `~/.npm-global/bin/dragon-head-mcp` or `/usr/local/bin/dragon-head-mcp`
+  - Run `which dragon-head-mcp` in a terminal to find the exact path.
+- The `npx` form avoids PATH issues entirely and is the recommended approach
+  for GUI MCP clients.
 - Put environment variables in the JSON `env` object — do not rely on shell
-  startup files being sourced by GUI applications.
+  startup files.
 - Run `dragon-head-mcp --doctor` to check Chrome detection before configuring
   the MCP client.
 - If the server fails to start, check that Chrome/Chromium is accessible.
@@ -383,6 +458,8 @@ Near-term:
 
 Already shipped:
 
+- npm distribution (`npm install -g dragon-head-mcp`) via OIDC Trusted
+  Publishing — no postinstall script, works with `--ignore-scripts`.
 - Deep Lens zero-code extraction DSL.
 - Guardian Angel outcome projection for proactive policy decisions.
 - Speculative state generation for near-zero TTFT targets (wired into
