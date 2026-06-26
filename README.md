@@ -39,7 +39,20 @@ chmod +x dragon-head-mcp-macos-arm64
 sudo mv dragon-head-mcp-macos-arm64 /usr/local/bin/dragon-head-mcp
 ```
 
-### Option 2: Install script (macOS and Linux)
+### Option 2: npm (global install)
+
+Requires Node.js 18 or later. Works with npm, pnpm, and yarn.
+
+```bash
+npm install -g dragon-head-mcp
+dragon-head-mcp --doctor
+```
+
+The correct prebuilt binary for your platform is selected automatically via
+`optionalDependencies`. No postinstall script is involved, so it works in
+environments where `--ignore-scripts` is set.
+
+### Option 3: Install script (macOS and Linux)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/takurot/dragon-head/main/scripts/install.sh | bash
@@ -49,7 +62,7 @@ The script detects your platform, downloads the matching binary from the latest
 release, verifies the checksum, and installs to `/usr/local/bin`. Set
 `INSTALL_DIR` to install elsewhere.
 
-### Option 3: Build from source
+### Option 4: Build from source
 
 Requires Rust stable and Chrome or Chromium.
 
@@ -354,6 +367,8 @@ Dragon Head is organized as a Rust workspace:
 
 - **GitHub Releases**: prebuilt binaries for macOS, Linux, and Windows are
   published automatically (see [Install](#install) above).
+- **npm**: `npm install -g dragon-head-mcp` — shipped via OIDC Trusted
+  Publishing on every release tag (see [Install](#install) above).
 - **Homebrew**: A `takurot/tap` formula is planned.
 - **Docker**: A multi-platform image for CI and Linux evaluation is planned.
 - **cargo install**: Available once workspace crate publishing is ready.
