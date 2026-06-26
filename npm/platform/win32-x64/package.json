@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "description": "dragon-head-mcp prebuilt binary for Windows x86-64",
   "license": "MIT",
-  "repository": "github:takurot/dragon-head",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/takurot/dragon-head.git"
+  },
   "os": [
     "win32"
   ],

@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "description": "AI-native headless browser runtime MCP server (npm distribution wrapper)",
   "license": "MIT",
-  "repository": "github:takurot/dragon-head",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/takurot/dragon-head.git"
+  },
   "homepage": "https://github.com/takurot/dragon-head",
   "bin": {
     "dragon-head-mcp": "bin/run.js"
