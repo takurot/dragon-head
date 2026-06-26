@@ -190,7 +190,10 @@ jobs:
             "
 
             for attempt in 1 2 3; do
-              if npm publish "${pkg_dir}" --access public --provenance; then
+              # Prefix with ./ so npm treats this as a directory path, not
+              # a "user/repo" GitHub shorthand (npm/platform/* is fine, but
+              # an abundance of caution avoids any ambiguity).
+              if npm publish "./${pkg_dir}" --access public --provenance; then
                 break
               fi
               if [ "$attempt" -lt 3 ]; then
@@ -240,7 +243,10 @@ jobs:
           "
 
           for attempt in 1 2 3; do
-            if npm publish "${pkg_dir}" --access public --provenance; then
+            # Use ./ prefix: "npm/dragon-head-mcp" without it is ambiguous
+            # and npm 11 misreads it as the "npm" GitHub org + "dragon-head-mcp"
+            # repo shorthand, triggering a git ls-remote that always fails.
+            if npm publish "./${pkg_dir}" --access public --provenance; then
               break
             fi
             if [ "$attempt" -lt 3 ]; then
