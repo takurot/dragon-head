@@ -117,3 +117,137 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  npm-publish-platforms:
+    name: Publish npm platform packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # npm >= 11.5.1 is the minimum version that supports OIDC trusted
+      # publishing (no long-lived NPM_TOKEN needed). Node 22 ships with npm
+      # 10.x, so we upgrade explicitly.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@11
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Verify checksums
+        shell: bash
+        run: |
+          cd dist
+          for f in *.sha256; do
+            sha256sum -c "$f"
+          done
+
+      # Each entry is "artifact-filename:npm-platform-dir:binary-name-in-pkg".
+      # Keep this list in sync with the build matrix above and with
+      # npm/dragon-head-mcp/bin/run.js PLATFORM_PACKAGES map.
+      - name: Stage binaries and publish platform packages
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          NPM_VERSION="${VERSION#v}"
+
+          PLATFORMS=(
+            "dragon-head-mcp-macos-arm64:darwin-arm64:dragon-head-mcp"
+            "dragon-head-mcp-macos-x64:darwin-x64:dragon-head-mcp"
+            "dragon-head-mcp-linux-x64:linux-x64:dragon-head-mcp"
+            "dragon-head-mcp-linux-arm64:linux-arm64:dragon-head-mcp"
+            "dragon-head-mcp-windows-x64.exe:win32-x64:dragon-head-mcp.exe"
+          )
+
+          for entry in "${PLATFORMS[@]}"; do
+            IFS=':' read -r artifact platform_dir bin_name <<< "$entry"
+            pkg_dir="npm/platform/${platform_dir}"
+            bin_dir="${pkg_dir}/bin"
+
+            mkdir -p "$bin_dir"
+            cp "dist/${artifact}" "${bin_dir}/${bin_name}"
+            # chmod is a no-op on .exe but harmless; the || true prevents
+            # the step from failing on the Windows binary.
+            chmod +x "${bin_dir}/${bin_name}" 2>/dev/null || true
+
+            PKG_DIR="$pkg_dir" NPM_VERSION="$NPM_VERSION" node -e "
+              const fs = require('fs');
+              const p = process.env.PKG_DIR + '/package.json';
+              const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+              pkg.version = process.env.NPM_VERSION;
+              fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+            "
+
+            for attempt in 1 2 3; do
+              if npm publish "${pkg_dir}" --access public --provenance; then
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "Attempt $attempt failed for ${platform_dir}, retrying in 15s..."
+                sleep 15
+              else
+                echo "::error::All 3 publish attempts failed for ${platform_dir}"
+                exit 1
+              fi
+            done
+          done
+
+  publish-npm-wrapper:
+    name: Publish npm wrapper package
+    needs: npm-publish-platforms
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@11
+
+      - name: Bump version and publish wrapper
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          NPM_VERSION="${VERSION#v}"
+          pkg_dir="npm/dragon-head-mcp"
+
+          PKG_DIR="$pkg_dir" NPM_VERSION="$NPM_VERSION" node -e "
+            const fs = require('fs');
+            const p = process.env.PKG_DIR + '/package.json';
+            const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+            pkg.version = process.env.NPM_VERSION;
+            for (const dep of Object.keys(pkg.optionalDependencies)) {
+              pkg.optionalDependencies[dep] = process.env.NPM_VERSION;
+            }
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+          for attempt in 1 2 3; do
+            if npm publish "${pkg_dir}" --access public --provenance; then
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Attempt $attempt failed for wrapper, retrying in 15s..."
+              sleep 15
+            else
+              echo "::error::All 3 publish attempts failed for wrapper"
+              exit 1
+            fi
+          done

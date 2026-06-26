@@ -92,7 +92,35 @@ Artifacts to verify:
 
 ---
 
-## 5. Homebrew (deferred — not yet published)
+## 5. npm verification
+
+- [ ] Confirm the `npm-publish-platforms` and `publish-npm-wrapper` CI jobs completed green.
+- [ ] Verify the wrapper package is live and at the correct version:
+  ```bash
+  npm view dragon-head-mcp versions --json
+  ```
+- [ ] Smoke-test the wrapper install in a temporary directory:
+  ```bash
+  cd "$(mktemp -d)"
+  npm install dragon-head-mcp@X.Y.Z
+  ./node_modules/.bin/dragon-head-mcp --doctor
+  ```
+- [ ] Verify each platform package is also live:
+  ```bash
+  for pkg in dragon-head-mcp-darwin-arm64 dragon-head-mcp-darwin-x64 \
+              dragon-head-mcp-linux-x64 dragon-head-mcp-linux-arm64 \
+              dragon-head-mcp-win32-x64; do
+    npm view "$pkg" version
+  done
+  ```
+- [ ] Test global install (on at least one platform):
+  ```bash
+  npx dragon-head-mcp@X.Y.Z --doctor
+  ```
+
+---
+
+## 6. Homebrew (deferred — not yet published)
 
 > **Status:** Planned. A `takurot/tap` formula is tracked separately.
 >
