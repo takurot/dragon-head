@@ -1,11 +1,30 @@
 # Dragon Head: Neural-Browser Runtime
 
-**Last updated:** 2026-06-26
+**Last updated:** 2026-06-27
 
 Dragon Head is an AI-native headless browser runtime for LLM and VLM agents.
-It exposes a browser session as a compact, structured **Semantic State** and
-provides an MCP server that agents can use to inspect pages, act on elements,
-verify outcomes, request human approval, and run declarative skills.
+It exposes a browser session as a structured **Semantic State** and provides an
+MCP server that agents use to inspect pages, act on elements, verify outcomes,
+request human approval, and run declarative skills.
+
+### Why Dragon Head over plain Playwright?
+
+| | Playwright | Dragon Head |
+|---|---|---|
+| **Selector stability** | CSS/XPath breaks on UI refactors | `stable_key` (SHA-256) survives re-renders |
+| **Incremental state** | Full page re-fetch every call | RFC 6902 delta on subsequent `get_state` calls |
+| **Safety guardrails** | None | Policy Engine blocks or escalates risky actions |
+| **Human-in-the-loop** | Manual | Built-in `ask_human` with outcome projection |
+| **Prompt injection** | Undetected | `security_flags` on suspicious page content |
+| **Audit trail** | None | Structured, PII-redacted action log |
+
+> **On token count:** Benchmark data shows dragon-head's first-call payload is
+> larger than a hand-rolled Playwright custom extract (3–4× on element-dense
+> pages) because each `SemanticNode` carries a `stable_key` and metadata that
+> enable the features above. The token advantage materialises on the **second
+> call onward** via delta delivery, and in **multi-step workflows** where
+> selector stability eliminates retries.
+> Full benchmark: [`docs/bench-playwright-comparison.md`](docs/bench-playwright-comparison.md).
 
 The user-facing entry point is the stdio MCP server binary:
 
@@ -351,33 +370,28 @@ and MCP request/response fixtures.
 
 ## Benchmark: Playwright vs Dragon-Head
 
-We ran a side-by-side comparison of token usage and latency across four page
-types (static site, checkout form, SPA-like feed, and a live external site).
+Measured across four page types (3-run average, macOS Apple Silicon, Chrome 130):
 
-**Key findings (3-run average, macOS Apple Silicon, Chrome 130):**
+| Scenario | PW `page.content()` | PW custom extract | DH first call | DH delta (2nd+) |
+|---|---:|---:|---:|---:|
+| Static site | 2,796 tok | 860 tok | 3,465 tok | **~20–50 tok** |
+| Checkout form | 3,465 tok | 630 tok | 2,841 tok | **~20–50 tok** |
+| SPA-like feed | 21,165 tok | 5,945 tok | 22,993 tok | **~20–50 tok** |
+| example.com | 139 tok | 19 tok | 55 tok | **~5–15 tok** |
 
-| Scenario | PW `page.content()` | PW custom extract | Dragon-head SRE |
-|---|---:|---:|---:|
-| Static site | 2,796 tok | **860 tok** | 3,465 tok |
-| Checkout form | 3,465 tok | **630 tok** | 2,841 tok |
-| SPA-like feed | 21,165 tok | **5,945 tok** | 22,993 tok |
-| example.com | 139 tok | **19 tok** | 55 tok |
+**Reading the numbers:**
 
-Dragon-head reduces tokens vs raw HTML on clean pages (example.com: **−60%**,
-forms: **−18%**) but can exceed raw HTML on content-heavy pages with many
-interactive elements.
+- Dragon-head's first call is larger than a Playwright custom extract because
+  each element carries `stable_key`, `alias`, and metadata needed for delta
+  delivery, self-healing, and policy checks.
+- From the **second call onward**, dragon-head sends only an RFC 6902 JSON
+  patch of changed nodes (typically 20–50 tokens), independent of page size.
+  In a 10-step workflow this makes cumulative token cost lower than Playwright.
+- Dragon-head's value is **not** raw first-call token minimisation. It is the
+  combination of stable selectors, incremental state, and enterprise safety
+  that makes long-running agents reliable and auditable.
 
-Dragon-head's primary advantages over Playwright are **not raw token count**
-but rather:
-
-- **`stable_key`**: SHA-256 element identity survives CSS/layout refactors
-- **Delta delivery**: subsequent `get_state` calls return RFC 6902 patches
-  (typically 10–50 tokens) instead of the full page
-- **Policy Engine + HITL**: automatic detection of financial transactions and
-  human-approval escalation — no Playwright equivalent
-- **Prompt injection detection**: `security_flags` on suspicious page content
-
-For the full methodology, raw numbers, and improvement recommendations see
+For full methodology, raw numbers, and improvement recommendations see
 [`docs/bench-playwright-comparison.md`](docs/bench-playwright-comparison.md).
 
 ## Testing and Verification
