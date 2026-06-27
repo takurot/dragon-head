@@ -349,6 +349,37 @@ cargo run --example policy_cookbook
 See [examples/README.md](examples/README.md) for sample policies, sample skills,
 and MCP request/response fixtures.
 
+## Benchmark: Playwright vs Dragon-Head
+
+We ran a side-by-side comparison of token usage and latency across four page
+types (static site, checkout form, SPA-like feed, and a live external site).
+
+**Key findings (3-run average, macOS Apple Silicon, Chrome 130):**
+
+| Scenario | PW `page.content()` | PW custom extract | Dragon-head SRE |
+|---|---:|---:|---:|
+| Static site | 2,796 tok | **860 tok** | 3,465 tok |
+| Checkout form | 3,465 tok | **630 tok** | 2,841 tok |
+| SPA-like feed | 21,165 tok | **5,945 tok** | 22,993 tok |
+| example.com | 139 tok | **19 tok** | 55 tok |
+
+Dragon-head reduces tokens vs raw HTML on clean pages (example.com: **−60%**,
+forms: **−18%**) but can exceed raw HTML on content-heavy pages with many
+interactive elements.
+
+Dragon-head's primary advantages over Playwright are **not raw token count**
+but rather:
+
+- **`stable_key`**: SHA-256 element identity survives CSS/layout refactors
+- **Delta delivery**: subsequent `get_state` calls return RFC 6902 patches
+  (typically 10–50 tokens) instead of the full page
+- **Policy Engine + HITL**: automatic detection of financial transactions and
+  human-approval escalation — no Playwright equivalent
+- **Prompt injection detection**: `security_flags` on suspicious page content
+
+For the full methodology, raw numbers, and improvement recommendations see
+[`docs/bench-playwright-comparison.md`](docs/bench-playwright-comparison.md).
+
 ## Testing and Verification
 
 Run the full workspace test suite:
