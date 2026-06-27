@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkout — Benchmark Fixture</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f4f4f5; color: #111; min-height: 100vh; }
+    header { background: #fff; border-bottom: 1px solid #e5e5e5; padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; }
+    header .logo { font-weight: bold; font-size: 1.25rem; color: #18181b; }
+    header nav a { color: #52525b; text-decoration: none; margin-left: 1.5rem; font-size: 0.875rem; }
+    .checkout-layout { display: grid; grid-template-columns: 1fr 400px; gap: 2rem; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+    .form-panel { background: #fff; border-radius: 8px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    .form-panel h2 { margin-bottom: 1.5rem; font-size: 1.125rem; }
+    .field { margin-bottom: 1.25rem; }
+    .field label { display: block; font-size: 0.875rem; font-weight: 500; color: #374151; margin-bottom: 0.375rem; }
+    .field input, .field select, .field textarea { width: 100%; padding: 0.625rem 0.875rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem; transition: border-color 0.15s; }
+    .field input:focus, .field select:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .btn-primary { width: 100%; padding: 0.875rem; background: #6366f1; color: #fff; border: none; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 0.5rem; }
+    .btn-secondary { width: 100%; padding: 0.75rem; background: #fff; color: #374151; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem; cursor: pointer; margin-top: 0.5rem; }
+    .divider { display: flex; align-items: center; gap: 1rem; margin: 1.5rem 0; color: #9ca3af; font-size: 0.875rem; }
+    .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #e5e7eb; }
+    .order-summary { background: #fff; border-radius: 8px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); height: fit-content; }
+    .order-item { display: flex; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid #f3f4f6; }
+    .order-item img { width: 64px; height: 64px; object-fit: cover; border-radius: 4px; background: #f3f4f6; }
+    .order-totals { margin-top: 1rem; }
+    .order-totals .row { display: flex; justify-content: space-between; padding: 0.5rem 0; font-size: 0.9rem; color: #374151; }
+    .order-totals .total { font-weight: bold; font-size: 1rem; border-top: 2px solid #e5e7eb; padding-top: 0.75rem; margin-top: 0.25rem; }
+    .trust-badges { display: flex; gap: 1rem; margin-top: 1.5rem; font-size: 0.75rem; color: #6b7280; }
+    .steps { display: flex; gap: 0; margin-bottom: 2rem; }
+    .step { flex: 1; padding: 0.75rem; text-align: center; font-size: 0.8rem; background: #f9fafb; border: 1px solid #e5e7eb; }
+    .step.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+    .step.done { background: #10b981; color: #fff; border-color: #10b981; }
+    .promo-field { display: flex; gap: 0.5rem; }
+    .promo-field input { flex: 1; }
+    .promo-field button { padding: 0.625rem 1rem; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">ExampleStore</div>
+    <nav aria-label="Header navigation">
+      <a href="/">Home</a>
+      <a href="/products">Products</a>
+      <a href="/cart">Cart (3)</a>
+      <a href="/account">Account</a>
+    </nav>
+  </header>
+
+  <main class="checkout-layout">
+    <div>
+      <nav class="steps" aria-label="Checkout progress">
+        <div class="step done">1. Cart</div>
+        <div class="step active">2. Details</div>
+        <div class="step">3. Shipping</div>
+        <div class="step">4. Payment</div>
+      </nav>
+
+      <form method="post" action="/checkout/submit" id="checkout-form" novalidate>
+        <section class="form-panel" aria-labelledby="contact-heading">
+          <h2 id="contact-heading">Contact Information</h2>
+          <div class="field">
+            <label for="email">Email address *</label>
+            <input type="email" id="email" name="email" autocomplete="email" required
+                   placeholder="you@example.com" aria-describedby="email-hint">
+            <span id="email-hint" style="font-size:0.75rem;color:#6b7280;">We'll send your receipt here.</span>
+          </div>
+          <div class="field">
+            <label for="phone">Phone number</label>
+            <input type="tel" id="phone" name="phone" autocomplete="tel" placeholder="+1 (555) 000-0000">
+          </div>
+          <div class="divider">or continue with</div>
+          <button type="button" class="btn-secondary">Continue as Guest</button>
+          <button type="button" class="btn-secondary" style="margin-top:0.5rem;">Sign In to Your Account</button>
+        </section>
+
+        <section class="form-panel" aria-labelledby="shipping-heading" style="margin-top:1.5rem;">
+          <h2 id="shipping-heading">Shipping Address</h2>
+          <div class="field-row">
+            <div class="field">
+              <label for="first-name">First name *</label>
+              <input type="text" id="first-name" name="first_name" autocomplete="given-name" required placeholder="Jane">
+            </div>
+            <div class="field">
+              <label for="last-name">Last name *</label>
+              <input type="text" id="last-name" name="last_name" autocomplete="family-name" required placeholder="Doe">
+            </div>
+          </div>
+          <div class="field">
+            <label for="address1">Street address *</label>
+            <input type="text" id="address1" name="address1" autocomplete="address-line1" required placeholder="123 Main St">
+          </div>
+          <div class="field">
+            <label for="address2">Apartment, suite, etc.</label>
+            <input type="text" id="address2" name="address2" autocomplete="address-line2" placeholder="Apt 4B">
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="city">City *</label>
+              <input type="text" id="city" name="city" autocomplete="address-level2" required placeholder="New York">
+            </div>
+            <div class="field">
+              <label for="state">State *</label>
+              <select id="state" name="state" autocomplete="address-level1" required aria-label="State">
+                <option value="">Select state</option>
+                <option value="CA">California</option>
+                <option value="NY">New York</option>
+                <option value="TX">Texas</option>
+                <option value="FL">Florida</option>
+                <option value="WA">Washington</option>
+                <option value="OR">Oregon</option>
+                <option value="IL">Illinois</option>
+                <option value="PA">Pennsylvania</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="zip">ZIP code *</label>
+              <input type="text" id="zip" name="zip" autocomplete="postal-code" required placeholder="10001" pattern="[0-9]{5}">
+            </div>
+            <div class="field">
+              <label for="country">Country *</label>
+              <select id="country" name="country" autocomplete="country" required aria-label="Country">
+                <option value="US">United States</option>
+                <option value="CA">Canada</option>
+                <option value="GB">United Kingdom</option>
+                <option value="AU">Australia</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section class="form-panel" aria-labelledby="shipping-method-heading" style="margin-top:1.5rem;">
+          <h2 id="shipping-method-heading">Shipping Method</h2>
+          <fieldset style="border:none;padding:0;">
+            <legend class="sr-only">Select shipping method</legend>
+            <label style="display:flex;align-items:center;gap:1rem;padding:1rem;border:2px solid #6366f1;border-radius:6px;cursor:pointer;margin-bottom:0.75rem;">
+              <input type="radio" name="shipping_method" value="standard" checked> Standard (5–7 days) — FREE
+            </label>
+            <label style="display:flex;align-items:center;gap:1rem;padding:1rem;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;margin-bottom:0.75rem;">
+              <input type="radio" name="shipping_method" value="express"> Express (2–3 days) — $9.99
+            </label>
+            <label style="display:flex;align-items:center;gap:1rem;padding:1rem;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;">
+              <input type="radio" name="shipping_method" value="overnight"> Overnight (1 day) — $24.99
+            </label>
+          </fieldset>
+        </section>
+
+        <section class="form-panel" aria-labelledby="payment-heading" style="margin-top:1.5rem;">
+          <h2 id="payment-heading">Payment Details</h2>
+          <div class="field">
+            <label for="card-number">Card number *</label>
+            <input type="text" id="card-number" name="card_number" autocomplete="cc-number" required
+                   placeholder="1234 5678 9012 3456" inputmode="numeric" maxlength="19">
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="card-expiry">Expiry date *</label>
+              <input type="text" id="card-expiry" name="card_expiry" autocomplete="cc-exp" required placeholder="MM / YY">
+            </div>
+            <div class="field">
+              <label for="card-cvc">Security code *</label>
+              <input type="text" id="card-cvc" name="card_cvc" autocomplete="cc-csc" required placeholder="CVC" maxlength="4">
+            </div>
+          </div>
+          <div class="field">
+            <label for="card-name">Name on card *</label>
+            <input type="text" id="card-name" name="card_name" autocomplete="cc-name" required placeholder="Jane Doe">
+          </div>
+          <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;font-size:0.875rem;">
+            <input type="checkbox" name="save_card" id="save-card"> Save this card for future purchases
+          </label>
+        </section>
+
+        <div style="margin-top:1.5rem;">
+          <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.875rem;margin-bottom:1rem;">
+            <input type="checkbox" name="agree_terms" required id="agree-terms">
+            I agree to the <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>
+          </label>
+          <button type="submit" class="btn-primary">Place Order — $449.97</button>
+          <a href="/cart" style="display:block;text-align:center;margin-top:1rem;color:#6b7280;font-size:0.875rem;">← Return to cart</a>
+        </div>
+      </form>
+    </div>
+
+    <aside>
+      <section class="order-summary" aria-labelledby="order-summary-heading">
+        <h2 id="order-summary-heading" style="margin-bottom:1rem;">Order Summary</h2>
+        <div class="order-item">
+          <div style="width:64px;height:64px;background:#e5e7eb;border-radius:4px;"></div>
+          <div>
+            <p style="font-weight:500;">Wireless Headphones Pro</p>
+            <p style="font-size:0.8rem;color:#6b7280;">Qty: 1</p>
+            <p style="font-weight:600;">$149.99</p>
+          </div>
+        </div>
+        <div class="order-item">
+          <div style="width:64px;height:64px;background:#e5e7eb;border-radius:4px;"></div>
+          <div>
+            <p style="font-weight:500;">SmartWatch Elite</p>
+            <p style="font-size:0.8rem;color:#6b7280;">Qty: 1</p>
+            <p style="font-weight:600;">$299.99</p>
+          </div>
+        </div>
+        <div style="margin-top:1rem;">
+          <div class="promo-field">
+            <input type="text" placeholder="Promo code" aria-label="Promo code" name="promo_code" id="promo-code">
+            <button type="button" onclick="applyPromo()">Apply</button>
+          </div>
+        </div>
+        <div class="order-totals">
+          <div class="row"><span>Subtotal</span><span>$449.98</span></div>
+          <div class="row"><span>Shipping</span><span>FREE</span></div>
+          <div class="row"><span>Tax (8%)</span><span>$36.00</span></div>
+          <div class="row"><span>Promo discount</span><span id="discount-display">—</span></div>
+          <div class="row total"><span>Total</span><span>$485.98</span></div>
+        </div>
+        <div class="trust-badges">
+          <span>🔒 Secure checkout</span>
+          <span>✓ 30-day returns</span>
+          <span>🚚 Free shipping</span>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <footer style="background:#18181b;color:#9ca3af;padding:2rem;text-align:center;font-size:0.8rem;margin-top:3rem;">
+    <p>© 2024 ExampleStore Inc. |
+      <a href="/privacy" style="color:#9ca3af;">Privacy</a> |
+      <a href="/terms" style="color:#9ca3af;">Terms</a> |
+      <a href="/security" style="color:#9ca3af;">Security</a>
+    </p>
+    <p style="margin-top:0.5rem;">Payments processed securely. PCI DSS compliant.</p>
+  </footer>
+
+  <script>
+    function applyPromo() {
+      const code = document.getElementById('promo-code').value;
+      const display = document.getElementById('discount-display');
+      display.textContent = code ? `-$${(Math.random() * 20 + 5).toFixed(2)}` : '—';
+    }
+  </script>
+</body>
+</html>

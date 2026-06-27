@@ -44,6 +44,10 @@ fn measure_sre(url: &str, chrome_path: Option<String>) -> anyhow::Result<(usize,
     page.navigate(url)?;
     let state = page.capture_semantic_state(LoadProfile::Minimal)?;
     let elapsed = start.elapsed().as_millis();
-    let json = serde_json::to_string(&state)?;
+    // Measure interactive_elements only — matches what MCP get_state returns to
+    // the LLM (ExternalSemanticState). FastSemanticState also contains messages
+    // (all non-empty text nodes), which are NOT included in the MCP payload.
+    let fast = state.generate_fast_state();
+    let json = serde_json::to_string(&fast.interactive_elements)?;
     Ok((json.len(), elapsed))
 }

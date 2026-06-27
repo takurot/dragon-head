@@ -80,6 +80,34 @@ pub fn write_markdown(
     Ok(())
 }
 
+/// Write a JSON report consumable by the `bench-playwright` compare script.
+///
+/// Schema mirrors `DragonHeadMetrics` in `bench-playwright/src/compare.ts`.
+pub fn write_json(m: &AggregatedMetrics, url: &str, path: &Path) -> Result<()> {
+    let s = cost_savings(m.raw_avg_tokens, m.sre_avg_tokens);
+    let json = serde_json::json!([{
+        "url": url,
+        "runs": m.runs,
+        "raw_html": {
+            "avg_tokens": m.raw_avg_tokens,
+            "avg_ttft_ms": m.raw_avg_ttft_ms,
+            "success_rate": m.raw_success_rate
+        },
+        "sre_minimal": {
+            "avg_tokens": m.sre_avg_tokens,
+            "avg_ttft_ms": m.sre_avg_ttft_ms,
+            "success_rate": m.sre_success_rate
+        },
+        "cost_savings": {
+            "token_reduction_pct": s.token_reduction_pct,
+            "gpt4o_savings_usd": s.gpt4o_savings_usd,
+            "claude_savings_usd": s.claude_savings_usd
+        }
+    }]);
+    std::fs::write(path, serde_json::to_string_pretty(&json)?)?;
+    Ok(())
+}
+
 fn build_markdown(
     m: &AggregatedMetrics,
     url: &str,
@@ -200,5 +228,28 @@ mod tests {
         write_markdown(&m, "https://example.com", None, &path).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("Dragon Head ROI"));
+    }
+
+    #[test]
+    fn write_json_produces_valid_dragon_head_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.json");
+        let m = sample_metrics();
+        write_json(&m, "https://example.com", &path).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        // Output is a JSON array with one object per URL
+        let entry = &v[0];
+        assert_eq!(entry["url"], "https://example.com");
+        assert_eq!(entry["runs"], 1_u64);
+        assert_eq!(entry["raw_html"]["avg_tokens"], 10_000_u64); // 40000/4
+        assert_eq!(entry["sre_minimal"]["avg_tokens"], 500_u64); // 2000/4
+        let reduction = entry["cost_savings"]["token_reduction_pct"]
+            .as_f64()
+            .unwrap();
+        assert!(
+            (reduction - 95.0).abs() < 0.1,
+            "expected ~95% reduction, got {reduction}"
+        );
     }
 }

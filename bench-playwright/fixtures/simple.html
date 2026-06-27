@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Benchmark fixture: static page with navigation and interactive elements">
+  <title>Example Store — Benchmark Fixture</title>
+  <!-- Typical real-world page: nav, hero, product grid, newsletter, footer -->
+  <!-- Inline styles simulate what a real CMS/framework would inject -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; color: #111; background: #fff; }
+    header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; }
+    nav a { color: #ccc; text-decoration: none; margin: 0 0.75rem; font-size: 0.9rem; }
+    nav a:hover { color: #fff; }
+    .hero { padding: 4rem 2rem; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; }
+    .hero h1 { font-size: 2.5rem; margin-bottom: 1rem; }
+    .hero p { font-size: 1.1rem; max-width: 600px; margin: 0 auto 2rem; opacity: 0.9; }
+    .btn { display: inline-block; padding: 0.75rem 2rem; background: #fff; color: #764ba2; border-radius: 4px; font-weight: bold; text-decoration: none; border: none; cursor: pointer; }
+    .products { padding: 3rem 2rem; max-width: 1200px; margin: 0 auto; }
+    .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1.5rem; margin-top: 2rem; }
+    .product-card { border: 1px solid #e5e5e5; border-radius: 8px; padding: 1.5rem; }
+    .product-card h3 { margin-bottom: 0.5rem; }
+    .product-card .price { color: #764ba2; font-weight: bold; font-size: 1.2rem; margin: 0.5rem 0; }
+    .search-bar { display: flex; gap: 0.5rem; max-width: 500px; margin: 2rem auto; }
+    .search-bar input { flex: 1; padding: 0.75rem 1rem; border: 2px solid #e5e5e5; border-radius: 4px; font-size: 1rem; }
+    .newsletter { background: #f9f9f9; padding: 3rem 2rem; text-align: center; }
+    .newsletter-form { display: flex; gap: 0.5rem; max-width: 400px; margin: 1rem auto 0; }
+    .newsletter-form input { flex: 1; padding: 0.75rem 1rem; border: 2px solid #ddd; border-radius: 4px; }
+    footer { background: #1a1a2e; color: #ccc; padding: 2rem; text-align: center; font-size: 0.85rem; }
+    footer a { color: #aaa; text-decoration: none; margin: 0 0.5rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo" aria-label="Example Store logo">ExampleStore</div>
+    <nav aria-label="Main navigation">
+      <a href="/home">Home</a>
+      <a href="/products">Products</a>
+      <a href="/categories">Categories</a>
+      <a href="/about">About</a>
+      <a href="/blog">Blog</a>
+      <a href="/contact">Contact</a>
+      <a href="/support">Support</a>
+    </nav>
+    <div class="header-actions">
+      <a href="/cart" aria-label="Shopping cart (3 items)">Cart (3)</a>
+      <a href="/account" aria-label="My account">Account</a>
+    </div>
+  </header>
+
+  <section class="hero" aria-label="Hero banner">
+    <h1>Discover Amazing Products</h1>
+    <p>Shop the best curated collection of premium products. Free shipping on orders over $50.</p>
+    <a href="/products" class="btn">Shop Now</a>
+    <a href="/sale" class="btn" style="margin-left:1rem;background:#764ba2;color:#fff;">View Sale</a>
+  </section>
+
+  <main>
+    <section class="products" aria-label="Featured products">
+      <h2>Featured Products</h2>
+      <div class="search-bar" role="search">
+        <input type="search" placeholder="Search products..." aria-label="Search products" name="q">
+        <button type="submit">Search</button>
+      </div>
+      <div class="product-grid" role="list">
+        <article class="product-card" role="listitem">
+          <img src="/img/product-1.jpg" alt="Wireless Headphones" width="200" height="200" loading="lazy">
+          <h3>Wireless Headphones Pro</h3>
+          <p>Premium noise-cancelling headphones with 30-hour battery life and superior sound quality.</p>
+          <div class="price">$149.99</div>
+          <p><small>SKU: WHP-001 | In stock: 42 units</small></p>
+          <a href="/product/wireless-headphones-pro" class="btn">View Details</a>
+          <button type="button" data-product-id="WHP-001">Add to Cart</button>
+        </article>
+        <article class="product-card" role="listitem">
+          <img src="/img/product-2.jpg" alt="Smart Watch" width="200" height="200" loading="lazy">
+          <h3>SmartWatch Elite</h3>
+          <p>Track your fitness, receive notifications, and monitor your health 24/7.</p>
+          <div class="price">$299.99</div>
+          <p><small>SKU: SWE-002 | In stock: 18 units</small></p>
+          <a href="/product/smartwatch-elite" class="btn">View Details</a>
+          <button type="button" data-product-id="SWE-002">Add to Cart</button>
+        </article>
+        <article class="product-card" role="listitem">
+          <img src="/img/product-3.jpg" alt="Laptop Stand" width="200" height="200" loading="lazy">
+          <h3>Ergonomic Laptop Stand</h3>
+          <p>Adjustable aluminium stand compatible with all laptops 11–17 inches.</p>
+          <div class="price">$79.99</div>
+          <p><small>SKU: ELS-003 | In stock: 94 units</small></p>
+          <a href="/product/ergonomic-laptop-stand" class="btn">View Details</a>
+          <button type="button" data-product-id="ELS-003">Add to Cart</button>
+        </article>
+        <article class="product-card" role="listitem">
+          <img src="/img/product-4.jpg" alt="Mechanical Keyboard" width="200" height="200" loading="lazy">
+          <h3>Mechanical Keyboard TKL</h3>
+          <p>Tenkeyless mechanical keyboard with RGB backlighting and tactile switches.</p>
+          <div class="price">$119.99</div>
+          <p><small>SKU: MKT-004 | In stock: 27 units</small></p>
+          <a href="/product/mechanical-keyboard-tkl" class="btn">View Details</a>
+          <button type="button" data-product-id="MKT-004">Add to Cart</button>
+        </article>
+        <article class="product-card" role="listitem">
+          <img src="/img/product-5.jpg" alt="USB-C Hub" width="200" height="200" loading="lazy">
+          <h3>7-in-1 USB-C Hub</h3>
+          <p>Expand your connectivity with HDMI, USB-A, SD card, and Ethernet ports.</p>
+          <div class="price">$59.99</div>
+          <p><small>SKU: UCH-005 | In stock: 63 units</small></p>
+          <a href="/product/usb-c-hub-7in1" class="btn">View Details</a>
+          <button type="button" data-product-id="UCH-005">Add to Cart</button>
+        </article>
+        <article class="product-card" role="listitem">
+          <img src="/img/product-6.jpg" alt="Webcam" width="200" height="200" loading="lazy">
+          <h3>4K Webcam Pro</h3>
+          <p>Crystal-clear 4K video with built-in ring light and noise-cancelling microphone.</p>
+          <div class="price">$199.99</div>
+          <p><small>SKU: WCP-006 | In stock: 11 units</small></p>
+          <a href="/product/4k-webcam-pro" class="btn">View Details</a>
+          <button type="button" data-product-id="WCP-006">Add to Cart</button>
+        </article>
+      </div>
+
+      <div style="text-align:center;margin-top:2rem;">
+        <a href="/products?page=1" class="btn" style="background:#764ba2;color:#fff;">Previous</a>
+        <a href="/products?page=2" class="btn" style="background:#764ba2;color:#fff;">Next</a>
+      </div>
+    </section>
+
+    <section aria-label="Category filter">
+      <div style="padding:2rem;background:#f5f5f5;">
+        <h2>Browse by Category</h2>
+        <nav aria-label="Product categories">
+          <a href="/category/audio">Audio</a>
+          <a href="/category/wearables">Wearables</a>
+          <a href="/category/accessories">Accessories</a>
+          <a href="/category/peripherals">Peripherals</a>
+          <a href="/category/networking">Networking</a>
+          <a href="/category/storage">Storage</a>
+          <a href="/category/cameras">Cameras</a>
+          <a href="/category/lighting">Lighting</a>
+        </nav>
+        <label for="sort">Sort by:</label>
+        <select id="sort" name="sort" aria-label="Sort products">
+          <option value="relevance">Relevance</option>
+          <option value="price-asc">Price: Low to High</option>
+          <option value="price-desc">Price: High to Low</option>
+          <option value="newest">Newest Arrivals</option>
+          <option value="rating">Highest Rated</option>
+        </select>
+        <label for="per-page">Items per page:</label>
+        <select id="per-page" name="per_page" aria-label="Items per page">
+          <option value="12">12</option>
+          <option value="24">24</option>
+          <option value="48">48</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="newsletter" aria-label="Newsletter signup">
+      <h2>Stay in the Loop</h2>
+      <p>Get exclusive deals, new product alerts, and member-only discounts delivered to your inbox.</p>
+      <form class="newsletter-form" method="post" action="/newsletter/subscribe">
+        <input type="email" name="email" placeholder="your@email.com" aria-label="Email address" required autocomplete="email">
+        <button type="submit">Subscribe</button>
+      </form>
+      <p style="font-size:0.8rem;color:#666;margin-top:0.5rem;">
+        No spam. Unsubscribe anytime. By subscribing you agree to our
+        <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:2rem;max-width:1200px;margin:0 auto 2rem;text-align:left;">
+      <div>
+        <h4 style="color:#fff;margin-bottom:0.75rem;">ExampleStore</h4>
+        <p style="font-size:0.8rem;line-height:1.6;">Premium products for the modern lifestyle. Quality guaranteed or your money back.</p>
+      </div>
+      <div>
+        <h4 style="color:#fff;margin-bottom:0.75rem;">Shop</h4>
+        <nav aria-label="Footer shop links">
+          <a href="/products">All Products</a><br>
+          <a href="/sale">Sale</a><br>
+          <a href="/new-arrivals">New Arrivals</a><br>
+          <a href="/bestsellers">Best Sellers</a>
+        </nav>
+      </div>
+      <div>
+        <h4 style="color:#fff;margin-bottom:0.75rem;">Support</h4>
+        <nav aria-label="Footer support links">
+          <a href="/faq">FAQ</a><br>
+          <a href="/shipping">Shipping Info</a><br>
+          <a href="/returns">Returns</a><br>
+          <a href="/contact">Contact Us</a>
+        </nav>
+      </div>
+      <div>
+        <h4 style="color:#fff;margin-bottom:0.75rem;">Company</h4>
+        <nav aria-label="Footer company links">
+          <a href="/about">About Us</a><br>
+          <a href="/blog">Blog</a><br>
+          <a href="/careers">Careers</a><br>
+          <a href="/press">Press</a>
+        </nav>
+      </div>
+    </div>
+    <p>&copy; 2024 ExampleStore Inc. All rights reserved. |
+      <a href="/privacy">Privacy</a> |
+      <a href="/terms">Terms</a> |
+      <a href="/cookies">Cookies</a> |
+      <a href="/sitemap.xml">Sitemap</a>
+    </p>
+  </footer>
+</body>
+</html>
