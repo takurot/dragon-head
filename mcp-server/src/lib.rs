@@ -8,6 +8,7 @@ use core_runtime::{
     ActionError, ApprovalScope, BrowserClient, DeltaPolicy, PageSession, PolicyRule,
     PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig, SemanticState,
     SemanticTarget, SemanticWaitState, SessionError, StateUpdate, VerifyError,
+    STABLE_KEY_SHORT_LEN,
 };
 use plugin_host::{ExtractionRule, SchemaRegistry};
 use serde::{Deserialize, Serialize};
@@ -1464,11 +1465,13 @@ impl CoreRuntimeBackend {
         speculative: bool,
     ) -> Result<ExternalInteractiveElement> {
         let id = node.backend_node_id;
-        let stable_key = node
-            .stable_key
-            .clone()
-            .filter(|key| !key.trim().is_empty())
-            .unwrap_or_else(|| fallback_stable_key(&node));
+        let stable_key = shorten_key(
+            &node
+                .stable_key
+                .clone()
+                .filter(|key| !key.trim().is_empty())
+                .unwrap_or_else(|| fallback_stable_key(&node)),
+        );
         let alias = node
             .alias
             .clone()
@@ -1776,7 +1779,7 @@ impl McpBackend for CoreRuntimeBackend {
                 .map(|mark| {
                     json!({
                         "id": mark.id,
-                        "stable_key": mark.stable_key,
+                        "stable_key": mark.stable_key.as_deref().map(shorten_key),
                         "bbox": mark.bbox
                     })
                 })
@@ -2339,6 +2342,12 @@ fn infer_policy_flags(node: &SemanticNode) -> Vec<String> {
     flags
 }
 
+/// Truncate a full SHA-256 hex key to the external short form.
+/// If the input is already shorter than `STABLE_KEY_SHORT_LEN`, it is returned as-is.
+fn shorten_key(key: &str) -> String {
+    key.chars().take(STABLE_KEY_SHORT_LEN).collect()
+}
+
 fn fallback_stable_key(node: &SemanticNode) -> String {
     let mut hasher = Sha256::new();
     hasher.update(node.role.as_bytes());
@@ -2346,7 +2355,7 @@ fn fallback_stable_key(node: &SemanticNode) -> String {
     hasher.update(node.label.clone().unwrap_or_default().as_bytes());
     hasher.update(b":");
     hasher.update(node.backend_node_id.to_string().as_bytes());
-    hex::encode(hasher.finalize())
+    shorten_key(&hex::encode(hasher.finalize()))
 }
 
 fn fallback_alias(node: &SemanticNode, stable_key: &str) -> String {
@@ -2619,6 +2628,37 @@ mod tests {
             },
             LoadProfile::Interactive,
         )
+    }
+
+    #[test]
+    fn shorten_key_truncates_64_char_sha256_to_16() {
+        let full = "a".repeat(64);
+        assert_eq!(shorten_key(&full), "a".repeat(16));
+    }
+
+    #[test]
+    fn shorten_key_leaves_short_strings_unchanged() {
+        assert_eq!(shorten_key("abc"), "abc");
+    }
+
+    #[test]
+    fn fallback_stable_key_returns_16_hex_chars() {
+        let node = SemanticNode {
+            role: "button".to_string(),
+            label: Some("Submit".to_string()),
+            backend_node_id: 42,
+            ..make_node(42, vec![])
+        };
+        let key = fallback_stable_key(&node);
+        assert_eq!(
+            key.len(),
+            16,
+            "fallback_stable_key must return 16-char key, got {key:?}"
+        );
+        assert!(
+            key.chars().all(|c| c.is_ascii_hexdigit()),
+            "fallback_stable_key must be hex, got {key:?}"
+        );
     }
 
     #[test]

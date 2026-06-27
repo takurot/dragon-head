@@ -21,6 +21,7 @@ pub use sre::{
 pub use browser::{
     is_browser_disconnected, ActionLogEntry, BrowserClient, PageSession, SemanticTarget,
     SemanticWaitOptions, SemanticWaitState, SomMark, SomTrigger, VisualCapture,
+    STABLE_KEY_SHORT_LEN,
 };
 pub mod error;
 pub use audit_sink::DurabilityMode;

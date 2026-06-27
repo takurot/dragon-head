@@ -847,19 +847,25 @@ impl PageSession {
     }
 
     /// Resolve a backend node id from the per-session stable_key index.
+    /// The index is keyed by the first `STABLE_KEY_SHORT_LEN` hex chars; callers
+    /// may pass either the full 64-char internal key or the 16-char external key.
     pub fn lookup_backend_node_id_by_stable_key(&self, stable_key: &str) -> Option<i64> {
+        let short: String = stable_key.chars().take(STABLE_KEY_SHORT_LEN).collect();
         self.stable_key_index
             .lock()
             .ok()
-            .and_then(|index| index.get(stable_key).map(|entry| entry.backend_node_id))
+            .and_then(|index| index.get(short.as_str()).map(|entry| entry.backend_node_id))
     }
 
     /// Resolve alias metadata from the per-session stable_key index.
+    /// See [`lookup_backend_node_id_by_stable_key`] for key-length semantics.
     pub fn lookup_alias_by_stable_key(&self, stable_key: &str) -> Option<String> {
-        self.stable_key_index
-            .lock()
-            .ok()
-            .and_then(|index| index.get(stable_key).and_then(|entry| entry.alias.clone()))
+        let short: String = stable_key.chars().take(STABLE_KEY_SHORT_LEN).collect();
+        self.stable_key_index.lock().ok().and_then(|index| {
+            index
+                .get(short.as_str())
+                .and_then(|entry| entry.alias.clone())
+        })
     }
 
     /// Returns a clone of this session's [`AuditLogger`] handle.
@@ -2386,11 +2392,19 @@ fn semantic_path(parent_path: &str, role: &str) -> String {
     format!("{}/{}", parent_path, role.to_lowercase())
 }
 
+/// Number of hex characters exposed in the external (LLM-facing) stable_key.
+/// 16 hex chars = 64 bits of entropy; negligible collision probability at page scale.
+/// Re-exported from `core-runtime` so downstream crates share a single source of truth.
+pub const STABLE_KEY_SHORT_LEN: usize = 16;
+
 fn collect_stable_key_entries(node: &SemanticNode, out: &mut HashMap<String, StableKeyIndexEntry>) {
     if let Some(key) = &node.stable_key {
         if node.backend_node_id > 0 {
+            // Index by the short key so that agents (which receive the 16-char form
+            // from ExternalInteractiveElement) can resolve their key back to a node id.
+            let short_key: String = key.chars().take(STABLE_KEY_SHORT_LEN).collect();
             out.insert(
-                key.clone(),
+                short_key,
                 StableKeyIndexEntry {
                     backend_node_id: node.backend_node_id,
                     alias: node.alias.clone(),
