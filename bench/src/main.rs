@@ -24,6 +24,10 @@ struct Args {
     #[arg(long)]
     output: Option<PathBuf>,
 
+    /// Write JSON report to this file (for bench-playwright comparison)
+    #[arg(long)]
+    output_json: Option<PathBuf>,
+
     /// Human-readable task description for the report
     #[arg(long)]
     task: Option<String>,
@@ -64,6 +68,11 @@ fn main() -> anyhow::Result<()> {
     if let Some(path) = &args.output {
         report::write_markdown(&metrics, &args.url, args.task.as_deref(), path)?;
         eprintln!("Report written to {}", path.display());
+    }
+
+    if let Some(path) = &args.output_json {
+        report::write_json(&metrics, &args.url, path)?;
+        eprintln!("JSON report written to {}", path.display());
     }
 
     Ok(())

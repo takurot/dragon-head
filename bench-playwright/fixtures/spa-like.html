@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Feed — Benchmark Fixture (SPA-like)</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f9fafb; color: #111; }
+    .app { max-width: 900px; margin: 0 auto; padding: 1rem; }
+    header { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 1rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; }
+    .search-bar { display: flex; gap: 0.5rem; }
+    .search-bar input { padding: 0.5rem 1rem; border: 1px solid #d1d5db; border-radius: 9999px; width: 300px; }
+    .search-bar button { padding: 0.5rem 1.25rem; background: #2563eb; color: #fff; border: none; border-radius: 9999px; cursor: pointer; }
+    .filters { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .filter-btn { padding: 0.375rem 1rem; border: 1px solid #d1d5db; border-radius: 9999px; background: #fff; cursor: pointer; font-size: 0.875rem; }
+    .filter-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+    #feed { display: flex; flex-direction: column; gap: 1rem; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.875rem; }
+    .avatar { width: 40px; height: 40px; border-radius: 50%; background: #e5e7eb; flex-shrink: 0; }
+    .card-meta { font-size: 0.8rem; color: #6b7280; }
+    .card-body h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+    .card-body p { font-size: 0.9rem; color: #374151; line-height: 1.6; }
+    .card-image { width: 100%; height: 200px; object-fit: cover; border-radius: 8px; background: #f3f4f6; margin: 0.75rem 0; }
+    .card-actions { display: flex; gap: 1rem; margin-top: 1rem; }
+    .card-actions button { background: none; border: 1px solid #d1d5db; border-radius: 6px; padding: 0.375rem 1rem; font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 0.375rem; }
+    .card-actions button:hover { background: #f9fafb; }
+    .tag { display: inline-block; padding: 0.2rem 0.6rem; background: #eff6ff; color: #1d4ed8; border-radius: 9999px; font-size: 0.75rem; margin-right: 0.375rem; }
+    #load-more { width: 100%; padding: 0.875rem; border: 1px dashed #d1d5db; background: #fff; border-radius: 8px; cursor: pointer; color: #6b7280; margin-top: 1rem; }
+    #load-more:hover { background: #f9fafb; }
+    .sidebar { position: fixed; right: 1rem; top: 80px; width: 240px; }
+    .widget { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 1rem; margin-bottom: 1rem; }
+    .widget h3 { font-size: 0.9rem; font-weight: 600; margin-bottom: 0.75rem; }
+    .trending-item { display: flex; justify-content: space-between; padding: 0.375rem 0; font-size: 0.85rem; border-bottom: 1px solid #f3f4f6; }
+    .status-bar { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 0.5rem 1rem; margin-bottom: 1rem; font-size: 0.8rem; color: #166534; }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="font-weight:bold;font-size:1.2rem;">FeedApp</div>
+    <nav style="display:flex;gap:1rem;" aria-label="Primary navigation">
+      <a href="/home" style="color:#374151;text-decoration:none;font-size:0.9rem;">Home</a>
+      <a href="/explore" style="color:#374151;text-decoration:none;font-size:0.9rem;">Explore</a>
+      <a href="/notifications" style="color:#374151;text-decoration:none;font-size:0.9rem;">Notifications</a>
+      <a href="/messages" style="color:#374151;text-decoration:none;font-size:0.9rem;">Messages</a>
+      <a href="/bookmarks" style="color:#374151;text-decoration:none;font-size:0.9rem;">Bookmarks</a>
+    </nav>
+    <div class="search-bar">
+      <input type="search" id="global-search" placeholder="Search content..." aria-label="Search">
+      <button type="button" id="search-btn">Search</button>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center;">
+      <button type="button" id="compose-btn" style="padding:0.5rem 1.25rem;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;">+ Post</button>
+      <a href="/account/settings" aria-label="Account settings">
+        <div class="avatar" style="cursor:pointer;"></div>
+      </a>
+    </div>
+  </header>
+
+  <div class="app">
+    <div class="status-bar" id="status-bar">
+      ✓ Connected — showing latest 40 items
+    </div>
+
+    <div class="filters" role="group" aria-label="Content filters">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="articles">Articles</button>
+      <button class="filter-btn" data-filter="discussions">Discussions</button>
+      <button class="filter-btn" data-filter="videos">Videos</button>
+      <button class="filter-btn" data-filter="links">Links</button>
+      <select aria-label="Sort order" style="padding:0.375rem;border:1px solid #d1d5db;border-radius:9999px;font-size:0.875rem;">
+        <option value="recent">Most Recent</option>
+        <option value="popular">Most Popular</option>
+        <option value="trending">Trending</option>
+      </select>
+    </div>
+
+    <div id="feed" aria-label="Content feed" role="feed"></div>
+    <button id="load-more" type="button">Load more items…</button>
+  </div>
+
+  <script>
+    // SPA-like: render 40 cards dynamically to simulate real-world DOM size
+    const categories = ['Technology', 'Design', 'Science', 'Business', 'Culture'];
+    const actions = ['👍 Like', '💬 Comment', '🔗 Share', '🔖 Save'];
+
+    function generateCard(i) {
+      const cat = categories[i % categories.length];
+      const likes = Math.floor(Math.random() * 500);
+      const comments = Math.floor(Math.random() * 80);
+      return `
+        <article class="card" data-id="${i}" aria-labelledby="card-title-${i}">
+          <div class="card-header">
+            <div class="avatar" aria-hidden="true"></div>
+            <div>
+              <p style="font-weight:600;font-size:0.9rem;">Author ${i + 1}</p>
+              <p class="card-meta">${cat} · ${i + 1}h ago · ${Math.floor(Math.random() * 5) + 1} min read</p>
+            </div>
+            <button type="button" style="margin-left:auto;background:none;border:1px solid #d1d5db;border-radius:6px;padding:0.25rem 0.75rem;font-size:0.75rem;cursor:pointer;" aria-label="Follow Author ${i + 1}">Follow</button>
+          </div>
+          <div class="card-body">
+            <h3 id="card-title-${i}">
+              <a href="/post/${i}" style="color:inherit;text-decoration:none;">
+                Article ${i + 1}: Deep dive into ${cat.toLowerCase()} trends for 2024
+              </a>
+            </h3>
+            <p>This comprehensive exploration covers the most significant developments in ${cat.toLowerCase()} this year, with insights from industry experts and data-driven analysis of emerging patterns...</p>
+            <div style="margin-top:0.625rem;">
+              <span class="tag">${cat}</span>
+              <span class="tag">${i % 2 === 0 ? 'Featured' : 'Trending'}</span>
+            </div>
+          </div>
+          <div class="card-actions">
+            <button type="button" aria-label="Like post ${i}, currently ${likes} likes" data-action="like" data-post="${i}">👍 ${likes}</button>
+            <button type="button" aria-label="${comments} comments on post ${i}" data-action="comment" data-post="${i}">💬 ${comments}</button>
+            <button type="button" aria-label="Share post ${i}" data-action="share" data-post="${i}">🔗 Share</button>
+            <button type="button" aria-label="Bookmark post ${i}" data-action="bookmark" data-post="${i}">🔖</button>
+            <a href="/post/${i}" style="margin-left:auto;font-size:0.8rem;color:#2563eb;">Read more →</a>
+          </div>
+        </article>
+      `;
+    }
+
+    const feed = document.getElementById('feed');
+    for (let i = 0; i < 40; i++) {
+      feed.insertAdjacentHTML('beforeend', generateCard(i));
+    }
+
+    // Filter buttons
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    // Load more
+    let page = 1;
+    document.getElementById('load-more').addEventListener('click', () => {
+      const start = 40 * page;
+      for (let i = start; i < start + 10; i++) {
+        feed.insertAdjacentHTML('beforeend', generateCard(i));
+      }
+      page++;
+      document.getElementById('status-bar').textContent = `✓ Connected — showing latest ${40 + 10 * page} items`;
+    });
+
+    // Compose
+    document.getElementById('compose-btn').addEventListener('click', () => {
+      alert('Compose dialog would open here');
+    });
+  </script>
+</body>
+</html>
