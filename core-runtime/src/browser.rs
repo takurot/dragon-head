@@ -847,19 +847,25 @@ impl PageSession {
     }
 
     /// Resolve a backend node id from the per-session stable_key index.
+    /// The index is keyed by the first `STABLE_KEY_SHORT_LEN` hex chars; callers
+    /// may pass either the full 64-char internal key or the 16-char external key.
     pub fn lookup_backend_node_id_by_stable_key(&self, stable_key: &str) -> Option<i64> {
+        let short: String = stable_key.chars().take(STABLE_KEY_SHORT_LEN).collect();
         self.stable_key_index
             .lock()
             .ok()
-            .and_then(|index| index.get(stable_key).map(|entry| entry.backend_node_id))
+            .and_then(|index| index.get(short.as_str()).map(|entry| entry.backend_node_id))
     }
 
     /// Resolve alias metadata from the per-session stable_key index.
+    /// See [`lookup_backend_node_id_by_stable_key`] for key-length semantics.
     pub fn lookup_alias_by_stable_key(&self, stable_key: &str) -> Option<String> {
-        self.stable_key_index
-            .lock()
-            .ok()
-            .and_then(|index| index.get(stable_key).and_then(|entry| entry.alias.clone()))
+        let short: String = stable_key.chars().take(STABLE_KEY_SHORT_LEN).collect();
+        self.stable_key_index.lock().ok().and_then(|index| {
+            index
+                .get(short.as_str())
+                .and_then(|entry| entry.alias.clone())
+        })
     }
 
     /// Returns a clone of this session's [`AuditLogger`] handle.
@@ -2317,8 +2323,17 @@ fn find_node_by_id(node: &SemanticNode, target_id: i64) -> Option<&SemanticNode>
 
 fn find_node_by_key<'a>(node: &'a SemanticNode, target_key: &str) -> Option<&'a SemanticNode> {
     if let Some(key) = &node.stable_key {
-        if key == target_key {
-            return Some(node);
+        // Reject empty keys before any comparison: cmp_len=0 would make every
+        // node match, bypassing policy target resolution.
+        if !target_key.is_empty() && !key.is_empty() {
+            // Compare using the first STABLE_KEY_SHORT_LEN chars so that a caller
+            // supplying a shortened key (as returned by get_state) matches the full
+            // 64-char SHA-256 stored on SemanticNode.  Both sides are clamped to the
+            // shorter length, so the comparison is always symmetric.
+            let cmp_len = STABLE_KEY_SHORT_LEN.min(key.len()).min(target_key.len());
+            if key[..cmp_len] == target_key[..cmp_len] {
+                return Some(node);
+            }
         }
     }
 
@@ -2386,11 +2401,19 @@ fn semantic_path(parent_path: &str, role: &str) -> String {
     format!("{}/{}", parent_path, role.to_lowercase())
 }
 
+/// Number of hex characters exposed in the external (LLM-facing) stable_key.
+/// 16 hex chars = 64 bits of entropy; negligible collision probability at page scale.
+/// Re-exported from `core-runtime` so downstream crates share a single source of truth.
+pub const STABLE_KEY_SHORT_LEN: usize = 16;
+
 fn collect_stable_key_entries(node: &SemanticNode, out: &mut HashMap<String, StableKeyIndexEntry>) {
     if let Some(key) = &node.stable_key {
         if node.backend_node_id > 0 {
+            // Index by the short key so that agents (which receive the 16-char form
+            // from ExternalInteractiveElement) can resolve their key back to a node id.
+            let short_key: String = key.chars().take(STABLE_KEY_SHORT_LEN).collect();
             out.insert(
-                key.clone(),
+                short_key,
                 StableKeyIndexEntry {
                     backend_node_id: node.backend_node_id,
                     alias: node.alias.clone(),
@@ -2818,6 +2841,81 @@ mod tests {
     fn is_browser_disconnected_ignores_page_level_errors() {
         let err = anyhow::anyhow!("Could not find node with given id");
         assert!(!is_browser_disconnected(&err));
+    }
+
+    #[test]
+    fn find_node_by_key_matches_full_64_char_key() {
+        let full_key = "a".repeat(64);
+        let node = SemanticNode {
+            stable_key: Some(full_key.clone()),
+            ..Default::default()
+        };
+        assert!(find_node_by_key(&node, &full_key).is_some());
+    }
+
+    #[test]
+    fn find_node_by_key_matches_shortened_16_char_key_against_full_key() {
+        // get_state now returns only the first 16 chars; enforce_policy must still
+        // resolve the node from the SemanticTree which stores full 64-char keys.
+        let full_key = "abcdef1234567890".repeat(4); // 64 chars
+        let short_key: String = full_key.chars().take(STABLE_KEY_SHORT_LEN).collect();
+        let node = SemanticNode {
+            stable_key: Some(full_key.clone()),
+            ..Default::default()
+        };
+        assert!(
+            find_node_by_key(&node, &short_key).is_some(),
+            "shortened key should resolve the node for policy evaluation"
+        );
+    }
+
+    #[test]
+    fn find_node_by_key_does_not_match_wrong_prefix() {
+        let full_key = "abcdef1234567890".repeat(4);
+        let wrong_short = "0000000000000000";
+        let node = SemanticNode {
+            stable_key: Some(full_key.clone()),
+            ..Default::default()
+        };
+        assert!(find_node_by_key(&node, wrong_short).is_none());
+    }
+
+    #[test]
+    fn find_node_by_key_empty_target_key_never_matches() {
+        // An empty target_key would produce cmp_len=0 and ""[..0]==""[..0] which
+        // is always true — guard against that authorization bypass.
+        let node = SemanticNode {
+            stable_key: Some("abcdef1234567890".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            find_node_by_key(&node, "").is_none(),
+            "empty target_key must not match any node"
+        );
+    }
+
+    #[test]
+    fn resolve_policy_target_node_resolves_via_shortened_stable_key() {
+        let full_key = "deadbeefcafe0123".repeat(4);
+        let short_key: String = full_key.chars().take(STABLE_KEY_SHORT_LEN).collect();
+
+        let child = SemanticNode {
+            role: "button".to_string(),
+            stable_key: Some(full_key.clone()),
+            ..Default::default()
+        };
+        let root = SemanticNode {
+            role: "body".to_string(),
+            children: vec![child],
+            ..Default::default()
+        };
+
+        let found = resolve_policy_target_node(&root, None, Some(&short_key));
+        assert!(
+            found.is_some(),
+            "policy target resolution must work with the 16-char short key returned by get_state"
+        );
+        assert_eq!(found.unwrap().role, "button");
     }
 }
 
