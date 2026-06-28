@@ -132,3 +132,47 @@ jobs:
         path: |
           target/evaluation-dashboard.md
           target/evaluation-bench/*.json
+
+  notify-on-failure:
+    runs-on: ubuntu-latest
+    needs: [nfr-benchmark-long, full-e2e, mcp-binary-e2e, evaluation-bench-full]
+    if: ${{ always() && contains(needs.*.result, 'failure') }}
+    permissions:
+      issues: write
+    steps:
+    - name: Build failure summary
+      id: summary
+      env:
+        NFR_RESULT: ${{ needs.nfr-benchmark-long.result }}
+        E2E_RESULT: ${{ needs.full-e2e.result }}
+        MCP_RESULT: ${{ needs.mcp-binary-e2e.result }}
+        EVAL_RESULT: ${{ needs.evaluation-bench-full.result }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      shell: bash
+      run: |
+        FAILED=""
+        [ "$NFR_RESULT"  = "failure" ] && FAILED="${FAILED}- nfr-benchmark-long\n"
+        [ "$E2E_RESULT"  = "failure" ] && FAILED="${FAILED}- full-e2e\n"
+        [ "$MCP_RESULT"  = "failure" ] && FAILED="${FAILED}- mcp-binary-e2e\n"
+        [ "$EVAL_RESULT" = "failure" ] && FAILED="${FAILED}- evaluation-bench-full\n"
+        BODY="**Run:** ${RUN_URL}\n**Date:** $(date -u '+%Y-%m-%d %H:%M UTC')\n\n**Failed gates:**\n${FAILED}"
+        echo "body<<EOF" >> "$GITHUB_OUTPUT"
+        printf '%b' "$BODY" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+    - name: File or update nightly-failure issue
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        BODY: ${{ steps.summary.outputs.body }}
+        REPO: ${{ github.repository }}
+      shell: bash
+      run: |
+        EXISTING=$(gh issue list --repo "$REPO" --label nightly-failure --state open --json number --jq '.[0].number // empty')
+        if [ -n "$EXISTING" ]; then
+          gh issue comment "$EXISTING" --repo "$REPO" --body "$BODY"
+        else
+          gh issue create --repo "$REPO" \
+            --title "🚨 Nightly E2E/NFR failure" \
+            --label nightly-failure \
+            --body "$BODY"
+        fi

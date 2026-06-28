@@ -109,3 +109,34 @@ declared in `.gitattributes` as LFS-tracked paths.
 - Code coverage must not decrease (optional but recommended).
 - No new clippy warnings.
 - `docs/PLAN.md` tasks must be marked as completed.
+
+## 5. Nightly Failure Triage
+
+`e2e.yml` runs daily at midnight UTC. When any job fails, a `notify-on-failure` job
+automatically files or updates a GitHub Issue labelled **`nightly-failure`**.
+
+**Triage steps:**
+
+1. Open the issue linked in the notification (label: `nightly-failure`).
+2. Follow the **Run** link to the failed Actions run and check which gate failed:
+   - `nfr-benchmark-long` — TTFT/latency/bandwidth/capacity threshold exceeded. Check recent commits touching `core-runtime/src/sre/` or `browser.rs`.
+   - `full-e2e` — `session_management`, `audit_logging`, or `spa_stable_key_stress` regressed.
+   - `mcp-binary-e2e` — MCP binary smoke test broke. Likely a protocol or startup regression.
+   - `evaluation-bench-full` — Feature evaluation scenario failed. Check the uploaded `evaluation-dashboard.md` artifact.
+3. Reproduce locally:
+   ```bash
+   # NFR gates (set NFR_BENCH_MODE=full for the long variant)
+   cargo test -p core-runtime --test nfr_latency --verbose
+   cargo test -p core-runtime --test nfr_bandwidth --verbose
+   cargo test -p core-runtime --test nfr_capacity --verbose
+
+   # Full E2E suite
+   CHROME_INSTALLED=true cargo test -p core-runtime --test session_management --verbose
+
+   # MCP binary E2E
+   CHROME_PATH=/usr/bin/chromium-browser cargo test -p mcp-server --test mcp_binary_e2e -- --ignored --nocapture
+   ```
+4. Fix the regression, open a PR, and close the `nightly-failure` issue once CI is green.
+
+If the issue was a flake (not reproducible locally), add a comment explaining why and close
+the issue; the next nightly run will re-open it if the problem persists.
