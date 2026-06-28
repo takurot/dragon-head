@@ -25,7 +25,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [x] 必須CIチェック（`lint`, `test`, `smoke-e2e`, `cdp-smoke`, `policy-regression`, `policy-schema-lint`, `sre-regression`, `sre-semantic-delta`, `som-regression`, `mcp-protocol-compliance`, `mcp-api-schema-diff`, `mcp-schema-compatibility`）が安定してグリーンである。
 - [x] `SEC-01` / `SEC-02` / `AUD-01` の Exit Criteria（`PR-09`〜`PR-11`）がすべて満たされている。
 - [x] `PR-14` の Exit Criteria（MCPツール群の一貫利用）が満たされ、外部契約テストがCI必須化されている。
-- [ ] 利用手順・既知制約・障害時手順が `docs/` に明示され、運用可能な状態になっている。
+- [x] 利用手順・既知制約・障害時手順が `docs/` に明示され、運用可能な状態になっている。
 
 ## 2. フェーズダッシュボード
 
@@ -41,7 +41,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 7 | Marketplace | PR-17 | 1/1 | DONE |
 | 8 | Robustness & Verification | PR-18 | 1/1 | DONE |
 | 9 | Comprehensive Evaluation Bench | PR-19 | 1/1 | DONE |
-| 10 | Cathedral Edition (Commercialization) | PR-20〜29 | 9/10 | IN_PROGRESS |
+| 10 | Cathedral Edition (Commercialization) | PR-20〜29 | 10/10 | DONE |
 
 ## 3. PRバックログ（進捗チェック付き）
 

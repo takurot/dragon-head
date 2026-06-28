@@ -1,6 +1,6 @@
 # Dragon Head: Neural-Browser Runtime
 
-**Last updated:** 2026-06-27
+**Last updated:** 2026-06-28
 
 Dragon Head is an AI-native headless browser runtime for LLM and VLM agents.
 It exposes a browser session as a structured **Semantic State** and provides an
@@ -408,6 +408,17 @@ Run formatting and lint checks:
 cargo fmt --all -- --check
 cargo clippy --workspace -- -D warnings
 ```
+
+## Operations and Runbooks
+
+- [Operations Guide](docs/operations.md) — day-to-day startup, Chrome
+  configuration, log locations, Session Vault key handling, and upgrade steps.
+- [Known Constraints](docs/known-constraints.md) — documented limitations for
+  first-call token overhead, load profiles, prompt-injection detection, Wasm
+  plugin signatures, and Chrome compatibility.
+- [Incident Response Runbook](docs/incident-response.md) — response procedures
+  for Chrome crash recovery, audit log failures, HITL timeouts, and browser
+  restart rate limits.
 
 ## Security: Prompt Injection Sanitization
 
