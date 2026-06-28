@@ -416,14 +416,23 @@ fn project_node_without_children(node: &SemanticNode) -> SemanticNode {
 /// Returns `true` when `node` is a navigational landmark whose child `<a>`
 /// elements are typically structural (logo, category nav, footer legal) rather
 /// than content links.  Covers HTML5 semantic elements and equivalent ARIA roles.
-fn is_nav_landmark_node(node: &SemanticNode) -> bool {
-    if matches!(node.role.as_str(), "header" | "footer" | "nav") {
+fn is_nav_landmark_node(node: &SemanticNode, inside_sectioning_content: bool) -> bool {
+    if node.role == "nav"
+        || (matches!(node.role.as_str(), "header" | "footer") && !inside_sectioning_content)
+    {
         return true;
     }
     node.attributes
         .as_ref()
         .and_then(|attrs| attrs.get("role"))
         .is_some_and(|role| matches!(role.as_str(), "navigation" | "banner" | "contentinfo"))
+}
+
+fn is_sectioning_content_node(node: &SemanticNode) -> bool {
+    matches!(
+        node.role.as_str(),
+        "article" | "aside" | "main" | "nav" | "section"
+    )
 }
 
 /// Collect interactive nodes with an optional nav-landmark filter.
@@ -436,16 +445,19 @@ fn collect_interactive_with_nav_filter(
     inside_nav_landmark: bool,
 ) -> Vec<SemanticNode> {
     let mut out = Vec::new();
-    collect_interactive_filtered_recursive(node, inside_nav_landmark, &mut out);
+    collect_interactive_filtered_recursive(node, inside_nav_landmark, false, &mut out);
     out
 }
 
 fn collect_interactive_filtered_recursive(
     node: &SemanticNode,
     inside_nav_landmark: bool,
+    inside_sectioning_content: bool,
     out: &mut Vec<SemanticNode>,
 ) {
-    let in_landmark_now = inside_nav_landmark || is_nav_landmark_node(node);
+    let in_landmark_now =
+        inside_nav_landmark || is_nav_landmark_node(node, inside_sectioning_content);
+    let in_sectioning_now = inside_sectioning_content || is_sectioning_content_node(node);
 
     // Collect this node if interactive — skip <a> when inside a nav landmark.
     if is_interactive_node(node) {
@@ -461,7 +473,7 @@ fn collect_interactive_filtered_recursive(
     }
 
     for child in &node.children {
-        collect_interactive_filtered_recursive(child, in_landmark_now, out);
+        collect_interactive_filtered_recursive(child, in_landmark_now, in_sectioning_now, out);
     }
 }
 
@@ -780,6 +792,40 @@ mod tests {
         assert!(
             fast.interactive_elements.iter().any(|n| n.role == "a"),
             "main <a> must always be included"
+        );
+    }
+
+    #[test]
+    fn anchor_inside_article_header_always_included() {
+        // <header> nested in article/sectioning content is not a page-level
+        // banner landmark; its links are content links.
+        let article = landmark_node(
+            "article",
+            vec![landmark_node("header", vec![link_node("Post title")])],
+        );
+        let root = landmark_node("body", vec![article]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().any(|n| n.role == "a"),
+            "article header <a> must be included as content"
+        );
+    }
+
+    #[test]
+    fn anchor_inside_article_footer_always_included() {
+        let article = landmark_node(
+            "article",
+            vec![landmark_node("footer", vec![link_node("Author bio")])],
+        );
+        let root = landmark_node("body", vec![article]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().any(|n| n.role == "a"),
+            "article footer <a> must be included as content"
         );
     }
 
