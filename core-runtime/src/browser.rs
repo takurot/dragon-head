@@ -2323,13 +2323,17 @@ fn find_node_by_id(node: &SemanticNode, target_id: i64) -> Option<&SemanticNode>
 
 fn find_node_by_key<'a>(node: &'a SemanticNode, target_key: &str) -> Option<&'a SemanticNode> {
     if let Some(key) = &node.stable_key {
-        // Compare using the first STABLE_KEY_SHORT_LEN chars so that a caller
-        // supplying a shortened key (as returned by get_state) matches the full
-        // 64-char SHA-256 stored on SemanticNode.  Both sides are clamped to the
-        // shorter length, so the comparison is always symmetric.
-        let cmp_len = STABLE_KEY_SHORT_LEN.min(key.len()).min(target_key.len());
-        if key[..cmp_len] == target_key[..cmp_len] {
-            return Some(node);
+        // Reject empty keys before any comparison: cmp_len=0 would make every
+        // node match, bypassing policy target resolution.
+        if !target_key.is_empty() && !key.is_empty() {
+            // Compare using the first STABLE_KEY_SHORT_LEN chars so that a caller
+            // supplying a shortened key (as returned by get_state) matches the full
+            // 64-char SHA-256 stored on SemanticNode.  Both sides are clamped to the
+            // shorter length, so the comparison is always symmetric.
+            let cmp_len = STABLE_KEY_SHORT_LEN.min(key.len()).min(target_key.len());
+            if key[..cmp_len] == target_key[..cmp_len] {
+                return Some(node);
+            }
         }
     }
 
@@ -2874,6 +2878,20 @@ mod tests {
             ..Default::default()
         };
         assert!(find_node_by_key(&node, wrong_short).is_none());
+    }
+
+    #[test]
+    fn find_node_by_key_empty_target_key_never_matches() {
+        // An empty target_key would produce cmp_len=0 and ""[..0]==""[..0] which
+        // is always true — guard against that authorization bypass.
+        let node = SemanticNode {
+            stable_key: Some("abcdef1234567890".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            find_node_by_key(&node, "").is_none(),
+            "empty target_key must not match any node"
+        );
     }
 
     #[test]
