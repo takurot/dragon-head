@@ -132,3 +132,42 @@ jobs:
         path: |
           target/evaluation-dashboard.md
           target/evaluation-bench/*.json
+
+  notify-on-failure:
+    runs-on: ubuntu-latest
+    needs: [nfr-benchmark-long, full-e2e, mcp-binary-e2e, evaluation-bench-full]
+    if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      issues: write
+    steps:
+    - name: File or update nightly-failure issue
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        NFR_RESULT: ${{ needs.nfr-benchmark-long.result }}
+        E2E_RESULT: ${{ needs.full-e2e.result }}
+        MCP_RESULT: ${{ needs.mcp-binary-e2e.result }}
+        EVAL_RESULT: ${{ needs.evaluation-bench-full.result }}
+      shell: bash
+      run: |
+        FAILED=""
+        case "$NFR_RESULT"  in failure|cancelled) FAILED="${FAILED}- nfr-benchmark-long (${NFR_RESULT})\n" ;; esac
+        case "$E2E_RESULT"  in failure|cancelled) FAILED="${FAILED}- full-e2e (${E2E_RESULT})\n" ;; esac
+        case "$MCP_RESULT"  in failure|cancelled) FAILED="${FAILED}- mcp-binary-e2e (${MCP_RESULT})\n" ;; esac
+        case "$EVAL_RESULT" in failure|cancelled) FAILED="${FAILED}- evaluation-bench-full (${EVAL_RESULT})\n" ;; esac
+
+        BODY_FILE=$(mktemp)
+        printf '**Run:** %s\n**Date:** %s\n\n**Failed/cancelled gates:**\n' \
+          "$RUN_URL" "$(date -u '+%Y-%m-%d %H:%M UTC')" > "$BODY_FILE"
+        printf '%b' "$FAILED" >> "$BODY_FILE"
+
+        EXISTING=$(gh issue list --repo "$REPO" --label nightly-failure --state open --json number --jq '.[0].number // empty')
+        if [ -n "$EXISTING" ]; then
+          gh issue comment "$EXISTING" --repo "$REPO" --body-file "$BODY_FILE"
+        else
+          gh issue create --repo "$REPO" \
+            --title "🚨 Nightly E2E/NFR failure" \
+            --label nightly-failure \
+            --body-file "$BODY_FILE"
+        fi
