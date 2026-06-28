@@ -204,9 +204,19 @@ impl SemanticState {
     }
 
     /// Build Fast State (`interactive_elements`, `messages`) only.
+    ///
+    /// Unless the load profile is `Interactive`, `<a>` elements inside
+    /// `<header>`, `<footer>`, and `<nav>` landmark regions are excluded from
+    /// `interactive_elements` (ISSUE-175: reduces first-call token overhead by
+    /// ~30-40% on content-heavy pages where nav/footer links are noise).
     pub fn generate_fast_state(&self) -> FastSemanticState {
+        let filter_nav_links = self.load_profile != LoadProfile::Interactive;
         FastSemanticState {
-            interactive_elements: collect_nodes_matching(&self.root, is_interactive_node),
+            interactive_elements: if filter_nav_links {
+                collect_interactive_with_nav_filter(&self.root, false)
+            } else {
+                collect_nodes_matching(&self.root, is_interactive_node)
+            },
             messages: collect_nodes_matching(&self.root, is_message_node),
         }
     }
@@ -400,6 +410,70 @@ fn project_node_without_children(node: &SemanticNode) -> SemanticNode {
         alias: node.alias.clone(),
         backend_node_id: node.backend_node_id,
         security_flags: node.security_flags.clone(),
+    }
+}
+
+/// Returns `true` when `node` is a navigational landmark whose child `<a>`
+/// elements are typically structural (logo, category nav, footer legal) rather
+/// than content links.  Covers HTML5 semantic elements and equivalent ARIA roles.
+fn is_nav_landmark_node(node: &SemanticNode, inside_sectioning_content: bool) -> bool {
+    if node.role == "nav"
+        || (matches!(node.role.as_str(), "header" | "footer") && !inside_sectioning_content)
+    {
+        return true;
+    }
+    node.attributes
+        .as_ref()
+        .and_then(|attrs| attrs.get("role"))
+        .is_some_and(|role| matches!(role.as_str(), "navigation" | "banner" | "contentinfo"))
+}
+
+fn is_sectioning_content_node(node: &SemanticNode) -> bool {
+    matches!(
+        node.role.as_str(),
+        "article" | "aside" | "main" | "nav" | "section"
+    )
+}
+
+/// Collect interactive nodes with an optional nav-landmark filter.
+///
+/// When `inside_nav_landmark` is `true`, only non-`<a>` interactive elements
+/// (buttons, inputs, selects…) are collected — anchor elements are considered
+/// structural nav/footer links and excluded.
+fn collect_interactive_with_nav_filter(
+    node: &SemanticNode,
+    inside_nav_landmark: bool,
+) -> Vec<SemanticNode> {
+    let mut out = Vec::new();
+    collect_interactive_filtered_recursive(node, inside_nav_landmark, false, &mut out);
+    out
+}
+
+fn collect_interactive_filtered_recursive(
+    node: &SemanticNode,
+    inside_nav_landmark: bool,
+    inside_sectioning_content: bool,
+    out: &mut Vec<SemanticNode>,
+) {
+    let in_landmark_now =
+        inside_nav_landmark || is_nav_landmark_node(node, inside_sectioning_content);
+    let in_sectioning_now = inside_sectioning_content || is_sectioning_content_node(node);
+
+    // Collect this node if interactive — skip <a> when inside a nav landmark.
+    if is_interactive_node(node) {
+        let is_anchor = node.role == "a"
+            || node
+                .attributes
+                .as_ref()
+                .and_then(|a| a.get("role"))
+                .is_some_and(|r| r == "link");
+        if !(in_landmark_now && is_anchor) {
+            out.push(project_node_without_children(node));
+        }
+    }
+
+    for child in &node.children {
+        collect_interactive_filtered_recursive(child, in_landmark_now, in_sectioning_now, out);
     }
 }
 
@@ -633,6 +707,175 @@ mod tests {
             config.injection_mode,
             PromptInjectionMode::ReportOnly,
             "default AsyncPipelineConfig must use ReportOnly injection mode"
+        );
+    }
+
+    // ── nav/footer link filtering (ISSUE-175) ────────────────────────────────
+
+    fn link_node(label: &str) -> SemanticNode {
+        SemanticNode {
+            role: "a".to_string(),
+            label: Some(label.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn landmark_node(role: &str, children: Vec<SemanticNode>) -> SemanticNode {
+        SemanticNode {
+            role: role.to_string(),
+            children,
+            ..Default::default()
+        }
+    }
+
+    fn button_node(label: &str) -> SemanticNode {
+        SemanticNode {
+            role: "button".to_string(),
+            label: Some(label.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn anchor_inside_nav_excluded_by_default_minimal_profile() {
+        // Default (Minimal): <a> inside <nav> must not appear in interactive_elements
+        let nav = landmark_node("nav", vec![link_node("Home"), link_node("About")]);
+        let root = landmark_node("body", vec![nav]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        let roles: Vec<_> = fast
+            .interactive_elements
+            .iter()
+            .map(|n| n.role.as_str())
+            .collect();
+        assert!(
+            !roles.contains(&"a"),
+            "nav <a> must be excluded by default (Minimal): got {roles:?}"
+        );
+    }
+
+    #[test]
+    fn anchor_inside_footer_excluded_by_default_minimal_profile() {
+        let footer = landmark_node("footer", vec![link_node("Privacy"), link_node("Terms")]);
+        let root = landmark_node("body", vec![footer]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().all(|n| n.role != "a"),
+            "footer <a> must be excluded by default"
+        );
+    }
+
+    #[test]
+    fn anchor_inside_header_excluded_by_default_minimal_profile() {
+        let header = landmark_node("header", vec![link_node("Logo")]);
+        let root = landmark_node("body", vec![header]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().all(|n| n.role != "a"),
+            "header <a> must be excluded by default"
+        );
+    }
+
+    #[test]
+    fn anchor_inside_main_always_included() {
+        // <a> inside <main> is a content link — must always be included
+        let main = landmark_node("main", vec![link_node("Read more")]);
+        let root = landmark_node("body", vec![main]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().any(|n| n.role == "a"),
+            "main <a> must always be included"
+        );
+    }
+
+    #[test]
+    fn anchor_inside_article_header_always_included() {
+        // <header> nested in article/sectioning content is not a page-level
+        // banner landmark; its links are content links.
+        let article = landmark_node(
+            "article",
+            vec![landmark_node("header", vec![link_node("Post title")])],
+        );
+        let root = landmark_node("body", vec![article]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().any(|n| n.role == "a"),
+            "article header <a> must be included as content"
+        );
+    }
+
+    #[test]
+    fn anchor_inside_article_footer_always_included() {
+        let article = landmark_node(
+            "article",
+            vec![landmark_node("footer", vec![link_node("Author bio")])],
+        );
+        let root = landmark_node("body", vec![article]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().any(|n| n.role == "a"),
+            "article footer <a> must be included as content"
+        );
+    }
+
+    #[test]
+    fn button_inside_nav_always_included() {
+        // <button> inside nav/footer is a form control — always include it
+        let nav = landmark_node("nav", vec![button_node("Search")]);
+        let root = landmark_node("body", vec![nav]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().any(|n| n.role == "button"),
+            "button inside nav must always be included"
+        );
+    }
+
+    #[test]
+    fn interactive_profile_includes_nav_anchors() {
+        // LoadProfile::Interactive opt-in re-includes nav/footer <a> links
+        let nav = landmark_node("nav", vec![link_node("Home"), link_node("About")]);
+        let root = landmark_node("body", vec![nav]);
+        let state = SemanticState::new(root, LoadProfile::Interactive);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().any(|n| n.role == "a"),
+            "Interactive profile must include nav <a> links"
+        );
+    }
+
+    #[test]
+    fn aria_navigation_role_treated_as_nav_landmark() {
+        // <div role="navigation"> is semantically a nav landmark
+        let div = SemanticNode {
+            role: "div".to_string(),
+            attributes: Some(BTreeMap::from([(
+                "role".to_string(),
+                "navigation".to_string(),
+            )])),
+            children: vec![link_node("Category")],
+            ..Default::default()
+        };
+        let root = landmark_node("body", vec![div]);
+        let state = SemanticState::new(root, LoadProfile::Minimal);
+
+        let fast = state.generate_fast_state();
+        assert!(
+            fast.interactive_elements.iter().all(|n| n.role != "a"),
+            "ARIA navigation role must also filter <a> links"
         );
     }
 }
