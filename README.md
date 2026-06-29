@@ -97,7 +97,7 @@ release, verifies the checksum, and installs to `/usr/local/bin`. Set
 
 ### Option 4: Build from source
 
-Requires Rust stable and Chrome or Chromium.
+Requires Rust stable and Chrome or Chromium 116 or later (tested against Chrome 116–134).
 
 ```bash
 git clone https://github.com/takurot/dragon-head.git
@@ -139,6 +139,10 @@ If Chrome is not found, install it or set `CHROME_PATH`:
 ```bash
 export CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
+
+**Supported Chrome/Chromium versions**: 116 or later. Tested against Chrome 116–134 on
+macOS and Linux. Earlier versions may lack CDP methods required for visual capture and
+cookie management.
 
 ## Generate MCP Client Config
 
