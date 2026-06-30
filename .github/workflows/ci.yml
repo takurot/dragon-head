@@ -91,6 +91,17 @@ jobs:
     needs: [test]
     steps:
     - uses: actions/checkout@v4
+    # Free unused runner packages before the instrumented build.
+    # cargo-llvm-cov generates 2-3x larger artifacts than a normal build;
+    # without cleanup the ubuntu-latest runner (~14 GB free) runs out of space.
+    - name: Free runner disk space
+      run: |
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/.ghcup
+        sudo rm -rf /usr/share/swift
+        df -h
     # No rust-cache: LLVM-instrumented builds (-C instrument-coverage) produce
     # incompatible artifacts that would poison the shared cache used by all other
     # jobs. The needs: [test] gate ensures we only reach this slow instrumented
