@@ -7,8 +7,12 @@ target/
 # Agent and session specific files
 .agents/
 .claude/
+.antigravitycli/
+.gstack/
 AGENTS.md
 CLAUDE.md
 commercial_issues.md
+resume.txt
 docs/ceo-plans/**
+temp/
 __pycache__/
