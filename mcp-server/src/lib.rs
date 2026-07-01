@@ -1535,12 +1535,15 @@ impl McpBackend for CoreRuntimeBackend {
             .evaluate_script_json(&script)
             .context("extraction script evaluation failed")?;
 
+        let (sanitized, security_flags) = self.injection_sanitizer.sanitize_json_value(raw_value);
+
         // Apply PII redaction before returning extracted content to the caller.
-        let redacted = core_runtime::privacy::global().redact_json(&raw_value);
+        let redacted = core_runtime::privacy::global().redact_json(&sanitized);
 
         Ok(json!({
             "rule": rule.name,
-            "result": redacted
+            "result": redacted,
+            "security_flags": security_flags
         }))
     }
 

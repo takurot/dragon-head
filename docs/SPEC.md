@@ -118,7 +118,7 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
 
 **SEC-03: Prompt Injection Sanitization**
 - **目的**: Webページ内の不信頼テキストに含まれる、LLMへの間接命令やシステム指示の奪取を狙う既知パターンを検出し、SRE/MCP利用者へ構造化されたリスク情報として公開する。これは完全な遮断ではなく、defense-in-depth の一層として扱う。
-- **対象**: SRE出力に含まれるすべてのLLM可視文字列（`label`, `alias`, `attributes` の文字列値、および子ノード配下のテキスト）。DOM本文だけでなく、`aria-label`, `title`, `placeholder`, `value` などの属性も対象とする。
+- **対象**: SRE出力に含まれるすべてのLLM可視文字列（`label`, `alias`, `attributes` の文字列値、および子ノード配下のテキスト）と、Deep Lens `extract` が返す文字列値。DOM本文だけでなく、`aria-label`, `title`, `placeholder`, `value` などの属性も対象とする。
 - **Mode**: `Off` | `ReportOnly` | `Redact`。
   - `ReportOnly` (default): テキストは変更せず、検出されたノードへ `security_flags: ["possible_prompt_injection"]` を付与する。
   - `Redact`: 検出箇所を `[REDACTED_SECURITY]` に置換し、同じ `security_flags` を付与する。
@@ -212,6 +212,7 @@ Model Context Protocol (MCP) 準拠のツール定義。
 | :--- | :--- | :--- |
 | `get_state` | `format`: "json"\|"markdown", `force_refresh`: bool | ページ状態の取得。 |
 | `get_state` output | `security_flags`: string[] | Prompt Injection Sanitization が検出した既知リスクを要素単位で返す。 |
+| `extract` output | `result`: any, `security_flags`: string[] | Deep Lens 抽出結果。`ReportOnly` では危険文字列を保持してリスクを返し、`Redact` では同じ境界で置換する。 |
 | `act` | `target_id`: int, `target_stable_key`: string, `action`: "click"\|"type", `value`: string | アクション実行。 |
 | `verify` | `target_id`: int, `expected`: {text: string} | ハルシネーション防止の事前検証。 |
 | `get_visual` | `mode`: "clean"\|"som", `viewport`: "full" | 視覚情報の取得。 |
