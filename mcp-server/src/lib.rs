@@ -1475,6 +1475,9 @@ impl McpBackend for CoreRuntimeBackend {
         let args: RunSkillArguments =
             serde_json::from_value(arguments).context("invalid run_skill arguments")?;
 
+        self.page
+            .log_skill_tool_call(&args.skill_name, &args.params);
+
         let Some(skill) = self.skills.get(&args.skill_name).cloned() else {
             return Ok(json!({
                 "status": "not_found",
