@@ -4,9 +4,11 @@ import {
   reductionPct,
   costUsd,
   aggregateResults,
+  aggregateMultiStepResults,
   GPT4O_COST_PER_MILLION,
   CLAUDE_COST_PER_MILLION,
   type RunResult,
+  type MultiStepRunResult,
 } from './metrics.js';
 
 describe('estimateTokens', () => {
@@ -99,5 +101,69 @@ describe('aggregateResults', () => {
     expect(m.raw_html.avg_tokens).toBe(1500); // (1000 + 2000) / 2
     expect(m.raw_html.avg_ttft_ms).toBeCloseTo(150.0);
     expect(m.raw_html.success_rate).toBeCloseTo(100.0);
+  });
+});
+
+describe('aggregateMultiStepResults', () => {
+  const okRun = (run_idx: number, step_bytes: number[]): MultiStepRunResult => ({
+    run_idx,
+    step_bytes,
+    success: true,
+  });
+
+  it('computes cumulative and per-step averages', () => {
+    const results = [okRun(0, [4000, 4000, 4000]), okRun(1, [4200, 4100, 4300])];
+    const m = aggregateMultiStepResults(results);
+    expect(m.runs).toBe(2);
+    expect(m.steps).toBe(3);
+    expect(m.avg_step_bytes).toEqual([4100, 4050, 4150]);
+    expect(m.cumulative_avg_bytes).toEqual([4100, 8150, 12300]);
+    expect(m.success_rate).toBeCloseTo(100.0);
+  });
+
+  it('excludes failed runs from step averages', () => {
+    const results = [
+      { ...okRun(0, [999, 999, 999]), success: false },
+      okRun(1, [4000, 4000, 4000]),
+    ];
+    const m = aggregateMultiStepResults(results);
+    expect(m.avg_step_bytes).toEqual([4000, 4000, 4000]);
+    expect(m.success_rate).toBeCloseTo(50.0);
+  });
+
+  it('returns zero metrics for empty results', () => {
+    const m = aggregateMultiStepResults([]);
+    expect(m.runs).toBe(0);
+    expect(m.steps).toBe(0);
+    expect(m.avg_step_bytes).toEqual([]);
+    expect(m.cumulative_avg_bytes).toEqual([]);
+    expect(m.success_rate).toBe(0);
+  });
+
+  it('handles a single-step run', () => {
+    const m = aggregateMultiStepResults([okRun(0, [500])]);
+    expect(m.steps).toBe(1);
+    expect(m.avg_step_bytes).toEqual([500]);
+    expect(m.cumulative_avg_bytes).toEqual([500]);
+  });
+
+  it('does not throw when a successful run has zero-length step_bytes', () => {
+    const results = [okRun(0, []), okRun(1, [4000, 4000])];
+    const m = aggregateMultiStepResults(results);
+    expect(m.steps).toBe(0);
+    expect(m.avg_step_bytes).toEqual([]);
+    expect(m.cumulative_avg_bytes).toEqual([]);
+  });
+
+  it('returns zero step metrics when all runs failed', () => {
+    const results = [
+      { ...okRun(0, [4000, 4000]), success: false },
+      { ...okRun(1, [4000, 4000]), success: false },
+    ];
+    const m = aggregateMultiStepResults(results);
+    expect(m.runs).toBe(2);
+    expect(m.steps).toBe(0);
+    expect(m.avg_step_bytes).toEqual([]);
+    expect(m.success_rate).toBe(0);
   });
 });

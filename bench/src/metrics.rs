@@ -109,6 +109,73 @@ pub fn cost_savings(raw_tokens: u64, sre_tokens: u64) -> CostSavings {
     }
 }
 
+/// One run of a multi-step interaction sequence.
+///
+/// `step_bytes[0]` is the initial full-state capture; `step_bytes[1..]` are
+/// the per-step payload sent after each interaction (an RFC 6902 patch, a
+/// full re-send on `DeltaPolicy` fallback, or 0 for a no-op).
+/// `step_kinds` is parallel to `step_bytes` and records which `StateUpdate`
+/// variant produced each entry ("full" | "delta" | "noop"), so a delta
+/// fallback to full mid-sequence is visible rather than hidden inside a byte
+/// count (see docs/bench-playwright-comparison.md caveats).
+#[derive(Debug, Clone)]
+pub struct MultiStepResult {
+    pub run: u32,
+    pub step_bytes: Vec<usize>,
+    pub step_kinds: Vec<&'static str>,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct MultiStepAggregatedMetrics {
+    pub runs: usize,
+    pub steps: usize,
+    /// Average bytes per step index, across successful runs only.
+    pub avg_step_bytes: Vec<f64>,
+    /// Running total of `avg_step_bytes` (cumulative cost after N steps).
+    pub cumulative_avg_bytes: Vec<f64>,
+    pub success_rate: f64,
+}
+
+/// Aggregate multi-step results into per-step and cumulative averages.
+///
+/// Only successful runs contribute to `avg_step_bytes`/`cumulative_avg_bytes`.
+/// The step count is the shortest `step_bytes` among successful runs, so a
+/// run that ended early (e.g. a mid-sequence navigation failure) can't cause
+/// an out-of-bounds read.
+pub fn aggregate_multi_step(results: &[MultiStepResult]) -> MultiStepAggregatedMetrics {
+    let n = results.len();
+    let ok: Vec<&MultiStepResult> = results.iter().filter(|r| r.success).collect();
+
+    let steps = ok.iter().map(|r| r.step_bytes.len()).min().unwrap_or(0);
+
+    let avg_step_bytes: Vec<f64> = (0..steps)
+        .map(|i| {
+            let sum: usize = ok.iter().map(|r| r.step_bytes[i]).sum();
+            sum as f64 / ok.len() as f64
+        })
+        .collect();
+
+    let mut cumulative_avg_bytes = Vec::with_capacity(avg_step_bytes.len());
+    let mut running = 0.0;
+    for bytes in &avg_step_bytes {
+        running += bytes;
+        cumulative_avg_bytes.push(running);
+    }
+
+    MultiStepAggregatedMetrics {
+        runs: n,
+        steps,
+        avg_step_bytes,
+        cumulative_avg_bytes,
+        success_rate: if n > 0 {
+            ok.len() as f64 / n as f64 * 100.0
+        } else {
+            0.0
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +285,84 @@ mod tests {
         let m = aggregate(&[]);
         assert_eq!(m.runs, 0);
         assert_eq!(m.raw_avg_tokens, 0);
+    }
+
+    fn ok_multi_step(run: u32, step_bytes: Vec<usize>) -> MultiStepResult {
+        let step_kinds = step_bytes.iter().map(|_| "delta").collect();
+        MultiStepResult {
+            run,
+            step_bytes,
+            step_kinds,
+            success: true,
+        }
+    }
+
+    #[test]
+    fn aggregate_multi_step_computes_cumulative_and_avg() {
+        let results = vec![
+            ok_multi_step(0, vec![100, 20, 15]),
+            ok_multi_step(1, vec![120, 30, 10]),
+        ];
+        let m = aggregate_multi_step(&results);
+        assert_eq!(m.runs, 2);
+        assert_eq!(m.steps, 3);
+        assert_eq!(m.avg_step_bytes, vec![110.0, 25.0, 12.5]);
+        assert_eq!(m.cumulative_avg_bytes, vec![110.0, 135.0, 147.5]);
+        assert!((m.success_rate - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn aggregate_multi_step_excludes_failed_runs_from_step_averages() {
+        let mut failed = ok_multi_step(0, vec![999, 999, 999]);
+        failed.success = false;
+        let results = vec![failed, ok_multi_step(1, vec![100, 20, 15])];
+        let m = aggregate_multi_step(&results);
+        assert_eq!(m.runs, 2);
+        assert_eq!(m.avg_step_bytes, vec![100.0, 20.0, 15.0]);
+        assert!((m.success_rate - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn aggregate_multi_step_empty_returns_zero_metrics() {
+        let m = aggregate_multi_step(&[]);
+        assert_eq!(m.runs, 0);
+        assert_eq!(m.steps, 0);
+        assert!(m.avg_step_bytes.is_empty());
+        assert!(m.cumulative_avg_bytes.is_empty());
+        assert_eq!(m.success_rate, 0.0);
+    }
+
+    #[test]
+    fn aggregate_multi_step_single_step_run() {
+        let results = vec![ok_multi_step(0, vec![500])];
+        let m = aggregate_multi_step(&results);
+        assert_eq!(m.steps, 1);
+        assert_eq!(m.avg_step_bytes, vec![500.0]);
+        assert_eq!(m.cumulative_avg_bytes, vec![500.0]);
+    }
+
+    #[test]
+    fn aggregate_multi_step_zero_length_step_bytes_does_not_panic() {
+        // A successful run with no recorded steps (e.g. all steps were
+        // no-ops) must shrink the shared step count rather than panic on an
+        // out-of-bounds index into the shorter vector.
+        let results = vec![ok_multi_step(0, vec![]), ok_multi_step(1, vec![100, 20])];
+        let m = aggregate_multi_step(&results);
+        assert_eq!(m.steps, 0);
+        assert!(m.avg_step_bytes.is_empty());
+        assert!(m.cumulative_avg_bytes.is_empty());
+    }
+
+    #[test]
+    fn aggregate_multi_step_all_runs_failed() {
+        let mut r0 = ok_multi_step(0, vec![100, 20]);
+        r0.success = false;
+        let mut r1 = ok_multi_step(1, vec![100, 20]);
+        r1.success = false;
+        let m = aggregate_multi_step(&[r0, r1]);
+        assert_eq!(m.runs, 2);
+        assert_eq!(m.steps, 0);
+        assert!(m.avg_step_bytes.is_empty());
+        assert_eq!(m.success_rate, 0.0);
     }
 }

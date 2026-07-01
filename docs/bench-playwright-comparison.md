@@ -146,14 +146,14 @@ Dragon-head stable_key: SHA-256(role + label + dom_signature + quadrant)
 
 LLM エージェントが「後から同じボタンを再クリックする」ユースケースで決定的な差が出る。
 
-### 2. デルタ配信 (2 回目以降のコール)
+### 2. デルタ配信 (2 回目以降のコール) — Issue #173 で実測・確認済み
 
-DH は RFC 6902 JSON Patch 形式でデルタのみを送る。ページ内 Ajax や部分更新後:
+DH は RFC 6902 JSON Patch 形式でデルタのみを送る。ページ内の小さな UI 変化 (フィルタ切替など) の後:
 
-- Playwright: ページ全体を再取得 (= 毎回 2,796〜21,165 tokens)
-- Dragon-head delta: 変更部分のみ (典型: **10〜50 tokens**)
+- Playwright: ページ全体を再取得 (= 毎回 84,664 bytes / raw HTML、23,791 bytes / custom extract)
+- Dragon-head delta: 変更部分のみ (実測 **248 bytes/コール**、2 回目以降)
 
-継続的な操作が必要なエージェントワークフローで大幅なコスト削減になる。
+5 ステップの継続的な操作をシミュレートしたところ、2 回目以降のコール累積コストは raw HTML 比 **99.71%**、custom extract 比 **98.96%** 削減された。詳細は下記「デルタ配信の累積コスト実測 (Issue #173)」を参照。ただし、同じ計測で **DOM のライブプロパティ (`checked` 等) が SRE に反映されないケース**も発見しており、これは「デルタが小さい」のではなく「変化自体が検出されない」ケースなので、単純な削減率としては数えていない (下記参照)。
 
 ### 3. ポリシーエンジン & HITL
 
@@ -179,7 +179,77 @@ Playwright にはこの機能がなく、LLM が誤って決済ボタンを押�
 | 90% トークン削減 vs raw HTML | +60% (example.com) 〜 -24% (simple.html) | **条件付き。複雑なページでは成立しない** |
 | 95% 帯域削減 (NFR bandwidth) | 98.96% (Minimal vs Interactive Profile 比) | ✓ **成立** — ただし SRE 同士の比較 |
 | TTFT < 100ms (Speculative hit) | avg 0.067ms | ✓ **成立** |
-| デルタ配信 (2 回目以降) | 未実測 | 今後の計測が必要 |
+| デルタ配信 (2 回目以降) | 99.71% 削減 (spa-filter-cycle, vs raw HTML) | ✓ **成立** (実測。ただし SRE が変化を検出できない相互作用では delta 自体が発生しない — 下記参照) |
+
+---
+
+## デルタ配信の累積コスト実測 (Issue #173)
+
+### 計測方法
+
+`bench/src/harness.rs::run_multi_step` を追加し、`mcp-server` の `get_state` Delta パス
+(`SemanticState::select_update` + `DeltaPolicy::default()`) と全く同じ判定ロジックを再利用して、
+1 回目 (フル状態) → N 回のインタラクション後の再取得、を連続計測した。各ステップの
+`StateUpdate` の種別 (`full` / `delta` / `noop`) も記録し、デルタが `DeltaPolicy` によって
+フル再送にフォールバックしていないかを可視化している。Playwright 側 (`measureMultiStepScenario`)
+は同じステップ列に対して毎回 `page.content()` と custom extract をフル再計測する
+(Playwright にはデルタ概念が無いため、これが「削減なし」のコントロール)。
+
+`LoadProfile::Minimal` を一貫して使用しており、既存の単発計測 (`measure_sre`) の数値と比較可能。
+
+2 つの独立したシナリオで計測した (1 シナリオだけだと都合の良いケースの選定になりかねないため):
+
+| シナリオ | 操作 | 変化の種類 |
+|---|---|---|
+| `spa-filter-cycle` | フィードのフィルタボタンを 5 回連続クリック | CSS クラスの active 切替 (小規模 DOM 差分) |
+| `form-shipping-cycle` | 配送方法のラジオボタンを 3 回連続クリック | `checked` プロパティの切替 |
+
+### 結果 1: spa-filter-cycle (実測値、3 run 平均)
+
+| Step | 種別 (DH) | DH Avg Bytes | DH 累積 Bytes | PW raw HTML 累積 | PW custom extract 累積 |
+|---:|---|---:|---:|---:|---:|
+| 0 (初回) | full | 90,453 | 90,453 | 84,664 | 23,791 |
+| 1 | delta | 248 | 90,701 | 169,328 | 47,582 |
+| 2 | delta | 248 | 90,949 | 253,992 | 71,373 |
+| 3 | delta | 248 | 91,197 | 338,656 | 95,164 |
+| 4 | delta | 248 | 91,445 | 423,320 | 118,955 |
+| 5 | delta | 248 | 91,693 | 507,984 | 142,746 |
+
+- **全 6 回のコール累積**: DH は raw HTML 比 **81.95% 削減**、custom extract 比 **35.76% 削減**。
+- **2 回目以降のコールのみ (Issue #173 の "second-call story")**: DH 累積 1,240 bytes (248×5) vs
+  raw HTML 累積 423,320 bytes (**99.71% 削減**) vs custom extract 累積 118,955 bytes
+  (**98.96% 削減**)。
+- **SPEC §9.3 の「2 回目以降はデルタが優位」という訴求は、このシナリオで確認 (confirmed) された。**
+
+### 結果 2: form-shipping-cycle — 発見された限界 (correction)
+
+| Step | 種別 (DH) | DH Avg Bytes | DH 累積 Bytes | PW raw HTML 累積 | PW custom extract 累積 |
+|---:|---|---:|---:|---:|---:|
+| 0 (初回) | full | 9,975 | 9,975 | 13,863 | 2,522 |
+| 1 | **noop** | 0 | 9,975 | 27,726 | 5,044 |
+| 2 | **noop** | 0 | 9,975 | 41,589 | 7,566 |
+| 3 | **noop** | 0 | 9,975 | 55,452 | 10,088 |
+
+ラジオボタンをクリックしても `StateUpdate::Noop` (状態ハッシュ不変) と判定され、2 回目以降のコストは
+文字通り 0 bytes になった。一見「デルタ配信より優れた 100% 削減」に見えるが、これは
+**最適化の勝利ではなく検出の欠落 (correctness gap) である**:
+
+- `SemanticNode`/正規化パイプラインは HTML の静的属性 (`checked` 属性の初期値など) は捕捉するが、
+  クリック後の **DOM ライブプロパティ** (`radio.checked` のようにブラウザが保持する動的な状態) は
+  現状 `state_hash` に反映されない。
+- そのため `get_state` を呼んだ LLM エージェントは、実際には配送方法が変更されたにもかかわらず
+  「変化なし」という応答を受け取り、自分のクリックが効いたかどうか判断できない。
+- これはトークン削減の指標としてはカウントすべきではない (delta ではなく「無応答」であり、
+  エージェントの正しい状態認識を損なう可能性がある)。フォローアップの Issue として別途起票し、
+  SRE 正規化パイプラインでフォーム系のライブプロパティ (`checked`, `selected`, `value` の
+  ユーザー入力後の値など) を捕捉する改善を追跡する。
+
+### まとめ
+
+| 訴求 | 検証結果 |
+|---|---|
+| 2 回目以降のデルタ配信によるトークン削減 | **confirmed** — 実際に検出可能な小規模 DOM 変化に対しては 98.96%〜99.71% 削減 (spa-filter-cycle) |
+| 全ケースで自動的に成立する保証 | **corrected** — SRE が変化を検出しない相互作用 (ライブ DOM プロパティ) では delta 自体が発生せず、0 bytes の「無応答」になる。これは削減ではなく既知の限界として明記する |
 
 ---
 
@@ -190,6 +260,7 @@ Playwright にはこの機能がなく、LLM が誤って決済ボタンを押�
 1. **`stable_key` の短縮オプション**: デフォルトは先頭 16 文字 (session-scoped での衝突確率は無視できる水準) に短縮し、完全ハッシュはオプトインにする。効果: 1 要素あたり -12 tokens
 2. **ナビ/フッターリンクのフィルタリング**: `<header>`/`<footer>` 内の `<a>` リンクをデフォルトで除外。LLM タスクには不要なケースが多い
 3. **トークン計測をドキュメントに正確に記載**: 「90% 削減」は特定条件下でのみ成立する旨を明記
+4. **(Issue #173 で発見) SRE がライブ DOM プロパティを捕捉するよう改善**: `checked`/`selected` 等の相互作用後の値が `state_hash` / delta 判定に反映されておらず、`get_state` が誤って `Noop` を返すケースがある。フォームベースのエージェント操作で「クリックが効いたかどうか」を LLM が判断できなくなるため、別途 Issue で追跡する
 
 ### 利用者への推奨
 
@@ -223,6 +294,19 @@ npx tsx src/compare.ts \
   --playwright results/playwright-metrics.json \
   --dragon-head ../bench/results/dh-<slug>.json \
   --output results/comparison-report.md
+
+# 4. 累積デルタコスト計測 (Issue #173, spa-filter-cycle / form-shipping-cycle)
+cd bench-playwright
+npx tsx src/measure.ts --multi-step --runs=3 \
+  --output=results/playwright-multi-step.json \
+  --output-md=results/playwright-multi-step.md
+
+cd ..
+CHROME_INSTALLED=true cargo run -p bench -- \
+  --url "file://$(pwd)/bench-playwright/fixtures/spa-like.html" --runs 3 \
+  --step-selectors '.filter-btn[data-filter="articles"],.filter-btn[data-filter="discussions"],.filter-btn[data-filter="videos"],.filter-btn[data-filter="links"],.filter-btn[data-filter="all"]' \
+  --output bench/results/dh-multistep-spa.md \
+  --output-json bench/results/dh-multistep-spa.json
 ```
 
 ---

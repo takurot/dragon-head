@@ -1,4 +1,10 @@
-import { reductionPct, costUsd, GPT4O_COST_PER_MILLION, type PlaywrightMetrics } from './metrics.js';
+import {
+  reductionPct,
+  costUsd,
+  GPT4O_COST_PER_MILLION,
+  type PlaywrightMetrics,
+  type MultiStepPlaywrightMetrics,
+} from './metrics.js';
 
 export function buildMarkdownReport(metricsList: PlaywrightMetrics[]): string {
   const runs = metricsList[0]?.runs ?? 0;
@@ -26,6 +32,40 @@ export function buildMarkdownReport(metricsList: PlaywrightMetrics[]): string {
     lines.push('');
     lines.push(
       `**Custom extract reduces tokens by ${customReduction.toFixed(1)}% vs raw HTML.**\n`,
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Cumulative multi-step comparison report (issue #173). Playwright has no
+ * delta concept, so both approaches re-fetch the full payload every step —
+ * this report is the "no reduction" control side, meant to be read next to
+ * the `bench` crate's dragon-head delta-cost numbers for the same scenario.
+ */
+export function buildMultiStepMarkdownReport(metricsList: MultiStepPlaywrightMetrics[]): string {
+  const lines: string[] = [
+    '# Playwright Multi-Step Cumulative Cost Report\n',
+    `**Generated:** ${new Date().toISOString()}\n`,
+    '> Playwright has no delta-delivery concept: every step below re-fetches the full page payload. Compare against the dragon-head `bench` crate\'s per-step "delta"/"full"/"noop" breakdown for the same scenario.\n',
+  ];
+
+  for (const m of metricsList) {
+    lines.push(`## ${m.name} (${m.url})\n`);
+    lines.push(`**Runs:** ${m.runs}  |  **Steps:** ${m.raw_html.steps}\n`);
+    lines.push('| Step | Raw HTML Bytes | Raw HTML Cumulative | Custom Extract Bytes | Custom Extract Cumulative |');
+    lines.push('|-----:|---------------:|---------------------:|----------------------:|---------------------------:|');
+    for (let i = 0; i < m.raw_html.steps; i++) {
+      lines.push(
+        `| ${i} | ${m.raw_html.avg_step_bytes[i]!.toFixed(0)} | ${m.raw_html.cumulative_avg_bytes[i]!.toFixed(0)} | ${m.custom_extract.avg_step_bytes[i]!.toFixed(0)} | ${m.custom_extract.cumulative_avg_bytes[i]!.toFixed(0)} |`,
+      );
+    }
+    lines.push('');
+    const rawTotal = m.raw_html.cumulative_avg_bytes.at(-1) ?? 0;
+    const customTotal = m.custom_extract.cumulative_avg_bytes.at(-1) ?? 0;
+    lines.push(
+      `**Total cumulative cost over ${m.raw_html.steps} steps:** raw HTML ${costUsd(rawTotal / 4, GPT4O_COST_PER_MILLION).toFixed(6)} USD, custom extract ${costUsd(customTotal / 4, GPT4O_COST_PER_MILLION).toFixed(6)} USD (GPT-4o pricing).\n`,
     );
   }
 
