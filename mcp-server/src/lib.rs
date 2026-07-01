@@ -1734,8 +1734,30 @@ impl SkillRuntime for PageSkillRuntime<'_> {
                 },
             };
         }
-
-        OperationOutcome::Success
+        if let Some(key) = parse_target_stable_key(&target) {
+            // Refresh the SRE cache before lookup so we don't read stale state.
+            if let Err(err) = self.page.capture_semantic_state(LoadProfile::Interactive) {
+                return OperationOutcome::Failure {
+                    reason: err.to_string(),
+                };
+            }
+            let Some(id) = self.page.lookup_backend_node_id_by_stable_key(&key) else {
+                return OperationOutcome::Failure {
+                    reason: format!("element stable_key:{key} not found"),
+                };
+            };
+            return match self.page.verify_text(id, Some(&key), &expected) {
+                Ok(()) => OperationOutcome::Success,
+                Err(err) => OperationOutcome::Failure {
+                    reason: err.to_string(),
+                },
+            };
+        }
+        OperationOutcome::Failure {
+            reason: format!(
+                "unrecognised verify target {target:?}; expected id:<N> or stable_key:<key>"
+            ),
+        }
     }
 
     fn act(
@@ -3337,6 +3359,90 @@ mod tests {
         assert!(
             md.contains("security_flags=possible_prompt_injection,data_exfil_risk"),
             "multiple flags must be comma-joined in markdown: {md}"
+        );
+    }
+
+    // --- PageSkillRuntime::verify (ISSUE-186) ---
+
+    fn verify_step(target: &str, expected: &str) -> VerifyStep {
+        VerifyStep {
+            id: None,
+            target: target.to_string(),
+            expected: expected.to_string(),
+            control: Default::default(),
+        }
+    }
+
+    #[test]
+    fn skill_verify_fails_for_missing_stable_key_target() {
+        if test_bench_support::should_skip_browser_tests() {
+            eprintln!("SKIP: Chrome not available");
+            return;
+        }
+        let client = BrowserClient::new().expect("browser client");
+        let page = client.new_page().expect("new page");
+        page.navigate("data:text/html,<html><body>hello</body></html>")
+            .expect("navigate");
+
+        let params = json!({});
+        let mut runtime = PageSkillRuntime::new(&page, &params);
+        let mut ctx = skills_engine::SkillExecutionContext::default();
+        let outcome = runtime.verify(&verify_step("stable_key:not-present", "hello"), &mut ctx);
+        assert!(
+            matches!(outcome, OperationOutcome::Failure { .. }),
+            "verify against a missing stable_key must fail, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn skill_verify_fails_for_malformed_target_syntax() {
+        if test_bench_support::should_skip_browser_tests() {
+            eprintln!("SKIP: Chrome not available");
+            return;
+        }
+        let client = BrowserClient::new().expect("browser client");
+        let page = client.new_page().expect("new page");
+        page.navigate("data:text/html,<html><body>hello</body></html>")
+            .expect("navigate");
+
+        let params = json!({});
+        let mut runtime = PageSkillRuntime::new(&page, &params);
+        let mut ctx = skills_engine::SkillExecutionContext::default();
+        let outcome = runtime.verify(&verify_step("body", "hello"), &mut ctx);
+        assert!(
+            matches!(outcome, OperationOutcome::Failure { .. }),
+            "verify with unsupported target syntax must fail, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn skill_verify_passes_for_matching_stable_key_target() {
+        if test_bench_support::should_skip_browser_tests() {
+            eprintln!("SKIP: Chrome not available");
+            return;
+        }
+        let client = BrowserClient::new().expect("browser client");
+        let page = client.new_page().expect("new page");
+        page.navigate("data:text/html,<html><body><button>Click me</button></body></html>")
+            .expect("navigate");
+        let state = page
+            .capture_semantic_state(LoadProfile::Interactive)
+            .expect("capture semantic state");
+        let stable_key = state
+            .root()
+            .children
+            .iter()
+            .find_map(|n| n.stable_key.clone())
+            .expect("button should have a stable_key");
+
+        let params = json!({});
+        let mut runtime = PageSkillRuntime::new(&page, &params);
+        let mut ctx = skills_engine::SkillExecutionContext::default();
+        let target = format!("stable_key:{stable_key}");
+        let outcome = runtime.verify(&verify_step(&target, "Click me"), &mut ctx);
+        assert!(
+            matches!(outcome, OperationOutcome::Success),
+            "verify against matching stable_key should succeed, got {outcome:?}"
         );
     }
 }
