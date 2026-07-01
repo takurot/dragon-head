@@ -16,3 +16,6 @@ resume.txt
 docs/ceo-plans/**
 temp/
 __pycache__/
+.venv/
+.tokensave/
+bench/results/
