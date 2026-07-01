@@ -1,6 +1,6 @@
 {
   "name": "dragon-head-mcp",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "description": "AI-native headless browser runtime MCP server (npm distribution wrapper)",
   "license": "MIT",
   "repository": {
@@ -21,10 +21,10 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "dragon-head-mcp-darwin-arm64": "0.2.0",
-    "dragon-head-mcp-darwin-x64": "0.2.0",
-    "dragon-head-mcp-linux-x64": "0.2.0",
-    "dragon-head-mcp-linux-arm64": "0.2.0",
-    "dragon-head-mcp-win32-x64": "0.2.0"
+    "dragon-head-mcp-darwin-arm64": "0.1.0",
+    "dragon-head-mcp-darwin-x64": "0.1.0",
+    "dragon-head-mcp-linux-x64": "0.1.0",
+    "dragon-head-mcp-linux-arm64": "0.1.0",
+    "dragon-head-mcp-win32-x64": "0.1.0"
   }
 }
