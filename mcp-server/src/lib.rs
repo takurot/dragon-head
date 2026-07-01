@@ -1,5 +1,8 @@
 pub mod config;
 pub mod doctor;
+pub mod dto;
+pub mod metering;
+pub(crate) mod protocol;
 
 use anyhow::{Context, Result};
 use core_runtime::{
@@ -10,7 +13,13 @@ use core_runtime::{
     SemanticTarget, SemanticWaitState, SessionError, StateUpdate, VerifyError,
     STABLE_KEY_SHORT_LEN,
 };
+// Internal-only metering types (pub(crate) in metering.rs)
+use metering::{PlanFeature, UsageMeters};
 use plugin_host::{ExtractionRule, SchemaRegistry};
+use protocol::{
+    negotiate_protocol_version, sanitize_log_field, serialize_response, JsonRpcRequest,
+    JsonRpcResponse,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -19,9 +28,16 @@ use skills_engine::{
     SkillEngine, SkillRunStatus, SkillRuntime, VerifyStep, WaitStep,
 };
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{HashMap, VecDeque},
     sync::Arc,
     time::{Duration, Instant},
+};
+
+// Re-export public types at the crate level to preserve the existing public API.
+pub use dto::{ExternalInteractiveElement, ExternalSemanticState, StateMetadata};
+pub use metering::{
+    estimate_usage_cost, AuditRetentionSnapshot, PlanTier, SkillUsageDelta, StateGenerationUsage,
+    UsageCostBreakdown, UsageReport,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -30,250 +46,6 @@ pub struct ToolDefinition {
     pub description: String,
     #[serde(rename = "inputSchema")]
     pub input_schema: Value,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PlanTier {
-    Developer,
-    Pro,
-    #[default]
-    Enterprise,
-}
-
-impl PlanTier {
-    fn as_str(self) -> &'static str {
-        match self {
-            PlanTier::Developer => "developer",
-            PlanTier::Pro => "pro",
-            PlanTier::Enterprise => "enterprise",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct AuditRetentionSnapshot {
-    pub retained_events: u64,
-    pub retained_bytes: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct StateGenerationUsage {
-    pub fast: u64,
-    pub full: u64,
-    pub delta: u64,
-    /// Number of `get_state` calls served from a verified speculative
-    /// pre-generation (near-zero TTFT hit, Spec §3.5 / ISSUE-147).
-    #[serde(default)]
-    pub speculative: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct UsageReport {
-    pub plan_tier: PlanTier,
-    pub state_generations: StateGenerationUsage,
-    pub visual_captures: u64,
-    pub actions_executed: u64,
-    pub hitl_events: u64,
-    pub audit_retention: AuditRetentionSnapshot,
-    pub cost_microusd: UsageCostBreakdown,
-    /// Number of times the underlying Chrome process was automatically
-    /// restarted after a crash/disconnect (ISSUE-149).
-    pub browser_restarts: u64,
-    /// Number of `get_state` calls where a speculative prediction was
-    /// attempted but missed, falling back to a full state capture
-    /// (ISSUE-147).
-    #[serde(default)]
-    pub speculative_misses: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct UsageCostBreakdown {
-    pub state_generations: u64,
-    pub visual_captures: u64,
-    pub actions_executed: u64,
-    pub hitl_events: u64,
-    pub audit_retention: u64,
-    pub total: u64,
-}
-
-#[derive(Debug, Clone, Default)]
-struct UsageMeters {
-    state_generations: StateGenerationUsage,
-    visual_captures: u64,
-    actions_executed: u64,
-    /// HITL events are counted **twice** per resolved interaction: once when `act` returns
-    /// `requires_human_approval` (the trigger) and once when `ask_human` returns `approved=true`
-    /// (the resolution). This is intentional — both sides of the HITL interaction represent
-    /// distinct, metered value-based events per Section 7.1 of the billing spec.
-    hitl_events: u64,
-}
-
-impl UsageMeters {
-    fn to_report(
-        &self,
-        plan_tier: PlanTier,
-        audit_retention: AuditRetentionSnapshot,
-        browser_restarts: u64,
-        speculative_misses: u64,
-    ) -> UsageReport {
-        let cost_microusd = estimate_usage_cost(
-            plan_tier,
-            &self.state_generations,
-            self.visual_captures,
-            self.actions_executed,
-            self.hitl_events,
-            audit_retention,
-        );
-
-        UsageReport {
-            plan_tier,
-            state_generations: self.state_generations.clone(),
-            visual_captures: self.visual_captures,
-            actions_executed: self.actions_executed,
-            hitl_events: self.hitl_events,
-            audit_retention,
-            cost_microusd,
-            browser_restarts,
-            speculative_misses,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlanFeature {
-    SemanticDelta,
-    SomVisualCapture,
-    PolicyHumanApproval,
-}
-
-impl PlanFeature {
-    fn as_str(self) -> &'static str {
-        match self {
-            PlanFeature::SemanticDelta => "semantic_delta",
-            PlanFeature::SomVisualCapture => "som_visual_capture",
-            PlanFeature::PolicyHumanApproval => "policy_human_approval",
-        }
-    }
-
-    fn required_plan(self) -> PlanTier {
-        match self {
-            PlanFeature::SemanticDelta => PlanTier::Pro,
-            PlanFeature::SomVisualCapture => PlanTier::Pro,
-            PlanFeature::PolicyHumanApproval => PlanTier::Enterprise,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PricingRateCard {
-    state_fast: u64,
-    state_full: u64,
-    state_delta: u64,
-    /// Rate per speculative (cache-hit) state generation. Kept below
-    /// `state_fast` to reflect the near-zero marginal cost of serving a
-    /// pre-generated snapshot (Spec §3.5 / ISSUE-147).
-    state_speculative: u64,
-    visual_capture: u64,
-    action_executed: u64,
-    hitl_event: u64,
-    audit_retention_per_mib: u64,
-}
-
-fn pricing_rate_card(plan_tier: PlanTier) -> PricingRateCard {
-    match plan_tier {
-        PlanTier::Developer => PricingRateCard {
-            state_fast: 0,
-            state_full: 0,
-            state_delta: 0,
-            state_speculative: 0,
-            visual_capture: 0,
-            action_executed: 0,
-            hitl_event: 0,
-            audit_retention_per_mib: 0,
-        },
-        PlanTier::Pro => PricingRateCard {
-            state_fast: 100,
-            state_full: 250,
-            state_delta: 50,
-            state_speculative: 20,
-            visual_capture: 1_000,
-            action_executed: 75,
-            hitl_event: 1_500,
-            audit_retention_per_mib: 400,
-        },
-        PlanTier::Enterprise => PricingRateCard {
-            state_fast: 80,
-            state_full: 200,
-            state_delta: 40,
-            state_speculative: 15,
-            visual_capture: 850,
-            action_executed: 60,
-            hitl_event: 1_200,
-            audit_retention_per_mib: 300,
-        },
-    }
-}
-
-pub fn estimate_usage_cost(
-    plan_tier: PlanTier,
-    state_generations: &StateGenerationUsage,
-    visual_captures: u64,
-    actions_executed: u64,
-    hitl_events: u64,
-    audit_retention: AuditRetentionSnapshot,
-) -> UsageCostBreakdown {
-    const MIB: u64 = 1_048_576;
-
-    let rates = pricing_rate_card(plan_tier);
-    let state_generations_cost = state_generations
-        .fast
-        .saturating_mul(rates.state_fast)
-        .saturating_add(state_generations.full.saturating_mul(rates.state_full))
-        .saturating_add(state_generations.delta.saturating_mul(rates.state_delta))
-        .saturating_add(
-            state_generations
-                .speculative
-                .saturating_mul(rates.state_speculative),
-        );
-    let visual_captures_cost = visual_captures.saturating_mul(rates.visual_capture);
-    let actions_executed_cost = actions_executed.saturating_mul(rates.action_executed);
-    let hitl_events_cost = hitl_events.saturating_mul(rates.hitl_event);
-    let retained_mib = audit_retention.retained_bytes.saturating_add(MIB - 1) / MIB;
-    let audit_retention_cost = retained_mib.saturating_mul(rates.audit_retention_per_mib);
-    let total = state_generations_cost
-        .saturating_add(visual_captures_cost)
-        .saturating_add(actions_executed_cost)
-        .saturating_add(hitl_events_cost)
-        .saturating_add(audit_retention_cost);
-
-    UsageCostBreakdown {
-        state_generations: state_generations_cost,
-        visual_captures: visual_captures_cost,
-        actions_executed: actions_executed_cost,
-        hitl_events: hitl_events_cost,
-        audit_retention: audit_retention_cost,
-        total,
-    }
-}
-
-/// Metered operations accumulated during a single `run_skill` execution.
-///
-/// `McpBackend::take_skill_usage_delta` returns this after each `run_skill` call so
-/// `McpServer` can fold the counts into its top-level `UsageMeters`.
-///
-/// Counts are per-invocation of `run_skill`. `McpServer` merges them additively into the
-/// session-level meters after every successful or partially-failed skill run.
-#[derive(Debug, Clone, Default)]
-pub struct SkillUsageDelta {
-    /// Number of `act` steps that completed successfully inside the skill.
-    pub actions_executed: u64,
-    /// Number of visual-capture steps that completed inside the skill (reserved; not yet
-    /// incremented by `PageSkillRuntime` — no `get_visual` step type exists in the skill DSL).
-    pub visual_captures: u64,
-    /// Number of HITL events triggered inside the skill (reserved; not yet incremented by
-    /// `PageSkillRuntime` — skills do not have `ask_human` steps).
-    pub hitl_events: u64,
 }
 
 fn is_known_tool(name: &str) -> bool {
@@ -682,99 +454,6 @@ impl<B: McpBackend> McpServer<B> {
     }
 }
 
-/// Latest MCP protocol revision implemented by this server.
-const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
-
-/// All protocol revisions this server can serve. The `tools`-only capability
-/// surface implemented here (initialize/tools/list/tools/call) is stable
-/// across these revisions.
-const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18"];
-
-/// Echo the client's requested protocol version when supported, otherwise
-/// fall back to the server's latest. Per the MCP lifecycle spec, a client
-/// requesting an unsupported version is expected to disconnect.
-fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
-    requested
-        .and_then(|version| {
-            SUPPORTED_PROTOCOL_VERSIONS
-                .iter()
-                .find(|&&supported| supported == version)
-        })
-        .copied()
-        .unwrap_or(LATEST_PROTOCOL_VERSION)
-}
-
-/// Strip control characters and bound length before writing client-supplied
-/// strings (e.g. `clientInfo`) to logs.
-fn sanitize_log_field(value: &str) -> String {
-    const MAX_LEN: usize = 200;
-    value
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(MAX_LEN)
-        .collect()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct JsonRpcRequest {
-    pub jsonrpc: String,
-    #[serde(default)]
-    pub id: Value,
-    pub method: String,
-    #[serde(default)]
-    pub params: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct JsonRpcError {
-    pub code: i64,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct JsonRpcResponse {
-    pub jsonrpc: &'static str,
-    pub id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<JsonRpcError>,
-}
-
-impl JsonRpcResponse {
-    fn success(id: Value, result: Value) -> Self {
-        Self {
-            jsonrpc: "2.0",
-            id,
-            result: Some(result),
-            error: None,
-        }
-    }
-
-    fn error(id: Value, code: i64, message: String) -> Self {
-        Self {
-            jsonrpc: "2.0",
-            id,
-            result: None,
-            error: Some(JsonRpcError { code, message }),
-        }
-    }
-}
-
-fn serialize_response(response: JsonRpcResponse) -> String {
-    serde_json::to_string(&response).unwrap_or_else(|err| {
-        json!({
-            "jsonrpc": "2.0",
-            "id": Value::Null,
-            "error": {
-                "code": -32603,
-                "message": format!("failed to serialize response: {err}")
-            }
-        })
-        .to_string()
-    })
-}
-
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 enum StateFormat {
@@ -1038,40 +717,6 @@ fn reconcile_served_prediction(
             actual_state_hash,
         );
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ExternalSemanticState {
-    pub metadata: StateMetadata,
-    pub interactive_elements: Vec<ExternalInteractiveElement>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StateMetadata {
-    pub url: String,
-    pub page_instance_id: String,
-    pub state_hash: String,
-    pub load_profile: String,
-    pub timestamp: u64,
-    /// `true` when this state was served from a verified speculative
-    /// pre-generation rather than a fresh capture (Spec §3.5 / ISSUE-147).
-    #[serde(default)]
-    pub speculative: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ExternalInteractiveElement {
-    pub id: i64,
-    pub stable_key: String,
-    pub alias: String,
-    pub role: String,
-    pub name: String,
-    pub attributes: BTreeMap<String, Value>,
-    pub bbox: [f64; 4],
-    pub policy_flags: Vec<String>,
-    /// Prompt-injection security classification flags (omitted when empty for backward compat).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub security_flags: Vec<String>,
 }
 
 /// Maximum number of automatic browser restarts allowed within
@@ -2597,7 +2242,9 @@ struct ExtractArguments {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::LATEST_PROTOCOL_VERSION;
     use core_runtime::sre::SemanticNode;
+    use std::collections::BTreeMap;
 
     fn make_node(id: i64, children: Vec<SemanticNode>) -> SemanticNode {
         SemanticNode {
