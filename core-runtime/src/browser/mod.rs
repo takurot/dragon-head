@@ -992,6 +992,23 @@ impl PageSession {
         Ok(())
     }
 
+    /// Record a top-level `TOOL_CALL` audit event for a `run_skill` request.
+    ///
+    /// Mirrors the `act`/`verify_text` tool-call logging so every `run_skill`
+    /// request is captured in the audit trail per Spec §AUD-01, even when the
+    /// skill's steps never reach an `act` call or the skill fails outright
+    /// (ISSUE-187).
+    pub fn log_skill_tool_call(&self, skill_name: &str, params: &serde_json::Value) {
+        self.audit_logger.log(AuditEvent::ToolCall {
+            tool_name: "run_skill".to_string(),
+            args: serde_json::json!({
+                "skill_name": skill_name,
+                "params": params
+            }),
+            timestamp: epoch_millis_u64(),
+        });
+    }
+
     /// Verify element text against an expected value.
     /// On mismatch, triggers a SoM capture to help disambiguate recovery.
     ///
