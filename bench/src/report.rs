@@ -1,4 +1,4 @@
-use crate::metrics::{cost_savings, AggregatedMetrics};
+use crate::metrics::{cost_savings, AggregatedMetrics, MultiStepAggregatedMetrics};
 use anyhow::Result;
 use std::path::Path;
 
@@ -165,10 +165,116 @@ fn build_markdown(
     )
 }
 
+/// Print the cumulative multi-step comparison to stdout.
+///
+/// `sample_kinds` is the per-step `StateUpdate` kind ("full" | "delta" |
+/// "noop") from a representative successful run — surfaced so a delta
+/// fallback to full mid-sequence is visible, not hidden inside the byte
+/// count (see docs/bench-playwright-comparison.md#issue-173).
+pub fn print_multi_step_table(m: &MultiStepAggregatedMetrics, sample_kinds: &[&str]) {
+    println!();
+    println!(
+        "{:<10} {:<8} {:>15} {:>20}",
+        "Step", "Kind", "Avg Bytes", "Cumulative Bytes"
+    );
+    println!("{}", "-".repeat(56));
+    for i in 0..m.steps {
+        let kind = sample_kinds.get(i).copied().unwrap_or("?");
+        println!(
+            "{:<10} {:<8} {:>15.1} {:>20.1}",
+            i, kind, m.avg_step_bytes[i], m.cumulative_avg_bytes[i]
+        );
+    }
+    println!("{}", "-".repeat(56));
+    println!("Success rate: {:.1}%  |  Runs: {}", m.success_rate, m.runs);
+    println!();
+}
+
+pub fn write_multi_step_markdown(
+    m: &MultiStepAggregatedMetrics,
+    sample_kinds: &[&str],
+    url: &str,
+    task: Option<&str>,
+    path: &Path,
+) -> Result<()> {
+    let content = build_multi_step_markdown(m, sample_kinds, url, task);
+    std::fs::write(path, content)?;
+    Ok(())
+}
+
+/// Write a JSON report of the cumulative multi-step comparison, consumable
+/// by the `bench-playwright` compare script (schema mirrors
+/// `MultiStepDragonHeadMetrics` in `bench-playwright/src/metrics.ts`).
+pub fn write_multi_step_json(
+    m: &MultiStepAggregatedMetrics,
+    sample_kinds: &[&str],
+    url: &str,
+    path: &Path,
+) -> Result<()> {
+    let json = serde_json::json!({
+        "url": url,
+        "runs": m.runs,
+        "steps": m.steps,
+        "success_rate": m.success_rate,
+        "avg_step_bytes": m.avg_step_bytes,
+        "cumulative_avg_bytes": m.cumulative_avg_bytes,
+        "sample_step_kinds": sample_kinds,
+    });
+    std::fs::write(path, serde_json::to_string_pretty(&json)?)?;
+    Ok(())
+}
+
+fn build_multi_step_markdown(
+    m: &MultiStepAggregatedMetrics,
+    sample_kinds: &[&str],
+    url: &str,
+    task: Option<&str>,
+) -> String {
+    let task_line = task
+        .map(|t| format!("**Task:** {t}\n\n"))
+        .unwrap_or_default();
+
+    let mut rows = String::new();
+    for i in 0..m.steps {
+        let kind = sample_kinds.get(i).copied().unwrap_or("?");
+        rows.push_str(&format!(
+            "| {i} | {kind} | {:.1} | {:.1} |\n",
+            m.avg_step_bytes[i], m.cumulative_avg_bytes[i]
+        ));
+    }
+
+    format!(
+        r#"# Dragon Head Multi-Step Delta Cost Report
+
+**URL:** {url}
+{task_line}**Runs:** {runs}
+**Steps:** {steps}
+**Success rate:** {success_rate:.1}%
+
+## Per-Step Cost
+
+| Step | Kind | Avg Bytes | Cumulative Bytes |
+|-----:|------|----------:|-----------------:|
+{rows}
+> Step 0 is the initial full-state capture. Steps 1..N are re-captures after
+> an interaction, each measured via the same `select_update`/`DeltaPolicy`
+> decision `mcp-server`'s `get_state` Delta path uses in production — "delta"
+> means an RFC 6902 patch was sent, "full" means the delta policy fell back
+> to a full re-send, "noop" means the state hash was unchanged.
+"#,
+        url = url,
+        task_line = task_line,
+        runs = m.runs,
+        steps = m.steps,
+        success_rate = m.success_rate,
+        rows = rows,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::{aggregate, RunResult};
+    use crate::metrics::{aggregate, aggregate_multi_step, MultiStepResult, RunResult};
 
     fn sample_metrics() -> AggregatedMetrics {
         let results = vec![RunResult {
@@ -251,5 +357,52 @@ mod tests {
             (reduction - 95.0).abs() < 0.1,
             "expected ~95% reduction, got {reduction}"
         );
+    }
+
+    fn sample_multi_step_metrics() -> (MultiStepAggregatedMetrics, Vec<&'static str>) {
+        let results = vec![MultiStepResult {
+            run: 0,
+            step_bytes: vec![4000, 40, 30],
+            step_kinds: vec!["full", "delta", "delta"],
+            success: true,
+        }];
+        (
+            aggregate_multi_step(&results),
+            vec!["full", "delta", "delta"],
+        )
+    }
+
+    #[test]
+    fn multi_step_markdown_contains_required_headers() {
+        let (m, kinds) = sample_multi_step_metrics();
+        let md = build_multi_step_markdown(&m, &kinds, "https://example.com", Some("Filter cycle"));
+        assert!(md.contains("# Dragon Head Multi-Step Delta Cost Report"));
+        assert!(md.contains("| Step | Kind | Avg Bytes | Cumulative Bytes |"));
+        assert!(md.contains("**Task:** Filter cycle"));
+    }
+
+    #[test]
+    fn multi_step_markdown_rows_show_kind_and_cumulative_bytes() {
+        let (m, kinds) = sample_multi_step_metrics();
+        let md = build_multi_step_markdown(&m, &kinds, "https://example.com", None);
+        // Step 0 is the full capture; step 1/2 are deltas whose cumulative
+        // total must include the initial full-state cost.
+        assert!(md.contains("| 0 | full | 4000.0 | 4000.0 |"));
+        assert!(md.contains("| 1 | delta | 40.0 | 4040.0 |"));
+        assert!(md.contains("| 2 | delta | 30.0 | 4070.0 |"));
+    }
+
+    #[test]
+    fn write_multi_step_json_produces_expected_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("multi-step.json");
+        let (m, kinds) = sample_multi_step_metrics();
+        write_multi_step_json(&m, &kinds, "https://example.com", &path).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["url"], "https://example.com");
+        assert_eq!(v["steps"], 3_u64);
+        assert_eq!(v["cumulative_avg_bytes"][2].as_f64().unwrap(), 4070.0);
+        assert_eq!(v["sample_step_kinds"][1], "delta");
     }
 }

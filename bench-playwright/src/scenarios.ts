@@ -31,3 +31,39 @@ export const SCENARIOS: Scenario[] = [
     description: 'Real external site — baseline compatibility with Rust bench',
   },
 ];
+
+/** A multi-step interaction sequence for cumulative delta-cost measurement (issue #173). */
+export interface MultiStepScenario {
+  name: string;
+  url: string;
+  description: string;
+  /** CSS selectors clicked in sequence, one per interaction step. */
+  stepSelectors: string[];
+}
+
+export const MULTI_STEP_SCENARIOS: MultiStepScenario[] = [
+  {
+    name: 'spa-filter-cycle',
+    url: `file://${fixturesDir}/spa-like.html`,
+    description:
+      'Cycle through feed filter buttons (class-toggle only, no navigation) — small, realistic per-step DOM change',
+    stepSelectors: [
+      '.filter-btn[data-filter="articles"]',
+      '.filter-btn[data-filter="discussions"]',
+      '.filter-btn[data-filter="videos"]',
+      '.filter-btn[data-filter="links"]',
+      '.filter-btn[data-filter="all"]',
+    ],
+  },
+  {
+    name: 'form-shipping-cycle',
+    url: `file://${fixturesDir}/form.html`,
+    description:
+      'Cycle through shipping-method radio buttons (checked-attribute toggle) — a second, independent per-step change shape so the delta-cost claim is not based on a single favorable scenario',
+    stepSelectors: [
+      'input[name="shipping_method"][value="express"]',
+      'input[name="shipping_method"][value="overnight"]',
+      'input[name="shipping_method"][value="standard"]',
+    ],
+  },
+];
