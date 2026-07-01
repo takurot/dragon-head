@@ -1,5 +1,6 @@
 use crate::sre::state::SemanticNode;
 use regex::{Regex, RegexSet, RegexSetBuilder};
+use serde_json::{Map, Value};
 use unicode_normalization::UnicodeNormalization;
 
 /// Placeholder substituted in `Redact` mode.
@@ -165,6 +166,44 @@ impl PromptInjectionSanitizer {
             .collect();
 
         node
+    }
+
+    /// Recursively sanitize arbitrary JSON strings exposed to LLM clients.
+    ///
+    /// Returns the sanitized value and a deduplicated list of security flags that
+    /// describe risks found anywhere in the JSON tree.
+    pub fn sanitize_json_value(&self, value: Value) -> (Value, Vec<String>) {
+        if self.config.mode == PromptInjectionMode::Off {
+            return (value, Vec::new());
+        }
+
+        let mut flags = Vec::new();
+        let value = self.sanitize_json_value_inner(value, &mut flags);
+        (value, flags)
+    }
+
+    fn sanitize_json_value_inner(&self, value: Value, flags: &mut Vec<String>) -> Value {
+        match value {
+            Value::String(text) => {
+                let (text, detected) = self.process_text(text);
+                if detected {
+                    add_flag_dedup(flags, SECURITY_FLAG);
+                }
+                Value::String(text)
+            }
+            Value::Array(items) => Value::Array(
+                items
+                    .into_iter()
+                    .map(|item| self.sanitize_json_value_inner(item, flags))
+                    .collect(),
+            ),
+            Value::Object(map) => Value::Object(
+                map.into_iter()
+                    .map(|(key, value)| (key, self.sanitize_json_value_inner(value, flags)))
+                    .collect::<Map<String, Value>>(),
+            ),
+            other => other,
+        }
     }
 
     /// Returns `(processed_text, was_detected)`.
