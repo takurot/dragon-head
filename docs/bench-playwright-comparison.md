@@ -196,6 +196,11 @@ Playwright にはこの機能がなく、LLM が誤って決済ボタンを押�
 (Playwright にはデルタ概念が無いため、これが「削減なし」のコントロール)。
 
 `LoadProfile::Minimal` を一貫して使用しており、既存の単発計測 (`measure_sre`) の数値と比較可能。
+**ただし、これは意図的な Minimal-only 計測であり、本番の `get_state` Delta パスを完全には再現していない**:
+本番は `LoadProfile::Interactive` でキャプチャし、`select_update` の前に `PromptInjectionSanitizer`
+を実行する (`mcp-server/src/lib.rs`)。Interactive プロファイルが追加ノードを含むページや、
+サニタイザがコンテンツにフラグを立てるページでは、本番のバイト数や noop/delta/full の判定自体が
+ここでの計測結果と異なる可能性がある。
 
 2 つの独立したシナリオで計測した (1 シナリオだけだと都合の良いケースの選定になりかねないため):
 

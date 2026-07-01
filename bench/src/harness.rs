@@ -62,7 +62,15 @@ fn measure_sre(url: &str, chrome_path: Option<String>) -> anyhow::Result<(usize,
 ///
 /// `LoadProfile::Minimal` is used throughout (not `Interactive`) so
 /// `step_bytes[0]` stays comparable to the existing single-call
-/// `measure_sre` numbers already published in the comparison report.
+/// `measure_sre` numbers already published in the comparison report. This is
+/// a deliberate Minimal-only measurement, not an exact reproduction of
+/// production `get_state`'s Delta path: the real path captures with
+/// `LoadProfile::Interactive` and runs `PromptInjectionSanitizer` before
+/// `select_update` (see `mcp-server/src/lib.rs`), neither of which happens
+/// here. On pages where the Interactive profile includes extra nodes, or the
+/// sanitizer flags content, production byte counts (and even the
+/// noop/delta/full decision) could differ from what's reported by this
+/// harness (Codex review, PR #192).
 ///
 /// Interactions are fired via `evaluate_script` (a direct DOM `.click()`),
 /// bypassing `PageSession::act()`/`PolicyEngine`/audit — this harness only
@@ -107,7 +115,20 @@ fn run_multi_step_inner(
 
     for selector in step_selectors {
         let selector_js = serde_json::to_string(selector)?;
-        page.evaluate_script(&format!("document.querySelector({selector_js})?.click();"))?;
+        // `headless_chrome::Tab::evaluate` discards CDP's `exceptionDetails`,
+        // so a thrown JS error would NOT surface as a Rust `Err` here — it
+        // would silently succeed with an `undefined` result. Instead, have
+        // the script return whether it found and clicked an element, and
+        // fail the run explicitly when it didn't; otherwise a typo'd/stale
+        // scenario selector would silently record a phantom "noop" step and
+        // inflate the apparent cumulative-cost savings (Codex review, PR #192).
+        let found = page.evaluate_script_json(&format!(
+            "(() => {{ const el = document.querySelector({selector_js}); \
+             if (!el) return false; el.click(); return true; }})();"
+        ))?;
+        if found != serde_json::Value::Bool(true) {
+            anyhow::bail!("step selector matched no element: {selector}");
+        }
         let next = page.capture_semantic_state(LoadProfile::Minimal)?;
         let update = next.select_update(Some(&previous), DeltaPolicy::default())?;
 
