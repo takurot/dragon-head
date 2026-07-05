@@ -131,6 +131,7 @@ impl AuditLogger {
     /// | `AUDIT_LOG_DIR`       | *(unset)*        | Directory for rolling NDJSON files. If unset, no persistent sink is created. |
     /// | `AUDIT_LOG_MAX_BYTES` | `10485760` (10 MiB) | Rotate log file after this many bytes. `0` = never rotate. |
     /// | `AUDIT_DURABILITY`    | `flush`          | `flush` or `sync`. Use `sync` for crash-safe retention. |
+    /// | `AUDIT_LOG_STDOUT`    | *(unset)*        | If set (any value), also emit events to **stderr** (never stdout, which `dragon-head-mcp` reserves for JSON-RPC framing). |
     ///
     /// When `AUDIT_LOG_DIR` is unset the logger behaves identically to [`AuditLogger::new()`].
     /// Construction errors (bad dir, permission denied) are logged to stderr and fall back to
@@ -141,10 +142,13 @@ impl AuditLogger {
 
     /// Testable variant of [`from_env`] — accepts an env-lookup closure instead of reading
     /// `std::env` directly.  This avoids `set_var`/`remove_var` in tests, which are unsound
-    /// under parallel test runners (project rule #11).
+    /// under parallel test runners (project rule #11). Also covers `AUDIT_LOG_STDOUT`, which
+    /// [`from_env`] previously read via a direct `env::var` call bypassing this closure.
     pub fn from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let stdout_enabled = lookup("AUDIT_LOG_STDOUT").is_some();
+
         let Some(dir) = lookup("AUDIT_LOG_DIR").filter(|s| !s.is_empty()) else {
-            return Self::new();
+            return Self::with_sinks_and_stdout(Vec::new(), None, stdout_enabled);
         };
 
         let max_bytes: u64 = lookup("AUDIT_LOG_MAX_BYTES")
@@ -169,29 +173,37 @@ impl AuditLogger {
                 eprintln!(
                     "[AUDIT][ERROR] Failed to create persistent sink at '{dir}': {e}. Falling back to in-memory only."
                 );
-                return Self::new();
+                return Self::with_sinks_and_stdout(Vec::new(), None, stdout_enabled);
             }
         };
 
         let metered = Arc::new(MeteredSink::new(sink));
         let handle = PersistentSinkHandle(Arc::clone(&metered));
         // Arc<MeteredSink<RollingFileSink>>: AuditSink via the blanket impl in audit_sink.rs.
-        Self::with_sinks(vec![Box::new(metered)], Some(handle))
+        Self::with_sinks_and_stdout(vec![Box::new(metered)], Some(handle), stdout_enabled)
     }
 
     /// Create a logger that fans every sanitized event out to `sinks` in
-    /// addition to the in-memory buffer and optional stdout output.
+    /// addition to the in-memory buffer and optional stderr output (see
+    /// `AUDIT_LOG_STDOUT`).
     ///
     /// For external callers that need custom sinks without a persistent-sink metrics handle.
     pub fn with_sinks(
         sinks: Vec<Box<dyn AuditSink>>,
         persistent: Option<PersistentSinkHandle>,
     ) -> Self {
+        Self::with_sinks_and_stdout(sinks, persistent, env::var("AUDIT_LOG_STDOUT").is_ok())
+    }
+
+    fn with_sinks_and_stdout(
+        sinks: Vec<Box<dyn AuditSink>>,
+        persistent: Option<PersistentSinkHandle>,
+        stdout_enabled: bool,
+    ) -> Self {
         const MAX_RECENT_EVENTS: usize = 512;
 
         let (sender, receiver) = unbounded::<AuditMessage>();
         let recent_events = Arc::new(Mutex::new(VecDeque::new()));
-        let stdout_enabled = env::var("AUDIT_LOG_STDOUT").is_ok();
         let recent_events_for_worker = Arc::clone(&recent_events);
 
         thread::spawn(move || {
@@ -235,7 +247,9 @@ impl AuditLogger {
 
                 if stdout_enabled {
                     if let Ok(json) = serde_json::to_string(&sanitized) {
-                        println!("[AUDIT] {}", json);
+                        // Never write to real stdout: dragon-head-mcp uses stdout for
+                        // JSON-RPC framing, so this would corrupt the protocol stream.
+                        eprintln!("[AUDIT] {}", json);
                     }
                 }
             }
