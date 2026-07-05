@@ -198,6 +198,11 @@ durability = "flush"  # "flush" (default) or "sync"
 | Audit log directory | `AUDIT_LOG_DIR` | `audit.log_dir` |
 | Audit max bytes | `AUDIT_LOG_MAX_BYTES` | `audit.max_bytes` |
 | Audit durability | `AUDIT_DURABILITY` | `audit.durability` |
+| Audit stdout mirroring | `AUDIT_LOG_STDOUT` | none |
+
+`AUDIT_LOG_STDOUT` (if set, any value) mirrors audit events to **stderr**, never
+stdout — `dragon-head-mcp` uses stdout for JSON-RPC framing, so writing there
+would corrupt the protocol stream.
 
 Run `dragon-head-mcp --doctor` to validate the config file. A malformed file, or
 an invalid `prompt_injection.mode` value, makes the "Config file" check fail.
