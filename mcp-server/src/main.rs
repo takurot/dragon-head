@@ -16,7 +16,7 @@ mod init;
 const MAX_REQUEST_LINE_BYTES: usize = 10 * 1024 * 1024;
 
 enum StdinLine {
-    Line(String),
+    Line(Vec<u8>),
     TooLong,
     Eof,
 }
@@ -24,7 +24,9 @@ enum StdinLine {
 /// Reads one line from `reader`, capping growth at `max_bytes`. If a
 /// newline isn't found within the cap, the remainder of that oversized line
 /// is drained so the next call starts at the following line, and
-/// `TooLong` is returned instead of buffering further.
+/// `TooLong` is returned instead of buffering further. The line is returned
+/// as raw bytes: decoding invalid UTF-8 is the caller's concern, and it
+/// should be rejected rather than silently rewritten.
 fn read_capped_line<R: BufRead>(reader: &mut R, max_bytes: usize) -> io::Result<StdinLine> {
     let mut buf = Vec::new();
     let read = (&mut *reader)
@@ -35,7 +37,7 @@ fn read_capped_line<R: BufRead>(reader: &mut R, max_bytes: usize) -> io::Result<
     }
     if buf.last() == Some(&b'\n') || read < max_bytes {
         // Either a complete line, or the reader hit true EOF before the cap.
-        return Ok(StdinLine::Line(String::from_utf8_lossy(&buf).into_owned()));
+        return Ok(StdinLine::Line(buf));
     }
 
     loop {
@@ -162,7 +164,24 @@ fn main() -> anyhow::Result<()> {
                 stdout_handle.flush()?;
                 continue;
             }
-            Ok(StdinLine::Line(line)) => {
+            Ok(StdinLine::Line(bytes)) => {
+                let line = match String::from_utf8(bytes) {
+                    Ok(line) => line,
+                    Err(err) => {
+                        eprintln!("dragon-head-mcp: rejected non-UTF-8 request line: {err}");
+                        let response = json!({
+                            "jsonrpc": "2.0",
+                            "id": null,
+                            "error": {
+                                "code": -32700,
+                                "message": "request line is not valid UTF-8"
+                            }
+                        });
+                        writeln!(stdout_handle, "{response}")?;
+                        stdout_handle.flush()?;
+                        continue;
+                    }
+                };
                 let trimmed = line.trim().to_string();
                 if trimmed.is_empty() {
                     continue;
@@ -194,7 +213,7 @@ mod tests {
     fn reads_a_normal_line() {
         let mut reader = Cursor::new(b"hello\nworld\n".to_vec());
         match read_capped_line(&mut reader, 1024).unwrap() {
-            StdinLine::Line(line) => assert_eq!(line, "hello\n"),
+            StdinLine::Line(line) => assert_eq!(line, b"hello\n"),
             other => panic!(
                 "expected Line, got {other:?}",
                 other = std::mem::discriminant(&other)
@@ -215,7 +234,7 @@ mod tests {
     fn final_line_shorter_than_cap_without_trailing_newline_is_returned() {
         let mut reader = Cursor::new(b"short".to_vec());
         match read_capped_line(&mut reader, 1024).unwrap() {
-            StdinLine::Line(line) => assert_eq!(line, "short"),
+            StdinLine::Line(line) => assert_eq!(line, b"short"),
             other => panic!(
                 "expected Line, got {other:?}",
                 other = std::mem::discriminant(&other)
@@ -235,7 +254,7 @@ mod tests {
         ));
 
         match read_capped_line(&mut reader, 10).unwrap() {
-            StdinLine::Line(line) => assert_eq!(line, "short\n"),
+            StdinLine::Line(line) => assert_eq!(line, b"short\n"),
             other => panic!(
                 "expected Line after resync, got {other:?}",
                 other = std::mem::discriminant(&other)
@@ -254,5 +273,23 @@ mod tests {
             read_capped_line(&mut reader, 1024).unwrap(),
             StdinLine::TooLong
         ));
+    }
+
+    #[test]
+    fn preserves_invalid_utf8_bytes_for_the_caller_to_reject() {
+        // read_capped_line must not lossily rewrite invalid UTF-8 — the
+        // caller decodes with `String::from_utf8` and rejects the request
+        // instead of silently substituting replacement characters.
+        let mut reader = Cursor::new(vec![0xFF, 0xFE, b'\n']);
+        match read_capped_line(&mut reader, 1024).unwrap() {
+            StdinLine::Line(line) => {
+                assert_eq!(line, vec![0xFF, 0xFE, b'\n']);
+                assert!(String::from_utf8(line).is_err());
+            }
+            other => panic!(
+                "expected Line, got {other:?}",
+                other = std::mem::discriminant(&other)
+            ),
+        }
     }
 }
