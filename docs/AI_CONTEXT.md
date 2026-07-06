@@ -1,130 +1,109 @@
 # AI_CONTEXT.md
 
-> Read this file first. It is a map, not a manual — use it to decide which other
-> file to open next, instead of exploring the whole repo.
+**Last updated:** 2026-07-06
 
-## What this project is
+Read this first. It is a map for deciding which files to open next; it is not a
+full manual.
 
-Dragon Head is an AI-native **headless browser runtime** for LLM/VLM agents. It
-wraps a Chrome/CDP session and exposes it to an agent as a compact, structured
-**Semantic State** (an accessibility-tree-like JSON, not raw HTML/DOM) via a
-stdio **MCP server** binary, `dragon-head-mcp`. The agent inspects pages, acts
-on elements, verifies outcomes, requests human approval, and runs declarative
-skills — all through 7 MCP tools.
+## What This Project Is
 
-## Primary users
+Dragon Head is an AI-native headless browser runtime for LLM/VLM agents. It
+wraps a Chrome/Chromium CDP session and exposes compact, structured
+**Semantic State** through the `dragon-head-mcp` stdio MCP server. Agents use
+the MCP tools to inspect pages, act on stable targets, verify outcomes, request
+human approval, run declarative skills, extract structured data, and inspect
+usage meters.
 
-- AI coding/browsing agents (Claude, GPT, etc.) connected via an MCP client
-  (Claude Desktop, Claude Code, Codex, or any MCP-compatible client).
-- Developers embedding `core-runtime` directly as a Rust library (no MCP).
+The current MCP tool contract has 8 tools, defined in `McpServer::tools()` in
+`mcp-server/src/lib.rs`:
 
-## Primary use cases
+- `get_state`
+- `act`
+- `verify`
+- `get_visual`
+- `ask_human`
+- `run_skill`
+- `get_usage_report`
+- `extract`
 
-- Web automation/testing driven by an LLM (navigate, click, fill forms, verify
-  text) without feeding raw HTML/screenshots into the model.
-- Human-in-the-loop (HITL) gated actions (e.g. financial transactions) via
-  policy rules + Slack/Teams approval (`hitl-bridge`).
-- Declarative, reusable browser workflows ("skills") instead of ad-hoc agent
-  exploration on every run.
+## Primary Users
 
-## Tech stack
+- AI coding or browsing agents connected through MCP clients such as Claude
+  Desktop, Claude Code, Codex, or any MCP-compatible client.
+- Rust developers embedding `core-runtime` directly without the MCP layer.
 
-- **Language**: Rust (stable, see `rust-toolchain.toml`), workspace of 8 crates.
-- **Browser control**: `headless_chrome` (CDP), Chrome/Chromium required at
-  runtime (not vendored).
-- **Protocol**: MCP (JSON-RPC over stdio).
-- **Plugins**: WebAssembly via `wasmtime` (`plugin-host`).
-- **Testing**: `cargo nextest`, integration tests under `tests/` per crate.
-- **CI**: GitHub Actions (`.github/workflows/ci.yml`, `e2e.yml`, `release.yml`).
+## Tech Stack
 
-## Key commands
+- **Language:** Rust stable, pinned by `rust-toolchain.toml`.
+- **Workspace:** 8 crates listed in the root `Cargo.toml`.
+- **Browser control:** `headless_chrome` over CDP; Chrome/Chromium is required
+  at runtime and is not vendored.
+- **Protocol:** MCP JSON-RPC over stdio.
+- **Plugins:** WebAssembly via `wasmtime` in `plugin-host`.
+- **Testing:** `cargo nextest`, crate-local integration tests, and
+  browser-dependent tests that skip unless Chrome is available.
+- **CI:** GitHub Actions in `.github/workflows/ci.yml`, `e2e.yml`, and
+  `release.yml`.
+
+## Common Commands
 
 ```bash
-just check              # cargo check --workspace
-just test               # cargo nextest run --workspace
-just test-ci             # nextest --profile ci (what CI runs)
-just lint                # cargo clippy --workspace -- -D warnings
-just fmt                 # cargo fmt --all
-just test-all            # test + lint + fmt
+just check
+just test
+just test-ci
+just lint
+just fmt
+just test-all
 cargo run -p mcp-server --bin dragon-head-mcp -- --doctor
 ```
-See `DEVELOPMENT_GUIDE.md` for the full list.
 
-## Key directories
+There is no `just build` recipe in the current `Justfile`; use `cargo build`.
+
+## Key Directories
 
 | Path | What it is |
 |---|---|
 | `core-runtime/` | Chrome/CDP session, Semantic State, policy, audit, privacy, plugins, speculative state |
-| `mcp-server/` | The `dragon-head-mcp` stdio binary and tool dispatch — **start here for tool behavior** |
-| `skills-engine/` | Declarative skill (workflow) definitions and execution |
-| `plugin-host/` | Wasm plugin manifest validation + sandboxed execution |
+| `mcp-server/` | `dragon-head-mcp` binary, MCP tool dispatch, config, doctor/init commands |
+| `skills-engine/` | Declarative browser workflow definitions and execution |
+| `plugin-host/` | Wasm plugin manifest validation and sandboxed execution |
 | `marketplace/` | Plugin/domain-pack metadata and revenue-share primitives |
-| `hitl-bridge/` | Slack/Teams human-approval bridge for `ask_human` |
-| `bench/`, `nfr-baseline/` | Performance benchmarking and regression baselines |
-| `docs/` | Spec, plan, and this onboarding doc set |
-| `examples/` | Runnable, Chrome-free examples (`cargo run --example quickstart`) |
+| `hitl-bridge/` | Slack/Teams human approval bridge for `ask_human` flows |
+| `bench/`, `nfr-baseline/` | Performance benchmarks and regression baselines |
+| `docs/` | Spec, architecture, operational docs, and agent guidance |
+| `examples/` | Chrome-free examples and MCP request/response fixtures |
 
-## Files to read before changing anything
+## Files To Read First
 
-1. `AI_CONTEXT.md` (this file)
-2. `ARCHITECTURE.md` — component responsibilities and data flow
-3. `FILE_GUIDE.md` — where to find/change a specific thing
-4. `CLAUDE.md` (project root) — authoritative crate table + commands, kept up
-   to date by convention
-5. `docs/SPEC.md` — functional spec, referenced by code comments (e.g. `SEC-03`)
-6. `docs/PLAN.md` — PR-by-PR status; check before assuming a feature is "not
-   built yet"
+1. `docs/AI_CONTEXT.md`
+2. `docs/ARCHITECTURE.md`
+3. `docs/FILE_GUIDE.md`
+4. `GEMINI.md`
+5. Local `AGENTS.md` / `CLAUDE.md`, if present. These are ignored by
+   `.gitignore`, so treat them as operator-specific guidance, not repository
+   source-of-truth documentation.
+6. `docs/SPEC.md`, when behavior or public contract is relevant.
+7. `docs/PLAN.md`, for historical PR/phase status only. Verify current code
+   before assuming a feature is present or absent.
 
-## Design principles to respect
+## Design Principles
 
-- **`SemanticState` is the contract.** Agents never see raw DOM/HTML. Any
-  change to `sre/` must keep `stable_key` identity stable across re-renders
-  (tests: `core-runtime/tests/stable_key_*`, `sre_determinism.rs`).
-- **Audit before execution, policy before mutation.** In `act`, the audit log
-  entry is written *before* policy enforcement, and policy enforcement runs
-  *before* any CDP mutation. Don't reorder this (see `core-runtime/src/browser.rs`
-  around `enforce_policy`).
-- **Capture state before propagating errors.** Don't let `?` silently drop
-  accumulated metering/audit/speculative state — see CLAUDE.md §12.
-- **No `std::env::set_var`/`remove_var` in tests** — inject env values as
-  function parameters instead (CLAUDE.md §11).
-- **Immutability by default** — return new values, don't mutate in place
-  (workspace-wide Rust convention).
+- Preserve the `SemanticState` contract. Agents should not need raw DOM/HTML,
+  and `stable_key` identity must remain stable across re-renders.
+- Preserve audit-before-policy-before-mutation ordering in `act`.
+- Keep per-session state inside `PageSession`; avoid hidden global caches.
+- Capture metering, audit, and speculative state before propagating errors.
+- Do not mutate process-wide environment variables in parallel tests; pass
+  values through explicit parameters.
 
-## Frequently changed areas
+## High Blast-Radius Areas
 
-- `mcp-server/src/lib.rs` — tool dispatch, usage metering, speculative wiring
-  (this file is large; expect most "new tool behavior" work to land here).
-- `core-runtime/src/sre/` — semantic capture/normalization tuning.
-- `core-runtime/src/policy.rs` — new policy rule shapes / Guardian Angel
-  thresholds.
-- `docs/PLAN.md` — updated every PR to track phase status.
+- `core-runtime/src/sre/stable_key.rs`
+- `core-runtime/src/browser.rs`
+- `core-runtime/src/speculative/`
+- `core-runtime/src/prompt_injection.rs`
+- `.config/nextest.toml`
+- `nfr-baseline/*.json`
 
-## High blast-radius areas (change with care, check tests first)
-
-- `core-runtime/src/sre/stable_key.rs` — identity hashing; a change here
-  silently breaks every agent's ability to re-target elements across page
-  re-renders.
-- `core-runtime/src/browser.rs` — `enforce_policy`/audit ordering in `act()`
-  and crash/disconnect recovery (`relaunch`, `is_browser_disconnected`).
-- `core-runtime/src/speculative/` — feeds `get_state`'s fast path; a bug here
-  causes agents to silently see stale state (`StateDelta::Mismatch` is the
-  safety net — don't remove it).
-- `core-runtime/src/prompt_injection.rs` — security-relevant; changes affect
-  `security_flags` and `Redact` mode page-text mutation.
-- `.config/nextest.toml` — CI's `[profile.ci]` does **not** inherit from
-  `[profile.default]`; every field must be repeated (CLAUDE.md §7).
-- `nfr-baseline/*.json` — only update via `scripts/update_nfr_baseline.sh`,
-  never hand-edit.
-
-## Checklist before starting work
-
-- [ ] Read `AI_CONTEXT.md`, `ARCHITECTURE.md`, and the relevant section of
-      `FILE_GUIDE.md` for the area you're touching.
-- [ ] Check `docs/PLAN.md` for existing status/PR history on this feature.
-- [ ] Identify the exact test files that exercise this code path
-      (`FILE_GUIDE.md` lists test directories per crate).
-- [ ] If touching `sre/`, `policy.rs`, or `browser.rs`'s `act`/`enforce_policy`
-      path, re-read the relevant "High blast-radius" note above.
-- [ ] Run `just check` and the targeted test file locally before considering
-      the change done; run `just test-all` before a PR.
+Update documentation that names MCP tools, Semantic State schema, or developer
+commands whenever the corresponding implementation changes.

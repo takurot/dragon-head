@@ -1,12 +1,15 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-05-19
+- 最終更新日: 2026-07-06
 - プラン状態: In Progress
 
 ## 1. 進捗管理ルール
 
 - `Status` は `NOT_STARTED` / `IN_PROGRESS` / `BLOCKED` / `DONE` を使用する。
+- このファイルは実装計画と完了済みPRの履歴であり、現在のコードベースの正本は
+  `Cargo.toml`、各 crate の実装、`mcp-server/src/lib.rs` の MCP tool contract、
+  および `README.md` / `docs/ARCHITECTURE.md` の利用者向け説明で確認する。
 - 各PRは `実装` / `テスト` / `CI` の3カテゴリでチェックボックス管理する。
 - PRを `DONE` に変更できる条件:
   - 実装タスク完了

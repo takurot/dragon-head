@@ -62,7 +62,7 @@ CHROME_INSTALLED=true cargo test -p core-runtime --test semantic_wait
 
 nextestのプロファイルは `.config/nextest.toml` に `default`/`ci` の2種類。
 **`ci` プロファイルは `default` を継承しないため全フィールドを repeat する
-必要がある**(CLAUDE.md §7)。
+必要がある**。
 
 ## lint / format / typecheck
 
@@ -138,8 +138,9 @@ release.ymlの全ジョブ詳細は未確認)。
 - `cargo fmt`(デフォルト設定)+ `cargo clippy -D warnings` を必須。
 - ライブラリ層は `thiserror`、アプリ層は `anyhow` でエラー型を扱う
   (ユーザー個人ルール `~/.claude/rules/rust/coding-style.md` 準拠)。
-- 詳細はリポジトリの `CLAUDE.md` 末尾(§1〜§14)に蓄積されたRust固有の
-  落とし穴ガイドを参照。
+- Rust固有の落とし穴は、追跡済みドキュメントでは `docs/AI_CONTEXT.md` と
+  `docs/AI_TASK_GUIDE.md` の高リスク領域メモを正本として参照する。ローカルの
+  `CLAUDE.md` が存在する場合は補助指示として扱う。
 
 ## ブランチ・コミット方針
 

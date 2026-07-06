@@ -149,5 +149,5 @@
 | `core-runtime/target/nfr-dashboard*.md` | ベンチ出力 | 無視 |
 | `rust-toolchain.toml` | 設定(`channel = "stable"`) | 変更時はCI全体に影響、慎重に |
 | `deny.toml` | 設定(cargo-deny advisories) | 例外追加時は根拠を明記 |
-| `.config/nextest.toml` | 設定(`default`/`ci`プロファイル) | プロファイル非継承に注意(CLAUDE.md §7) |
+| `.config/nextest.toml` | 設定(`default`/`ci`プロファイル) | プロファイル非継承に注意。`ci` は `default` を継承しない |
 | `nfr-baseline/*.json` | ベースラインデータ | スクリプト経由のみ更新 |

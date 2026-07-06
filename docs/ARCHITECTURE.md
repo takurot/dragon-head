@@ -34,7 +34,7 @@ flowchart TD
 
 | Component | Responsibility |
 |---|---|
-| `mcp-server` | stdio JSON-RPC server; tool contract (7 tools); config loading; `--doctor`/`--init`; usage metering and plan-tier gating |
+| `mcp-server` | stdio JSON-RPC server; tool contract (8 tools: `get_state`, `act`, `verify`, `get_visual`, `ask_human`, `run_skill`, `get_usage_report`, `extract`); config loading; `--doctor`/`--init`; usage metering and plan-tier gating |
 | `core-runtime::browser` | Owns the Chrome process and per-tab `PageSession`; executes actions; crash/disconnect detection and relaunch |
 | `core-runtime::sre` | DOM → `SemanticState`/`SemanticNode` capture and normalization; `stable_key` identity; delta computation |
 | `core-runtime::policy` | `PolicyEngine` — rule-based action gating (Allow/Block/RequireHumanApproval) and Guardian Angel outcome projection |

@@ -1,116 +1,61 @@
 # AI_TASK_GUIDE.md
 
-AIコーディングエージェントがこのリポジトリで作業する際のガイド。トークン
-消費を抑えるため、まず最小限のファイルセットだけを読み、タスク種別ごとに
-必要な範囲だけ追加で探索すること。
+AIコーディングエージェントがこのリポジトリで作業する際のガイド。
+最初に読む範囲を絞り、必要になった時点で追加の実装・テスト・仕様を開く。
 
-## 最初に読むファイル(最小セット)
+## 最初に読むファイル
 
-1. `docs/AI_CONTEXT.md` — リポジトリの地図
-2. `docs/ARCHITECTURE.md` — コンポーネント責務とデータフロー
-3. `docs/FILE_GUIDE.md` — 「この機能を変えるならこのファイル」の対応表
-4. `CLAUDE.md`(リポジトリルート) — 正本のクレート表とコマンド一覧、
-   Rust固有の落とし穴(§1〜§14)
-5. 対象機能に関係する実装ファイル(`FILE_GUIDE.md` の「機能別に見るべき
-   場所」で特定する)
-6. 対象機能に関係するテストファイル(同上)
+1. `docs/AI_CONTEXT.md` — リポジトリの地図。
+2. `docs/ARCHITECTURE.md` — コンポーネント責務と主要データフロー。
+3. `docs/FILE_GUIDE.md` — 機能別に見るべき実装・テストの対応表。
+4. `GEMINI.md` — 追跡済みのエージェント向け概要とコマンド一覧。
+5. ローカルの `AGENTS.md` / `CLAUDE.md` が存在する場合のみ読む。これらは
+   `.gitignore` 対象なので、リポジトリ正本ではなく作業者固有の補助指示として扱う。
+6. 対象機能に関係する実装ファイル。
+7. 対象機能に関係するテストファイル。
 
-`docs/SPEC.md` と `docs/PLAN.md` は必要になったときだけ参照する
-(全文を毎回読む必要はない — `PLAN.md` はPRステータスの確認に使う)。
+`docs/SPEC.md` と `docs/PLAN.md` は必要になったときだけ参照する。
+`PLAN.md` は履歴・計画の確認用であり、現在の実装状態はコードで再確認する。
 
 ## タスク別ガイド
 
 ### バグ修正
-1. 再現条件を確認する(可能ならテストで再現させる)。
+
+1. 再現条件を確認し、可能なら失敗するテストを先に作る。
 2. `FILE_GUIDE.md` で関連する実装ファイルとテストファイルを特定する。
-3. 同じファイル内に「兄弟パス」(同じ出力型を生成する他の関数/分岐)が
-   ないか `grep` で確認する — CLAUDE.md のBugfix Discipline参照。
-4. 最小範囲で修正する。`?` でエラーを伝播する箇所では、計測/監査用の
-   状態がエラー伝播の前にキャプチャされているか確認する(CLAUDE.md §12)。
-5. 修正対象のコードパスを直接アサートする回帰テストを追加する(集約した
-   呼び出し元ではなく、直接の出力に対して)。
-6. `just check` → 対象テスト → `just test-all` で確認。
+3. 同じ出力型を作る兄弟パスがないか `rg` で確認する。
+4. 修正した関数・分岐を直接通るテストを追加する。
+5. fallible な処理でメーター、audit、speculative state などを蓄積する場合は、
+   エラー伝播の前に状態を保存しているか確認する。
+6. `just check`、対象テスト、必要なら `just test-all` を実行する。
 
-### 新機能追加
-1. `FILE_GUIDE.md`/`ARCHITECTURE.md` で既存の類似機能(似たツール、似た
-   ポリシー拡張など)を探す。
-2. 既存パターンに合わせる(例: 新しいMCPツールなら既存ツールの定義・
-   ディスパッチ・契約テストの3点セットをコピーして変更)。
-3. 影響範囲を確認する: MCPツール契約(`mcp-server/tests/mcp_*`)、Semantic
-   Stateスキーマ(`core-runtime/tests/sre_*`, `stable_key_*`)、ポリシー
-   スキーマ(`policy_schema_lint.rs`)、スキル/プラグインのスキーマ互換性
-   テスト。
-4. `docs/PLAN.md` に対応するPR/ISSUEがあれば状態を確認・更新する。
-5. テストを追加し、`docs/testing.md` のテストピラミッド方針に従う。
+### 新規 MCP ツールまたはツール契約変更
 
-### 設計変更・リファクタリング
-1. `docs/ARCHITECTURE.md` の「Easy to break」セクションを必ず確認する。
-2. 変更前後でテストが通ることを確認する(振る舞いを変えない場合)。
-3. 監査ログ順序(audit→policy→execution)や `stable_key` 生成方式など、
-   暗黙の契約を変えないこと。変える場合はユーザーに明示し、影響範囲
-   (互換性テスト一覧)を提示する。
+1. `mcp-server/src/lib.rs` の既存 tool 定義、dispatch、input schema を確認する。
+2. `mcp-server/tests/mcp_*` の契約テストを更新する。
+3. `README.md` の Available MCP Tools、`docs/ARCHITECTURE.md`、
+   `docs/AI_CONTEXT.md` を更新する。
+4. Semantic State 構造を変える場合は `core-runtime/tests/sre_*` と
+   `examples/` の fixture も確認する。
 
-## テスト追加・更新の方針
+### Policy / HITL / Guardian Angel 変更
 
-- バグ修正のテストは修正対象のコードパスを直接アサートする(集約した
-  呼び出し元経由のテストは弱い — CLAUDE.md「Test the Exact Path」)。
-- ブラウザ依存テストは `test_bench_support::should_skip_browser_tests()`
-  でスキップ可能にする。
-- 環境変数を読むテストでは `std::env::set_var`/`remove_var` を使わない。
-  関数を「envオプション引数を受け取る版」に分離し、テストはその引数に
-  直接値を渡す(CLAUDE.md §11)。
-- カバレッジ目標は80%(ユーザー個人ルール)。CIのカバレッジゲートは70%
-  (`.github/workflows/ci.yml` の `coverage` ジョブ)。
+1. `core-runtime/src/policy.rs` と関連テストを読む。
+2. JSON schema と MCP tool contract に影響があるか確認する。
+3. HITL の挙動が変わる場合は `hitl-bridge/` と `docs/operations.md` を確認する。
 
-## 既存設計を壊さないための注意
+### ドキュメント更新
 
-- `core-runtime` は他のワークスペースクレートに依存しない(基盤クレート)。
-  この依存方向を逆転させる変更をしない。
-- `act` 内の「監査ログ→ポリシー評価→実行」の順序を変えない。
-- `SpeculativeEngine` のミスは必ず通常キャプチャにフォールバックする
-  仕組み(`StateDelta::Mismatch`)を維持する — キャッシュヒットを無条件に
-  信頼するコードを書かない。
-- `nfr-baseline/*.json` は直接編集しない(`scripts/update_nfr_baseline.sh`
-  経由)。
-- `.config/nextest.toml` の `[profile.ci]` は `[profile.default]` を
-  継承しないため、両方に必要なフィールドを明示的に複製する。
+1. 対象文書が参照している実装ファイルを開く。
+2. 追跡されていない `AGENTS.md` / `CLAUDE.md` を正本として参照しない。
+3. MCP tool 数、コマンド名、環境変数、crate 構成はコード・`Justfile`・
+   `Cargo.toml` から確認する。
+4. `python3 scripts/check_mvp_docs.py` を実行する。
 
-## やってはいけないこと
+## 注意領域
 
-- 推測で `config.toml` の新フィールドを追加する(実際に
-  `mcp-server/src/config.rs` の `FileConfig` 構造を確認してから)。
-- `Cargo.lock` を手動編集する。
-- `target/` 配下のファイルを参照・編集する(ビルド出力)。
-- バイナリ/スナップショットフィクスチャ(`*.png`, `golden/*.json` 等)を
-  意図した視覚差分更新以外の理由で変更する。
-- CI/CD設定(`.github/workflows/*.yml`)を、`deny.toml` やnextestプロファイル
-  との整合性を確認せずに変更する。
-- 無関係なコードの整形・リファクタリング(ユーザーの依頼範囲外の変更)。
-
-## 推測で変更してはいけない箇所
-
-- `core-runtime/src/sre/stable_key.rs` のハッシュ/識別ロジック
-  — 既存エージェント統合の要素識別が壊れる。
-- `core-runtime/src/policy.rs` のenum/構造体のシリアライズ形式
-  — `PolicyRule`/`PolicyDecision` のJSONスキーマはツール契約に含まれる。
-- `deny.toml` のRUSTSEC例外リスト — 根拠なく削除/追加しない。
-- 監査イベントのスキーマ(`audit_schema.rs` がテストする形式)。
-
-## 大きな変更をする前に確認すべきこと
-
-- `docs/PLAN.md` で同等の作業が既に計画/完了していないか。
-- 変更対象のクレートに対応する `tests/` ディレクトリの一覧
-  (`FILE_GUIDE.md` 参照)で、影響を受けるテストファイルを把握しているか。
-- MCPツールのスキーマや`SemanticState`の構造を変える場合、
-  `examples/mcp_examples/*.json` や `README.md` の表も更新が必要か。
-- ユーザー個人ルール(`~/.claude/rules/`)の「Surgical Changes」原則
-  ——変更は依頼内容に直接トレースできる範囲に留める。
-
-## トークン削減のため、まず読むべき最小ファイルセット
-
-| タスク種別 | 最小限読むファイル |
-|---|---|
-| バグ修正(範囲が明確) | `AI_CONTEXT.md` + 対象実装ファイル1〜2つ + 対応テスト |
-| 新規MCPツール | `AI_CONTEXT.md` + `ARCHITECTURE.md`(データフロー節) + `mcp-server/src/lib.rs` + 既存ツールの契約テスト1例 |
-| ポリシー/Guardian Angel変更 | `AI_CONTEXT.md` + `DOMAIN_MODEL.md`(該当エンティティ) + `core-runtime/src/policy.rs` + `policy_engine.rs`/`policy_enforcement.rs` |
-| ドキュメント更新のみ | 対象ドキュメントと、その記述が参照する実装ファイルのみ(全文探索しない) |
+- `std::env::set_var` / `remove_var` を並列テストで使わない。
+- `nfr-baseline/*.json` は `scripts/update_nfr_baseline.sh` 経由で更新する。
+- `.config/nextest.toml` の `[profile.ci]` は `[profile.default]` を継承しない。
+- `Cargo.lock` は手編集しない。
+- LFS 管理のバイナリ fixture は、ドキュメント変更 PR に混ぜない。
