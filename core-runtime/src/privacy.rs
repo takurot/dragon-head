@@ -8,7 +8,7 @@ use crate::sre::state::{FastSemanticState, FullSemanticState, SemanticNode};
 /// A named regex pattern for domain-specific PII detection.
 ///
 /// Domain patterns are registered at startup and applied by `PiiRedactor`
-/// alongside the built-in email and credit-card patterns.
+/// alongside the built-in email, credit-card, SSN, and phone-number patterns.
 pub struct DomainPattern {
     pub name: String,
     regex: Regex,
@@ -60,10 +60,12 @@ impl PiiRedactor {
     // -------------------------------------------------------------------------
 
     /// Redact PII embedded in freeform text (email addresses, card numbers,
-    /// then domain patterns).
+    /// SSNs, phone numbers, then domain patterns).
     pub fn redact_text(&self, text: &str) -> String {
         static CC_RE: OnceLock<Regex> = OnceLock::new();
         static EMAIL_RE: OnceLock<Regex> = OnceLock::new();
+        static SSN_RE: OnceLock<Regex> = OnceLock::new();
+        static PHONE_RE: OnceLock<Regex> = OnceLock::new();
 
         let cc_re = CC_RE
             .get_or_init(|| Regex::new(r"\b\d(?:[ -]?\d){12,18}\b").expect("Invalid CC regex"));
@@ -71,12 +73,20 @@ impl PiiRedactor {
             Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b")
                 .expect("Invalid email regex")
         });
+        let ssn_re =
+            SSN_RE.get_or_init(|| Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("Invalid SSN regex"));
+        let phone_re = PHONE_RE.get_or_init(|| {
+            Regex::new(r"(?:\+1[ .-]?)?(?:\([2-9]\d{2}\)|[2-9]\d{2})[ .-]\d{3}[ .-]\d{4}\b")
+                .expect("Invalid phone regex")
+        });
 
         let after_cc = cc_re.replace_all(text, "****-****-****-XXXX");
         let after_email = email_re.replace_all(after_cc.as_ref(), "***");
+        let after_ssn = ssn_re.replace_all(after_email.as_ref(), "[SSN]");
+        let after_phone = phone_re.replace_all(after_ssn.as_ref(), "[PHONE]");
 
         // Apply domain-specific patterns sequentially.
-        let mut result = after_email.into_owned();
+        let mut result = after_phone.into_owned();
         for dp in &self.domain_patterns {
             let replaced = dp.regex.replace_all(&result, dp.replacement.as_str());
             if matches!(replaced, std::borrow::Cow::Owned(_)) {
@@ -343,6 +353,21 @@ mod tests {
         assert_eq!(
             r.redact_text("Card 4111-1111-1111-1111 ok"),
             "Card ****-****-****-XXXX ok"
+        );
+    }
+
+    #[test]
+    fn redact_text_masks_ssn() {
+        let r = redactor();
+        assert_eq!(r.redact_text("SSN 123-45-6789"), "SSN [SSN]");
+    }
+
+    #[test]
+    fn redact_text_masks_phone_number() {
+        let r = redactor();
+        assert_eq!(
+            r.redact_text("Call +1 (415) 555-0100 today"),
+            "Call [PHONE] today"
         );
     }
 

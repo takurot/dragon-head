@@ -2,7 +2,7 @@
 /// or the Audit Sink (Exit Criteria for PR-27 / ISSUE-17).
 use core_runtime::{
     audit::{AuditEvent, AuditLogger},
-    privacy::{DomainPattern, PiiRedactor},
+    privacy::PiiRedactor,
     sre::{AsyncPipeline, AsyncPipelineConfig, LoadProfile, SemanticNode, SemanticState},
 };
 use serde_json::json;
@@ -59,14 +59,22 @@ fn pii_redactor_masks_email_and_cc_in_text() {
 }
 
 #[test]
-fn pii_redactor_domain_pattern_masks_ssn() {
-    // US SSN format (9 digits with dashes) does not match the CC regex (13-19 digits),
-    // so it should be caught exclusively by the domain pattern.
-    let dp = DomainPattern::new("ssn", r"\b\d{3}-\d{2}-\d{4}\b", "[SSN]").unwrap();
-    let r = PiiRedactor::with_domain_patterns(vec![dp]);
+fn pii_redactor_builtin_masks_ssn() {
+    let r = PiiRedactor::new();
     let out = r.redact_text("SSN: 123-45-6789 on file");
     assert!(!out.contains("123-45-6789"), "SSN must be masked");
     assert!(out.contains("[SSN]"));
+}
+
+#[test]
+fn pii_redactor_builtin_masks_phone_number() {
+    let r = PiiRedactor::new();
+    let out = r.redact_text("Phone: (415) 555-0100");
+    assert!(
+        !out.contains("(415) 555-0100"),
+        "phone number must be masked"
+    );
+    assert!(out.contains("[PHONE]"));
 }
 
 #[test]
