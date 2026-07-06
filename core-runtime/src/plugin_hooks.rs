@@ -6,6 +6,8 @@
 /// * **State hooks** (`StatePlugin::on_state`): called after `normalize_dom`
 ///   produces a `SemanticState`, before the state is delivered externally.
 ///   Failures are *non-fatal* — logged to audit, original state is preserved.
+///   This includes Wasm ABI payload-limit failures; callers receive the last
+///   valid state while audit records the explicit plugin error.
 ///
 /// * **Policy hooks** (`PolicyPlugin::before_act`): called before an action is
 ///   executed, after the built-in `PolicyEngine` allows it.  If any plugin
@@ -371,6 +373,21 @@ mod tests {
         }
     }
 
+    struct OversizedStatePlugin;
+
+    impl StatePlugin for OversizedStatePlugin {
+        fn plugin_id(&self) -> &str {
+            "oversized-state"
+        }
+
+        fn on_state(&self, _: &str) -> Result<String, String> {
+            Err(
+                "plugin payload too large for on_state: 17000 bytes exceeds 16384 bytes ABI limit"
+                    .to_string(),
+            )
+        }
+    }
+
     struct AllowPlugin;
 
     impl PolicyPlugin for AllowPlugin {
@@ -455,6 +472,31 @@ mod tests {
             &events[1],
             AuditEvent::PluginStateTransform { success: false, .. }
         ));
+    }
+
+    #[test]
+    fn state_hooks_oversized_payload_failure_is_audited_and_nonfatal() {
+        let plugins: Vec<Box<dyn StatePlugin>> = vec![Box::new(OversizedStatePlugin)];
+        let input = r#"{"role":"document"}"#;
+        let (result, events) = run_state_hooks(input, plugins.iter().map(|p| p.as_ref()));
+
+        assert_eq!(result, input);
+        assert_eq!(events.len(), 1);
+        let AuditEvent::PluginStateTransform {
+            success,
+            error_message,
+            ..
+        } = &events[0]
+        else {
+            panic!("expected PluginStateTransform event");
+        };
+        assert!(!success);
+        assert!(
+            error_message
+                .as_deref()
+                .is_some_and(|msg| msg.contains("payload too large")),
+            "oversized payload failure must be explicit in audit: {error_message:?}"
+        );
     }
 
     #[test]

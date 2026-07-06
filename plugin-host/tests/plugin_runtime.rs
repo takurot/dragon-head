@@ -267,6 +267,41 @@ fn test_on_state_echoes_input() {
     assert_eq!(parsed["dragon"], "head");
 }
 
+#[test]
+fn test_on_state_payload_over_16k_returns_explicit_error() {
+    let (registry, signing_key, key_id) = make_registry_and_key();
+    let wasm = echo_wasm();
+    let package = build_and_sign_package(
+        vec![ExtensionPoint::OnState],
+        vec![Capability::ReadState],
+        wasm,
+        &signing_key,
+        &key_id,
+    );
+
+    let host = PluginHost::new(registry);
+    let loaded = host.load_plugin(&package).expect("plugin must load");
+    let mut runtime = loaded.create_runtime().expect("runtime must be created");
+
+    let oversized = format!(r#"{{"payload":"{}"}}"#, "x".repeat(16 * 1024));
+    let err = runtime
+        .on_state(&oversized)
+        .expect_err("oversized state payload must fail explicitly");
+
+    match err {
+        PluginError::PayloadTooLarge {
+            operation,
+            size,
+            limit,
+        } => {
+            assert_eq!(operation, "on_state");
+            assert!(size > limit, "size={size}, limit={limit}");
+            assert_eq!(limit, 16 * 1024);
+        }
+        other => panic!("expected PayloadTooLarge, got {other:?}"),
+    }
+}
+
 /// 2. Signed plugin with before_act returns policy decision JSON
 #[test]
 fn test_before_act_returns_allow_true() {
