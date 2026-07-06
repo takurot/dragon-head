@@ -9,21 +9,24 @@ We follow the "Testing Pyramid" approach with the following layers:
 ### 1.1 Unit Tests (Level 1)
 - **Scope**: Individual functions, structs, and modules.
 - **Tools**: Rust intrinsic `#[test]`, `pytest` (for Python bindings).
-- **Location**: Co-located with code in `src/` or `tests/unit/`.
+- **Location**: Rust unit tests live next to the code in each crate's `src/`;
+  integration tests live in crate-local `tests/` directories.
 - **Frequency**: Run on every file save (local), check on every commit (CI).
 - **Coverage Target**: High (>80%).
 
 ### 1.2 Integration Tests (Level 2)
 - **Scope**: Interaction between modules (e.g., SRE + CDP client).
 - **Tools**: Rust `tests/` directory.
-- **Location**: `tests/integration/`.
+- **Location**: crate-local `tests/` directories such as `core-runtime/tests/`
+  and `mcp-server/tests/`.
 - **Frequency**: Run on every PR.
 - **Mocking**: External services (CDP) may be mocked or run against a real headless browser docker container.
 
 ### 1.3 E2E Tests (Level 3)
 - **Scope**: Full system verification (Client -> Runtime -> Browser -> Website).
 - **Tools**: Custom runner, real Chromium instance.
-- **Location**: `tests/e2e/`.
+- **Location**: browser-backed integration tests under crate-local `tests/`
+  directories, plus workflow orchestration in `.github/workflows/e2e.yml`.
 - **Frequency**: Run on PR (Smoke suite), Nightly (Full suite).
 
 ## 2. CI/CD Pipeline
