@@ -109,6 +109,14 @@ pub enum PluginError {
     SignaturePayloadSerialization { message: String },
     #[error("wasm execution failed: {message}")]
     ExecutionFailed { message: String },
+    #[error(
+        "plugin payload too large for {operation}: {size} bytes exceeds {limit} bytes ABI limit"
+    )]
+    PayloadTooLarge {
+        operation: String,
+        size: usize,
+        limit: usize,
+    },
     #[error("invalid wasm output: {message}")]
     InvalidOutput { message: String },
     #[error("wasm execution timed out (fuel exhausted or epoch interrupted)")]
@@ -529,9 +537,11 @@ impl PluginRuntime {
 
             let data = memory.data_mut(&mut self.store);
 
-            if input_bytes.len() > OUTPUT_OFFSET as usize {
-                return Err(PluginError::ExecutionFailed {
-                    message: "input JSON too large for wasm memory layout".to_string(),
+            if input_bytes.len() > MAX_INPUT_SIZE {
+                return Err(PluginError::PayloadTooLarge {
+                    operation: fn_name.to_string(),
+                    size: input_bytes.len(),
+                    limit: MAX_INPUT_SIZE,
                 });
             }
             data[..input_bytes.len()].copy_from_slice(input_bytes);
@@ -595,10 +605,10 @@ impl PluginRuntime {
                 u32::from_le_bytes(data[len_slot_start..len_slot_end].try_into().unwrap()) as usize;
 
             if out_len > MAX_OUTPUT_SIZE {
-                return Err(PluginError::InvalidOutput {
-                    message: format!(
-                        "output length {out_len} exceeds MAX_OUTPUT_SIZE {MAX_OUTPUT_SIZE}"
-                    ),
+                return Err(PluginError::PayloadTooLarge {
+                    operation: format!("{fn_name} output"),
+                    size: out_len,
+                    limit: MAX_OUTPUT_SIZE,
                 });
             }
 
