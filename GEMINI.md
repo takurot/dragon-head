@@ -22,7 +22,7 @@ The project uses `just` as a command runner for common development tasks.
 | Command | Description |
 | :--- | :--- |
 | `just check` | Runs `cargo check` across the entire workspace. |
-| `just build` | Builds the project (standard `cargo build` is used). |
+| `cargo build` | Builds the workspace. There is no `just build` recipe in the current `Justfile`. |
 | `just fmt` | Formats all code using `cargo fmt`. |
 | `just lint` | Runs `clippy` with strict warnings enabled (`-D warnings`). |
 | `just test` | Executes all unit and integration tests. |
