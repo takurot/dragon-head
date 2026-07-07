@@ -365,7 +365,7 @@ specific Chromium build.
 | `ask_human` | Resolve a pending human-in-the-loop request. |
 | `run_skill` | Execute a declarative skill workflow. |
 | `get_usage_report` | Retrieve usage meters and plan tier summary. |
-| `extract` | Run Deep Lens extraction with prompt-injection `security_flags`. |
+| `extract` | Extract structured data using a Deep Lens DSL rule. |
 
 ## Developer Examples
 

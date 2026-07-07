@@ -83,9 +83,8 @@ cargo build -p mcp-server --bin dragon-head-mcp --release
 ```
 
 リリースバイナリは `.github/workflows/release.yml` がタグpush(`v*`)時に
-macOS arm64/x64、Linux x64/arm64向けにクロスビルドし、sha256チェックサム付き
-でGitHub Releasesにアップロードする(Windows向けはREADMEに記載があるが、
-release.ymlの全ジョブ詳細は未確認)。
+macOS arm64/x64、Linux x64/arm64、Windows x64 向けにビルドし、sha256
+チェックサム付きで GitHub Releases にアップロードする。
 
 ## 環境変数
 
@@ -99,7 +98,9 @@ release.ymlの全ジョブ詳細は未確認)。
 | `AUDIT_DURABILITY` | `flush` または `sync` | `flush` |
 | `AUDIT_LOG_STDOUT` | 設定されていれば(値は任意)監査ログを標準出力にも出力 | 未設定(出力なし) |
 | `CHROME_INSTALLED` | CIでChrome利用可能を示すフラグ(テストゲート用) | 未設定 |
-| `CI` | 汎用CI検出 | — |
+| `CI` | 汎用CI検出 | 未設定 |
+
+`config.toml`
 
 環境変数は常に `config.toml` の対応するキーより優先される
 (`mcp-server/src/config.rs`)。
@@ -140,7 +141,7 @@ release.ymlの全ジョブ詳細は未確認)。
   (ユーザー個人ルール `~/.claude/rules/rust/coding-style.md` 準拠)。
 - Rust固有の落とし穴は、追跡済みドキュメントでは `docs/AI_CONTEXT.md` と
   `docs/AI_TASK_GUIDE.md` の高リスク領域メモを正本として参照する。ローカルの
-  `CLAUDE.md` が存在する場合は補助指示として扱う。
+  `AGENTS.md` / `CLAUDE.md` が存在する場合は補助指示として扱う。
 
 ## ブランチ・コミット方針
 
