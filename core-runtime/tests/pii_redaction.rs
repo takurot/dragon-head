@@ -270,6 +270,38 @@ fn audit_logger_tool_call_redacts_password_key() {
 }
 
 #[test]
+fn audit_logger_tool_call_redacts_structured_common_pii_keys() {
+    let logger = AuditLogger::new();
+    logger.clear_recent_events();
+
+    logger.log(AuditEvent::ToolCall {
+        tool_name: "submit_profile".to_string(),
+        args: json!({
+            "ssn": "123456789",
+            "phoneNumber": "4155550100",
+            "dateOfBirth": "1990-01-01",
+            "billing_address": "123 Main St",
+            "zip_code": 94107,
+        }),
+        timestamp: 0,
+    });
+
+    let events = logger.recent_events();
+    let AuditEvent::ToolCall { args, .. } = &events[0] else {
+        panic!("expected ToolCall");
+    };
+    for key in [
+        "ssn",
+        "phoneNumber",
+        "dateOfBirth",
+        "billing_address",
+        "zip_code",
+    ] {
+        assert_eq!(args[key], "***", "{key} must be masked");
+    }
+}
+
+#[test]
 fn audit_logger_state_snapshot_redacts_email_in_payload() {
     let logger = AuditLogger::new();
     logger.clear_recent_events();
@@ -292,6 +324,34 @@ fn audit_logger_state_snapshot_redacts_email_in_payload() {
             .contains("alice@example.com"),
         "email must be redacted in StateSnapshot payload"
     );
+}
+
+#[test]
+fn audit_logger_state_snapshot_redacts_nested_structured_pii_keys() {
+    let logger = AuditLogger::new();
+    logger.clear_recent_events();
+
+    logger.log(AuditEvent::StateSnapshot {
+        state_hash: "abc".to_string(),
+        page_instance_id: "page-1".to_string(),
+        timestamp: 0,
+        payload: json!({
+            "contacts": [{
+                "social_security_number": "123456789",
+                "telephone": "2125550199",
+                "dob": "19900101",
+                "postal_code": "94107",
+            }],
+        }),
+    });
+
+    let events = logger.recent_events();
+    let AuditEvent::StateSnapshot { payload, .. } = &events[0] else {
+        panic!("expected StateSnapshot");
+    };
+    for key in ["social_security_number", "telephone", "dob", "postal_code"] {
+        assert_eq!(payload["contacts"][0][key], "***", "{key} must be masked");
+    }
 }
 
 #[test]

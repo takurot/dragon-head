@@ -124,16 +124,12 @@ impl PiiRedactor {
                 let mut out = serde_json::Map::with_capacity(map.len());
                 for (key, child) in map {
                     let key_lower = key.to_ascii_lowercase();
-                    let masked = if Self::is_sensitive_key(&key_lower)
+                    let masked = if Self::is_sensitive_key(key)
                         || (mask_tool_value_field && Self::is_tool_value_key(&key_lower))
                     {
                         Value::String("***".to_string())
                     } else {
-                        self.redact_json_inner(
-                            child,
-                            Some(key_lower.as_str()),
-                            mask_tool_value_field,
-                        )
+                        self.redact_json_inner(child, Some(key.as_str()), mask_tool_value_field)
                     };
                     out.insert(key.clone(), masked);
                 }
@@ -213,7 +209,7 @@ impl PiiRedactor {
                 .into_iter()
                 .map(|(k, v)| {
                     let k_lower = k.to_ascii_lowercase();
-                    let v_redacted = if Self::is_sensitive_key(&k_lower)
+                    let v_redacted = if Self::is_sensitive_key(&k)
                         || (has_sensitive_type && k_lower == "value")
                     {
                         "***".to_string()
@@ -247,8 +243,9 @@ impl PiiRedactor {
     // -------------------------------------------------------------------------
 
     pub(crate) fn is_sensitive_key(key: &str) -> bool {
+        let key_lower = key.to_ascii_lowercase();
         matches!(
-            key,
+            key_lower.as_str(),
             "password"
                 | "passwd"
                 | "email"
@@ -261,11 +258,64 @@ impl PiiRedactor {
                 | "cc"
                 | "cvv"
                 | "cvc"
-        ) || key.contains("password")
-            || key.contains("email")
-            || key.contains("token")
-            || key.contains("secret")
-            || key.contains("card")
+        ) || key_lower.contains("password")
+            || key_lower.contains("email")
+            || key_lower.contains("token")
+            || key_lower.contains("secret")
+            || key_lower.contains("card")
+            || Self::contains_structured_pii_key(key)
+    }
+
+    /// Matches common structured PII names at word boundaries.  Unlike the
+    /// legacy credential checks above, short terms such as `tel` and `zip`
+    /// must not use substring matching (`hotel` and `gzip` are not PII).
+    fn contains_structured_pii_key(key: &str) -> bool {
+        let tokens = Self::key_tokens(key);
+        tokens.iter().any(|token| {
+            matches!(
+                token.as_str(),
+                "ssn" | "phone" | "telephone" | "tel" | "dob" | "address" | "postal" | "zip"
+            )
+        }) || tokens.windows(2).any(|pair| pair == ["social", "security"])
+            || tokens
+                .windows(3)
+                .any(|triple| triple == ["date", "of", "birth"])
+    }
+
+    /// Split snake_case, kebab-case, spaced, and camelCase keys into
+    /// lower-case word tokens so structured PII matching remains boundary-safe.
+    fn key_tokens(key: &str) -> Vec<String> {
+        let chars: Vec<_> = key.chars().collect();
+        let mut tokens = Vec::new();
+        let mut current = String::new();
+        let mut previous_was_lowercase = false;
+
+        for (index, ch) in chars.iter().copied().enumerate() {
+            if !ch.is_ascii_alphanumeric() {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                previous_was_lowercase = false;
+                continue;
+            }
+
+            let next_is_lowercase = chars
+                .get(index + 1)
+                .is_some_and(|next| next.is_ascii_lowercase());
+            if ch.is_ascii_uppercase()
+                && !current.is_empty()
+                && (previous_was_lowercase || next_is_lowercase)
+            {
+                tokens.push(std::mem::take(&mut current));
+            }
+            current.push(ch.to_ascii_lowercase());
+            previous_was_lowercase = ch.is_ascii_lowercase();
+        }
+
+        if !current.is_empty() {
+            tokens.push(current);
+        }
+        tokens
     }
 
     fn is_tool_value_key(key: &str) -> bool {
@@ -423,6 +473,48 @@ mod tests {
         assert_eq!(output[1]["ok"], "y");
     }
 
+    #[test]
+    fn redact_json_masks_structured_common_pii_keys() {
+        let r = redactor();
+        let input = json!({
+            "ssn": "123456789",
+            "SSN": "111223333",
+            "SSNNumber": "444556666",
+            "socialSecurity": "987654321",
+            "phone_number": "4155550100",
+            "tel": "2125550199",
+            "dob": "19900101",
+            "DOB": "19900101",
+            "date_of_birth": "19900101",
+            "billing-address": "123 Main St",
+            "postalCode": "94107",
+            "zip": 94107,
+            "ZIP": 94107,
+            "profiles": [{ "social_security_number": "111223333" }],
+        });
+
+        let output = r.redact_json(&input);
+
+        for key in [
+            "ssn",
+            "SSN",
+            "SSNNumber",
+            "socialSecurity",
+            "phone_number",
+            "tel",
+            "dob",
+            "DOB",
+            "date_of_birth",
+            "billing-address",
+            "postalCode",
+            "zip",
+            "ZIP",
+        ] {
+            assert_eq!(output[key], "***", "{key} must be masked");
+        }
+        assert_eq!(output["profiles"][0]["social_security_number"], "***");
+    }
+
     // -- redact_json_tool_args ------------------------------------------------
 
     #[test]
@@ -526,5 +618,31 @@ mod tests {
         assert!(PiiRedactor::is_sensitive_key("api_token"));
         assert!(!PiiRedactor::is_sensitive_key("username"));
         assert!(!PiiRedactor::is_sensitive_key("role"));
+    }
+
+    #[test]
+    fn is_sensitive_key_matches_structured_pii_at_token_boundaries() {
+        for key in [
+            "socialSecurity",
+            "SSN",
+            "SSNNumber",
+            "phone_number",
+            "billing-address",
+            "postalCode",
+            "zip_code",
+            "ZIP",
+        ] {
+            assert!(
+                PiiRedactor::is_sensitive_key(key),
+                "{key} must be sensitive"
+            );
+        }
+
+        for key in ["hotel", "telemetry", "adobe", "gzip", "microphone"] {
+            assert!(
+                !PiiRedactor::is_sensitive_key(key),
+                "{key} must remain visible"
+            );
+        }
     }
 }
