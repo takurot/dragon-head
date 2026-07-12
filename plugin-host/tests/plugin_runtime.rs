@@ -495,6 +495,25 @@ fn infinite_loop_wasm() -> Vec<u8> {
     .expect("failed to build infinite_loop wasm fixture")
 }
 
+/// Wasm that attempts to grow its linear memory beyond the host's 64 MiB limit.
+fn excessive_memory_growth_wasm() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+            (memory (export "memory") 1)
+            (func (export "before_act")
+                  (param $in_ptr i32) (param $in_len i32)
+                  (param $out_ptr i32) (param $out_len_ptr i32)
+                (if (i32.eq (memory.grow (i32.const 1024)) (i32.const -1))
+                    (then
+                        ;; Access the rejected growth region so Wasmtime reports
+                        ;; the host-facing MemoryOutOfBounds trap.
+                        (i32.store8 (i32.const 67108864) (i32.const 1))))
+            )
+        )"#,
+    )
+    .expect("failed to build excessive-memory wasm fixture")
+}
+
 /// 8. connector is blocked when NetworkOut capability is missing
 #[test]
 fn test_connector_blocked_without_network_out() {
@@ -600,6 +619,30 @@ fn test_epoch_interruption_stops_infinite_loop() {
         elapsed.as_millis() < 500,
         "call took {}ms — epoch should have fired within ~50ms",
         elapsed.as_millis()
+    );
+}
+
+#[test]
+fn test_memory_growth_beyond_limit_is_rejected() {
+    let (registry, signing_key, key_id) = make_registry_and_key();
+    let package = build_and_sign_package(
+        vec![ExtensionPoint::BeforeAct],
+        vec![],
+        excessive_memory_growth_wasm(),
+        &signing_key,
+        &key_id,
+    );
+
+    let host = PluginHost::new(registry);
+    let loaded = host.load_plugin(&package).expect("plugin must load");
+    let mut runtime = loaded.create_runtime().expect("runtime must be created");
+    let err = runtime
+        .before_act(r#"{"action":"grow-memory"}"#)
+        .expect_err("memory growth beyond the host limit must fail");
+
+    assert!(
+        matches!(err, PluginError::MemoryExhausted),
+        "expected MemoryExhausted, got {err:?}"
     );
 }
 

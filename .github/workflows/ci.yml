@@ -39,6 +39,30 @@ jobs:
     # EmbarkStudios/cargo-deny-action downloads a pre-built binary.
     - uses: EmbarkStudios/cargo-deny-action@v2
 
+  plugin-sandbox:
+    name: Plugin sandbox (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64-linux
+            uname: x86_64
+          - os: macos-15
+            arch: aarch64-macos
+            uname: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
+    - name: Verify runner architecture
+      run: test "$(uname -m)" = "${{ matrix.uname }}"
+    - name: Run plugin sandbox regressions
+      run: |
+        cargo test -p plugin-host --test security_advisory_policy
+        cargo test -p plugin-host --test plugin_signature_verification
+        cargo test -p plugin-host --test plugin_runtime
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:

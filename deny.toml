@@ -16,31 +16,8 @@ ignore = [
     { id = "RUSTSEC-2026-0099", reason = "transitive via headless_chrome; no upstream fix" },
     { id = "RUSTSEC-2026-0049", reason = "transitive via headless_chrome; no upstream fix" },
 
-    # ── wasmtime (transitive via plugin-host) ────────────────────────────
-    # Cannot update independently of the plugin sandbox API. Tracked in
-    # docs/commercial_issues.md — revisit on next wasmtime major release.
-    { id = "RUSTSEC-2026-0086", reason = "wasmtime via plugin-host; aarch64 Winch only, not our deploy target" },
-    { id = "RUSTSEC-2026-0096", reason = "wasmtime via plugin-host; aarch64 Cranelift heap OOB" },
-    { id = "RUSTSEC-2026-0020", reason = "wasmtime via plugin-host; WASI resource exhaustion" },
-    { id = "RUSTSEC-2026-0092", reason = "wasmtime via plugin-host; UTF-16 transcoding panic" },
-    { id = "RUSTSEC-2026-0021", reason = "wasmtime via plugin-host; wasi:http/types.fields panic" },
-    { id = "RUSTSEC-2026-0114", reason = "wasmtime via plugin-host; table.grow address-space panic" },
-    { id = "RUSTSEC-2026-0093", reason = "wasmtime via plugin-host; UTF-16 latin1 transcoding heap OOB" },
-    { id = "RUSTSEC-2026-0087", reason = "wasmtime via plugin-host; f64x2.splat segfault on x86-64 Cranelift" },
-    { id = "RUSTSEC-2026-0088", reason = "wasmtime via plugin-host; pooling allocator data leakage" },
-    { id = "RUSTSEC-2026-0089", reason = "wasmtime via plugin-host; table.fill panic with Winch" },
-    { id = "RUSTSEC-2025-0046", reason = "wasmtime via plugin-host; fd_renumber WASIp1 panic" },
-    { id = "RUSTSEC-2026-0006", reason = "wasmtime via plugin-host; f64.copysign segfault on x86-64" },
-    { id = "RUSTSEC-2026-0094", reason = "wasmtime via plugin-host; table.grow masked return (Winch)" },
-    { id = "RUSTSEC-2026-0085", reason = "wasmtime via plugin-host; flags component value panic" },
-    { id = "RUSTSEC-2026-0095", reason = "wasmtime via plugin-host; Winch sandbox-escaping memory access" },
-    { id = "RUSTSEC-2025-0118", reason = "wasmtime via plugin-host; shared linear memory unsound API" },
-    { id = "RUSTSEC-2026-0091", reason = "wasmtime via plugin-host; component model string OOB write" },
-
     # ── unmaintained transitive deps ─────────────────────────────────────
     { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained; transitive via wasmtime, no drop-in" },
-    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; transitive via wasmtime, no drop-in" },
-    { id = "RUSTSEC-2026-0097", reason = "rand unsound with custom global logger; we do not set one" },
 ]
 
 # ── Licenses ─────────────────────────────────────────────────────────────────
