@@ -249,3 +249,227 @@ fn test_act_requires_immediate_verify_predecessor() {
         SkillEngineError::ActStepMissingVerifyPredecessor { .. }
     ));
 }
+
+fn verify_step(id: &str, target: &str, control: StepControl) -> SkillStep {
+    SkillStep::Verify(VerifyStep {
+        id: Some(id.to_string()),
+        target: target.to_string(),
+        expected: "visible".to_string(),
+        control,
+    })
+}
+
+fn act_step(id: &str, target: &str, control: StepControl) -> SkillStep {
+    SkillStep::Act(ActStep {
+        id: Some(id.to_string()),
+        action: "click".to_string(),
+        target: target.to_string(),
+        value: None,
+        control,
+    })
+}
+
+fn locate_step(id: &str, control: StepControl) -> SkillStep {
+    SkillStep::Locate(LocateStep {
+        id: Some(id.to_string()),
+        query: "target".to_string(),
+        control,
+    })
+}
+
+fn assert_invalid_act_flow(steps: Vec<SkillStep>) {
+    let skill = SkillDefinition {
+        schema_version: 1,
+        name: "invalid-act-flow".to_string(),
+        steps,
+    };
+    let mut runtime = MockRuntime::default();
+
+    let error = SkillEngine::new().run(&skill, &mut runtime).unwrap_err();
+    assert!(matches!(
+        error,
+        SkillEngineError::ActStepMissingVerifyPredecessor { .. }
+    ));
+}
+
+#[test]
+fn test_branch_cannot_skip_verify_before_act() {
+    assert_invalid_act_flow(vec![
+        locate_step(
+            "start",
+            StepControl {
+                on_success: Some("do_act".to_string()),
+                ..StepControl::default()
+            },
+        ),
+        verify_step("check", "target", StepControl::default()),
+        act_step("do_act", "target", StepControl::default()),
+    ]);
+}
+
+#[test]
+fn test_verify_failure_cannot_authorize_act() {
+    assert_invalid_act_flow(vec![
+        verify_step(
+            "check",
+            "target",
+            StepControl {
+                on_failure: Some("do_act".to_string()),
+                ..StepControl::default()
+            },
+        ),
+        act_step("do_act", "target", StepControl::default()),
+    ]);
+}
+
+#[test]
+fn test_verify_must_match_act_target() {
+    assert_invalid_act_flow(vec![
+        verify_step("check", "first-target", StepControl::default()),
+        act_step("do_act", "second-target", StepControl::default()),
+    ]);
+}
+
+#[test]
+fn test_act_cannot_retry_without_reverification() {
+    assert_invalid_act_flow(vec![
+        verify_step("check", "target", StepControl::default()),
+        act_step(
+            "do_act",
+            "target",
+            StepControl {
+                max_retries: 1,
+                ..StepControl::default()
+            },
+        ),
+    ]);
+}
+
+#[test]
+fn test_act_cannot_loop_without_reverification() {
+    assert_invalid_act_flow(vec![
+        verify_step("check", "target", StepControl::default()),
+        act_step(
+            "do_act",
+            "target",
+            StepControl {
+                on_success: Some("do_act".to_string()),
+                ..StepControl::default()
+            },
+        ),
+    ]);
+}
+
+#[test]
+fn test_unsafe_backward_edge_into_act_is_rejected() {
+    assert_invalid_act_flow(vec![
+        verify_step("check", "target", StepControl::default()),
+        act_step("do_act", "target", StepControl::default()),
+        locate_step(
+            "loop",
+            StepControl {
+                on_success: Some("do_act".to_string()),
+                ..StepControl::default()
+            },
+        ),
+    ]);
+}
+
+#[test]
+fn test_branched_verify_can_authorize_matching_act() -> Result<(), SkillEngineError> {
+    let skill = SkillDefinition {
+        schema_version: 1,
+        name: "safe-verify-branch".to_string(),
+        steps: vec![
+            verify_step(
+                "check",
+                "target",
+                StepControl {
+                    on_success: Some("do_act".to_string()),
+                    ..StepControl::default()
+                },
+            ),
+            SkillStep::Handoff(HandoffStep {
+                id: Some("skipped".to_string()),
+                reason: "not reached".to_string(),
+                assignee: None,
+                control: StepControl::default(),
+            }),
+            act_step("do_act", "target", StepControl::default()),
+        ],
+    };
+    let mut runtime = MockRuntime::default();
+
+    let report = SkillEngine::new().run(&skill, &mut runtime)?;
+    let operations: Vec<&str> = report
+        .trace
+        .iter()
+        .map(|entry| entry.operation.as_str())
+        .collect();
+    assert_eq!(
+        operations,
+        vec!["verify", "policy_check", "act", "post_check"]
+    );
+    Ok(())
+}
+
+#[test]
+fn test_safe_cycle_reverifies_before_each_act() -> Result<(), SkillEngineError> {
+    let skill = SkillDefinition {
+        schema_version: 1,
+        name: "safe-reverify-cycle".to_string(),
+        steps: vec![
+            verify_step(
+                "check",
+                "target",
+                StepControl {
+                    on_success: Some("do_act".to_string()),
+                    on_failure: Some("done".to_string()),
+                    ..StepControl::default()
+                },
+            ),
+            SkillStep::Handoff(HandoffStep {
+                id: Some("done".to_string()),
+                reason: "cycle complete".to_string(),
+                assignee: None,
+                control: StepControl::default(),
+            }),
+            act_step(
+                "do_act",
+                "target",
+                StepControl {
+                    on_success: Some("check".to_string()),
+                    ..StepControl::default()
+                },
+            ),
+        ],
+    };
+    let mut runtime = MockRuntime::default().with_script(
+        "verify",
+        vec![
+            OperationOutcome::Success,
+            OperationOutcome::Failure {
+                reason: "done".to_string(),
+            },
+        ],
+    );
+
+    let report = SkillEngine::new().run(&skill, &mut runtime)?;
+    let operations: Vec<&str> = report
+        .trace
+        .iter()
+        .map(|entry| entry.operation.as_str())
+        .collect();
+    assert_eq!(
+        operations,
+        vec![
+            "verify",
+            "policy_check",
+            "act",
+            "post_check",
+            "verify",
+            "handoff"
+        ]
+    );
+    Ok(())
+}

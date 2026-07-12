@@ -469,9 +469,72 @@ pub fn validate_skill_definition(skill: &SkillDefinition) -> Result<(), SkillEng
         }
     }
 
-    for idx in 0..skill.steps.len() {
-        if let SkillStep::Act(act) = &skill.steps[idx]
-            && (idx == 0 || !matches!(skill.steps[idx - 1], SkillStep::Verify(_)))
+    validate_act_predecessors(skill, &index)?;
+
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TransitionOutcome {
+    Success,
+    Failure,
+    Retry,
+}
+
+fn validate_act_predecessors(
+    skill: &SkillDefinition,
+    index: &HashMap<String, usize>,
+) -> Result<(), SkillEngineError> {
+    let mut has_incoming_edge = vec![false; skill.steps.len()];
+
+    validate_act_transition(skill, None, TransitionOutcome::Success, 0)?;
+    has_incoming_edge[0] = true;
+
+    for (source_idx, step) in skill.steps.iter().enumerate() {
+        let control = step.control();
+
+        if control.max_retries > 0 {
+            validate_act_transition(
+                skill,
+                Some(source_idx),
+                TransitionOutcome::Retry,
+                source_idx,
+            )?;
+            has_incoming_edge[source_idx] = true;
+        }
+
+        if !matches!(step, SkillStep::Handoff(_)) {
+            let success_target = control
+                .on_success
+                .as_ref()
+                .map(|target| index[target])
+                .or_else(|| (source_idx + 1 < skill.steps.len()).then_some(source_idx + 1));
+            if let Some(target_idx) = success_target {
+                validate_act_transition(
+                    skill,
+                    Some(source_idx),
+                    TransitionOutcome::Success,
+                    target_idx,
+                )?;
+                has_incoming_edge[target_idx] = true;
+            }
+        }
+
+        if let Some(target) = control.on_failure.as_ref() {
+            let target_idx = index[target];
+            validate_act_transition(
+                skill,
+                Some(source_idx),
+                TransitionOutcome::Failure,
+                target_idx,
+            )?;
+            has_incoming_edge[target_idx] = true;
+        }
+    }
+
+    for (idx, step) in skill.steps.iter().enumerate() {
+        if let SkillStep::Act(act) = step
+            && !has_incoming_edge[idx]
         {
             return Err(SkillEngineError::ActStepMissingVerifyPredecessor {
                 step_id: act.id.clone(),
@@ -480,6 +543,33 @@ pub fn validate_skill_definition(skill: &SkillDefinition) -> Result<(), SkillEng
     }
 
     Ok(())
+}
+
+fn validate_act_transition(
+    skill: &SkillDefinition,
+    source_idx: Option<usize>,
+    outcome: TransitionOutcome,
+    target_idx: usize,
+) -> Result<(), SkillEngineError> {
+    let SkillStep::Act(act) = &skill.steps[target_idx] else {
+        return Ok(());
+    };
+
+    let authorized = source_idx
+        .filter(|_| outcome == TransitionOutcome::Success)
+        .and_then(|idx| match &skill.steps[idx] {
+            SkillStep::Verify(verify) => Some(verify.target == act.target),
+            _ => None,
+        })
+        .unwrap_or(false);
+
+    if authorized {
+        Ok(())
+    } else {
+        Err(SkillEngineError::ActStepMissingVerifyPredecessor {
+            step_id: act.id.clone(),
+        })
+    }
 }
 
 pub fn skill_definition_schema() -> Value {
