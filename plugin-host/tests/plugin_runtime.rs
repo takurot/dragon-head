@@ -504,7 +504,10 @@ fn excessive_memory_growth_wasm() -> Vec<u8> {
                   (param $in_ptr i32) (param $in_len i32)
                   (param $out_ptr i32) (param $out_len_ptr i32)
                 (if (i32.eq (memory.grow (i32.const 1024)) (i32.const -1))
-                    (then unreachable))
+                    (then
+                        ;; Access the rejected growth region so Wasmtime reports
+                        ;; the host-facing MemoryOutOfBounds trap.
+                        (i32.store8 (i32.const 67108864) (i32.const 1))))
             )
         )"#,
     )
