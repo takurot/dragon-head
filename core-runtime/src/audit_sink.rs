@@ -5,7 +5,7 @@
 /// * `RollingFileSink` — writes newline-delimited JSON (NDJSON) audit events
 ///   to rotating files; rotates when a file reaches `max_bytes_per_file`.
 ///
-/// * `WebhookSink` — POSTs each event as JSON to an HTTP (`http://`) endpoint
+/// * `WebhookSink` — POSTs each event as JSON to an HTTPS endpoint
 ///   for SIEM integration; retries transiently failing requests with linear
 ///   back-off on a background thread (non-blocking to the audit worker).
 use crate::audit::AuditEvent;
@@ -32,8 +32,10 @@ pub enum AuditSinkError {
     Serialization(#[from] serde_json::Error),
     #[error("Webhook POST failed after {attempts} attempt(s): {last_error}")]
     WebhookFailed { attempts: u32, last_error: String },
-    #[error("Invalid sink URL '{0}': only http:// is supported")]
+    #[error("Invalid sink URL '{0}': HTTPS is required except for literal loopback HTTP")]
     InvalidUrl(String),
+    #[error("Failed to configure webhook HTTP client: {0}")]
+    HttpClient(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -197,8 +199,7 @@ impl AuditSink for RollingFileSink {
 // WebhookSink
 // ---------------------------------------------------------------------------
 
-/// POSTs audit events as JSON to an HTTP (plaintext) endpoint for SIEM
-/// integration.
+/// POSTs audit events as JSON to an HTTPS endpoint for SIEM integration.
 ///
 /// `write()` enqueues the serialized event into a bounded internal channel and
 /// returns immediately, so it never blocks the audit worker thread.  A
@@ -207,8 +208,8 @@ impl AuditSink for RollingFileSink {
 /// for an extended period) excess events are dropped with an `eprintln!`
 /// warning — SIEM delivery is best-effort.
 ///
-/// **Note**: only `http://` URLs are supported.  Passing an `https://` URL
-/// returns an [`AuditSinkError::InvalidUrl`] at construction time.
+/// Plaintext HTTP is accepted only for literal loopback IP addresses, which
+/// supports local development without exposing audit data on the network.
 #[derive(Debug)]
 pub struct WebhookSink {
     sender: crossbeam_channel::Sender<String>,
@@ -217,7 +218,7 @@ pub struct WebhookSink {
 impl WebhookSink {
     /// Create a new webhook sink and spawn its background sender thread.
     ///
-    /// * `url` — target HTTP endpoint (`http://` scheme only).
+    /// * `url` — HTTPS endpoint, or a literal loopback HTTP endpoint.
     /// * `max_retries` — retry attempts after the first failure (0 = no retry).
     /// * `retry_delay` — pause between retries.
     /// * `queue_capacity` — max events queued while SIEM is unavailable; older
@@ -228,40 +229,41 @@ impl WebhookSink {
         retry_delay: Duration,
         queue_capacity: usize,
     ) -> Result<Self, AuditSinkError> {
-        let url = url.into();
-        if !url.starts_with("http://") {
-            return Err(AuditSinkError::InvalidUrl(url));
-        }
+        let url = validate_webhook_url(url.into())?;
+        let disable_proxy = url.scheme() == "http";
 
         let (sender, receiver) = bounded::<String>(queue_capacity.max(1));
-        let url_for_thread = url;
+        let (init_sender, init_receiver) = bounded(1);
+        let url_for_thread = url.to_string();
 
         thread::spawn(move || {
-            while let Ok(body) = receiver.recv() {
-                let mut last_error = String::new();
-                for attempt in 0..=max_retries {
-                    match post_once(&url_for_thread, &body) {
-                        Ok(()) => {
-                            last_error.clear();
-                            break;
-                        }
-                        Err(e) => {
-                            last_error = e;
-                            if attempt < max_retries {
-                                thread::sleep(retry_delay);
-                            }
-                        }
-                    }
+            let client = match build_webhook_client(disable_proxy) {
+                Ok(client) => {
+                    let _ = init_sender.send(Ok(()));
+                    client
                 }
-                if !last_error.is_empty() {
+                Err(error) => {
+                    let _ = init_sender.send(Err(error));
+                    return;
+                }
+            };
+            while let Ok(body) = receiver.recv() {
+                if let Err((attempts, last_error)) =
+                    retry_webhook_post(max_retries, retry_delay, || {
+                        post_once(&client, &url_for_thread, &body)
+                    })
+                {
                     eprintln!(
                         "[AUDIT][ERROR] WebhookSink failed after {} attempt(s): {}",
-                        max_retries + 1,
-                        last_error
+                        attempts, last_error
                     );
                 }
             }
         });
+
+        init_receiver.recv().map_err(|_| {
+            AuditSinkError::HttpClient("webhook worker exited during initialization".to_string())
+        })??;
 
         Ok(Self { sender })
     }
@@ -292,52 +294,85 @@ impl AuditSink for WebhookSink {
     }
 }
 
-fn post_once(url: &str, body: &str) -> Result<(), String> {
-    use std::io::Read;
-    use std::net::TcpStream;
+fn validate_webhook_url(url: String) -> Result<url::Url, AuditSinkError> {
+    use url::Host;
 
-    let without_scheme = url.trim_start_matches("http://");
-    let (host_port, path) = match without_scheme.find('/') {
-        Some(idx) => (&without_scheme[..idx], &without_scheme[idx..]),
-        None => (without_scheme, "/"),
-    };
-
-    let mut stream =
-        TcpStream::connect(host_port).map_err(|e| format!("connect to {host_port}: {e}"))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-
-    let request = format!(
-        "POST {path} HTTP/1.0\r\n\
-         Host: {host_port}\r\n\
-         Content-Type: application/json\r\n\
-         Content-Length: {len}\r\n\
-         Connection: close\r\n\
-         \r\n\
-         {body}",
-        len = body.len()
-    );
-
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|e| format!("write request: {e}"))?;
-
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .map_err(|e| format!("read response: {e}"))?;
-
-    let status_line = response.lines().next().unwrap_or("");
-    let status: u32 = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    if (200..300).contains(&status) {
-        Ok(())
-    } else {
-        Err(format!("HTTP {status}: {status_line}"))
+    let parsed = url::Url::parse(&url).map_err(|_| AuditSinkError::InvalidUrl(url.clone()))?;
+    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
+        return Err(AuditSinkError::InvalidUrl(url));
     }
+
+    let allowed = match (parsed.scheme(), parsed.host()) {
+        ("https", Some(_)) => true,
+        ("http", Some(Host::Ipv4(address))) => address.is_loopback(),
+        ("http", Some(Host::Ipv6(address))) => address.is_loopback(),
+        _ => false,
+    };
+    if !allowed {
+        return Err(AuditSinkError::InvalidUrl(url));
+    }
+    Ok(parsed)
+}
+
+fn build_webhook_client(disable_proxy: bool) -> Result<reqwest::blocking::Client, AuditSinkError> {
+    let mut builder = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5));
+    if disable_proxy {
+        builder = builder.no_proxy();
+    }
+    builder
+        .build()
+        .map_err(|error| AuditSinkError::HttpClient(error.without_url().to_string()))
+}
+
+#[derive(Debug)]
+struct WebhookPostError {
+    message: String,
+    retryable: bool,
+}
+
+fn retry_webhook_post(
+    max_retries: u32,
+    retry_delay: Duration,
+    mut post: impl FnMut() -> Result<(), WebhookPostError>,
+) -> Result<u32, (u32, String)> {
+    for attempt in 0..=max_retries {
+        match post() {
+            Ok(()) => return Ok(attempt + 1),
+            Err(error) if attempt < max_retries && error.retryable => {
+                thread::sleep(retry_delay);
+            }
+            Err(error) => return Err((attempt + 1, error.message)),
+        }
+    }
+    unreachable!("the inclusive retry loop always executes at least once")
+}
+
+fn post_once(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    body: &str,
+) -> Result<(), WebhookPostError> {
+    let response = client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.to_owned())
+        .send()
+        .map_err(|error| WebhookPostError {
+            message: error.without_url().to_string(),
+            retryable: true,
+        })?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    Err(WebhookPostError {
+        message: format!("HTTP {status}"),
+        retryable: matches!(status.as_u16(), 408 | 425 | 429) || status.is_server_error(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -423,8 +458,15 @@ impl<S: AuditSink> AuditSink for std::sync::Arc<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rcgen::{generate_simple_self_signed, CertifiedKey};
+    use rustls::{ServerConfig, ServerConnection, StreamOwned};
     use serde_json::json;
-    use std::fs;
+    use std::{
+        fs,
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{mpsc, Arc},
+    };
     use tempfile::tempdir;
 
     fn tool_call_event(n: u32) -> AuditEvent {
@@ -433,6 +475,68 @@ mod tests {
             args: json!({ "n": n }),
             timestamp: n as u64,
         }
+    }
+
+    fn spawn_tls_server() -> (
+        u16,
+        reqwest::Certificate,
+        mpsc::Receiver<String>,
+        thread::JoinHandle<()>,
+    ) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let CertifiedKey { cert, key_pair } =
+            generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let trusted_cert = reqwest::Certificate::from_der(cert.der().as_ref()).unwrap();
+        let private_key = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(key_pair.serialize_der()),
+        );
+        let config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert.der().clone()], private_key)
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (request_tx, request_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let connection = ServerConnection::new(Arc::new(config)).unwrap();
+            let mut stream = StreamOwned::new(connection, stream);
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let Ok(read) = stream.read(&mut buffer) else {
+                    return;
+                };
+                if read == 0 {
+                    return;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.split_once(':').and_then(|(name, value)| {
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= header_end + 4 + content_length {
+                        break;
+                    }
+                }
+            }
+            let _ = request_tx.send(String::from_utf8(request).unwrap());
+            let _ = stream.write_all(
+                b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.flush();
+        });
+        (port, trusted_cert, request_rx, handle)
     }
 
     // -- RollingFileSink ------------------------------------------------------
@@ -621,13 +725,58 @@ mod tests {
     // -- WebhookSink ----------------------------------------------------------
 
     #[test]
-    fn webhook_sink_rejects_https_url_at_construction() {
-        let err =
-            WebhookSink::new("https://siem.example.com/events", 1, Duration::ZERO, 8).unwrap_err();
-        assert!(
-            matches!(err, AuditSinkError::InvalidUrl(_)),
-            "https:// must be rejected; got: {err}"
-        );
+    fn webhook_sink_accepts_https_url_at_construction() {
+        let sink = WebhookSink::new("https://siem.example.com/events", 1, Duration::ZERO, 8);
+        assert!(sink.is_ok(), "https:// must be accepted: {sink:?}");
+    }
+
+    #[test]
+    fn webhook_sink_can_be_constructed_inside_tokio_runtime() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
+        runtime.block_on(async {
+            WebhookSink::new("https://siem.example.com/events", 0, Duration::ZERO, 8).unwrap();
+        });
+    }
+
+    #[test]
+    fn webhook_sink_rejects_non_loopback_plain_http() {
+        for url in [
+            "http://192.0.2.1/events",
+            "http://example.com/events",
+            "http://[2001:db8::1]/events",
+            "http://localhost/events",
+        ] {
+            let err = WebhookSink::new(url, 0, Duration::ZERO, 8).unwrap_err();
+            assert!(
+                matches!(err, AuditSinkError::InvalidUrl(_)),
+                "non-loopback plaintext URL must be rejected: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn webhook_sink_accepts_literal_loopback_plain_http() {
+        for url in ["http://127.0.0.1:1/events", "http://[::1]:1/events"] {
+            let sink = WebhookSink::new(url, 0, Duration::ZERO, 8);
+            assert!(sink.is_ok(), "literal loopback URL must be accepted: {url}");
+        }
+    }
+
+    #[test]
+    fn webhook_sink_rejects_unsafe_url_components_and_schemes() {
+        for url in [
+            "https://user:secret@siem.example.com/events",
+            "https://siem.example.com/events#fragment",
+            "ftp://siem.example.com/events",
+            "https://",
+        ] {
+            let err = WebhookSink::new(url, 0, Duration::ZERO, 8).unwrap_err();
+            assert!(
+                matches!(err, AuditSinkError::InvalidUrl(_)),
+                "unsafe URL must be rejected: {url}"
+            );
+        }
     }
 
     #[test]
@@ -643,5 +792,112 @@ mod tests {
     fn webhook_sink_rejects_bare_url_without_scheme() {
         let err = WebhookSink::new("siem.example.com/events", 0, Duration::ZERO, 8).unwrap_err();
         assert!(matches!(err, AuditSinkError::InvalidUrl(_)));
+    }
+
+    #[test]
+    fn webhook_https_posts_json_with_a_trusted_certificate() {
+        let (port, trusted_cert, request_rx, handle) = spawn_tls_server();
+        let client = reqwest::blocking::Client::builder()
+            .add_root_certificate(trusted_cert)
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let body = serde_json::to_string(&tool_call_event(7)).unwrap();
+
+        post_once(&client, &format!("https://localhost:{port}/events"), &body).unwrap();
+
+        let request = request_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(request.starts_with("POST /events HTTP/1.1\r\n"));
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("content-type: application/json"));
+        assert!(request.ends_with(&body));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn webhook_https_rejects_untrusted_certificate() {
+        let (port, _trusted_cert, _request_rx, handle) = spawn_tls_server();
+        let client = build_webhook_client(true).unwrap();
+
+        let error =
+            post_once(&client, &format!("https://localhost:{port}/events"), "{}").unwrap_err();
+
+        assert!(error.retryable);
+        assert!(!error.message.contains("localhost"));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn webhook_https_rejects_hostname_mismatch() {
+        let (port, trusted_cert, _request_rx, handle) = spawn_tls_server();
+        let client = reqwest::blocking::Client::builder()
+            .add_root_certificate(trusted_cert)
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+
+        let error =
+            post_once(&client, &format!("https://127.0.0.1:{port}/events"), "{}").unwrap_err();
+
+        assert!(error.retryable);
+        assert!(!error.message.contains("127.0.0.1"));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn webhook_post_does_not_follow_redirects() {
+        let redirect_target = TcpListener::bind("127.0.0.1:0").unwrap();
+        redirect_target.set_nonblocking(true).unwrap();
+        let target_port = redirect_target.local_addr().unwrap().port();
+        let redirect_server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let redirect_port = redirect_server.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = redirect_server.accept().unwrap();
+            let mut buffer = [0_u8; 4096];
+            let _ = stream.read(&mut buffer).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{target_port}/leak\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+        let client = build_webhook_client(true).unwrap();
+
+        let error = post_once(
+            &client,
+            &format!("http://127.0.0.1:{redirect_port}/events"),
+            "{\"secret\":true}",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.message, "HTTP 307 Temporary Redirect");
+        assert!(!error.retryable);
+        handle.join().unwrap();
+        assert!(
+            matches!(redirect_target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+            "redirect target must not receive the audit body"
+        );
+    }
+
+    #[test]
+    fn webhook_non_retryable_status_reports_one_attempt() {
+        let mut calls = 0;
+
+        let error = retry_webhook_post(3, Duration::ZERO, || {
+            calls += 1;
+            Err(WebhookPostError {
+                message: "HTTP 400 Bad Request".to_string(),
+                retryable: false,
+            })
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 1);
+        assert_eq!(error, (1, "HTTP 400 Bad Request".to_string()));
     }
 }
