@@ -230,12 +230,23 @@ impl WebhookSink {
         queue_capacity: usize,
     ) -> Result<Self, AuditSinkError> {
         let url = validate_webhook_url(url.into())?;
-        let client = build_webhook_client(url.scheme() == "http")?;
+        let disable_proxy = url.scheme() == "http";
 
         let (sender, receiver) = bounded::<String>(queue_capacity.max(1));
+        let (init_sender, init_receiver) = bounded(1);
         let url_for_thread = url.to_string();
 
         thread::spawn(move || {
+            let client = match build_webhook_client(disable_proxy) {
+                Ok(client) => {
+                    let _ = init_sender.send(Ok(()));
+                    client
+                }
+                Err(error) => {
+                    let _ = init_sender.send(Err(error));
+                    return;
+                }
+            };
             while let Ok(body) = receiver.recv() {
                 if let Err((attempts, last_error)) =
                     retry_webhook_post(max_retries, retry_delay, || {
@@ -249,6 +260,10 @@ impl WebhookSink {
                 }
             }
         });
+
+        init_receiver.recv().map_err(|_| {
+            AuditSinkError::HttpClient("webhook worker exited during initialization".to_string())
+        })??;
 
         Ok(Self { sender })
     }
@@ -713,6 +728,15 @@ mod tests {
     fn webhook_sink_accepts_https_url_at_construction() {
         let sink = WebhookSink::new("https://siem.example.com/events", 1, Duration::ZERO, 8);
         assert!(sink.is_ok(), "https:// must be accepted: {sink:?}");
+    }
+
+    #[test]
+    fn webhook_sink_can_be_constructed_inside_tokio_runtime() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
+        runtime.block_on(async {
+            WebhookSink::new("https://siem.example.com/events", 0, Duration::ZERO, 8).unwrap();
+        });
     }
 
     #[test]
