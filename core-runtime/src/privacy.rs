@@ -188,7 +188,7 @@ impl PiiRedactor {
         }
     }
 
-    pub(crate) fn redact_node(&self, node: SemanticNode) -> SemanticNode {
+    fn redact_node(&self, node: SemanticNode) -> SemanticNode {
         let label = node.label.map(|l| {
             if Self::is_sensitive_role(&node.role) {
                 "***".to_string()

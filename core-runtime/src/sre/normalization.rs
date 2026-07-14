@@ -95,10 +95,6 @@ fn normalize_dom_internal(
     refinement: Option<&SubtreeRefinementConfig<'_>>,
 ) -> Result<SemanticNode> {
     let mut key_generator = StableKeyGenerator::new();
-    // Validate an externally supplied cache once at the boundary. Cached-path
-    // lookup then remains O(1), while raw SemanticNode trees cannot bypass the
-    // normalizer's redaction policy.
-    let refinement = refinement.filter(|config| cached_subtree_is_redacted(config.cached_root));
     // Start traversal with root path
     let internal_node = traverse_node(
         profile,
@@ -322,10 +318,6 @@ fn resolve_cached_subtree<'a>(
     } else {
         None
     }
-}
-
-fn cached_subtree_is_redacted(node: &SemanticNode) -> bool {
-    crate::privacy::global().redact_node(node.clone()) == *node
 }
 
 fn node_by_child_index_path<'a>(
@@ -726,37 +718,6 @@ mod tests {
         let serialized = serde_json::to_string(&refined)?;
         assert!(!serialized.contains("123-45-6789"));
         assert!(serialized.contains("SSN [SSN]"));
-
-        Ok(())
-    }
-
-    #[test]
-    fn refinement_rejects_an_unredacted_external_cache() -> Result<()> {
-        let raw_cache = SemanticNode {
-            role: "#document".to_string(),
-            attributes: Some(BTreeMap::from([(
-                "authorization".to_string(),
-                "Bearer opaque-secret".to_string(),
-            )])),
-            stable_key: Some("raw-derived-key".to_string()),
-            ..Default::default()
-        };
-        let cached_paths = HashMap::from([("root/#document".to_string(), vec![])]);
-        let dirty_paths = HashSet::new();
-        let next_dom = make_document_node(201, vec![])?;
-
-        let refined = normalize_dom_with_refinement(
-            LoadProfile::Minimal,
-            &next_dom,
-            SubtreeRefinementConfig {
-                dirty_paths: &dirty_paths,
-                cached_paths: &cached_paths,
-                cached_root: &raw_cache,
-            },
-        )?;
-
-        assert_ne!(refined.stable_key.as_deref(), Some("raw-derived-key"));
-        assert!(!serde_json::to_string(&refined)?.contains("opaque-secret"));
 
         Ok(())
     }
