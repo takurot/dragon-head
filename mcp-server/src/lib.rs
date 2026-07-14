@@ -29,7 +29,7 @@ use skills_engine::{
 };
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -48,6 +48,12 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("invalid arguments for tool `{tool}`")]
+struct InvalidToolArguments {
+    tool: String,
+}
+
 fn is_known_tool(name: &str) -> bool {
     matches!(
         name,
@@ -60,6 +66,41 @@ fn is_known_tool(name: &str) -> bool {
             | "get_usage_report"
             | "extract"
     )
+}
+
+fn validate_tool_arguments(name: &str, arguments: &Value) -> Result<()> {
+    static VALIDATORS: OnceLock<HashMap<&'static str, jsonschema::Validator>> = OnceLock::new();
+    let validators = VALIDATORS.get_or_init(|| {
+        [
+            ("get_state", get_state_input_schema()),
+            ("act", act_input_schema()),
+            ("verify", verify_input_schema()),
+            ("get_visual", get_visual_input_schema()),
+            ("ask_human", ask_human_input_schema()),
+            ("run_skill", run_skill_input_schema()),
+            ("get_usage_report", get_usage_report_input_schema()),
+            ("extract", extract_input_schema()),
+        ]
+        .into_iter()
+        .map(|(tool, schema)| {
+            let validator = jsonschema::validator_for(&schema)
+                .unwrap_or_else(|error| panic!("invalid input schema for {tool}: {error}"));
+            (tool, validator)
+        })
+        .collect()
+    });
+
+    let Some(validator) = validators.get(name) else {
+        anyhow::bail!("unknown MCP tool: {name}");
+    };
+    if validator.is_valid(arguments) {
+        Ok(())
+    } else {
+        Err(InvalidToolArguments {
+            tool: name.to_string(),
+        }
+        .into())
+    }
 }
 
 pub trait McpBackend {
@@ -174,6 +215,11 @@ impl<B: McpBackend> McpServer<B> {
     }
 
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
+        if !is_known_tool(name) {
+            anyhow::bail!("unknown MCP tool: {name}");
+        }
+        validate_tool_arguments(name, &arguments)?;
+
         if name == "get_usage_report" {
             return self.get_usage_report_payload();
         }
@@ -290,7 +336,13 @@ impl<B: McpBackend> McpServer<B> {
                                     }]
                                 })
                             })
-                            .map_err(|err| (-32000, err.to_string()))
+                            .map_err(|err| {
+                                if err.downcast_ref::<InvalidToolArguments>().is_some() {
+                                    (-32602, err.to_string())
+                                } else {
+                                    (-32000, err.to_string())
+                                }
+                            })
                     }
                     Some(unknown) => Err((-32601, format!("unknown tool: {unknown}"))),
                     None => Err((
@@ -331,7 +383,8 @@ impl<B: McpBackend> McpServer<B> {
     fn check_plan_gate(&self, name: &str, arguments: &Value) -> Option<Value> {
         match name {
             "get_state" => {
-                let args = parse_get_state_arguments(arguments);
+                let args = parse_get_state_arguments(arguments)
+                    .expect("tool arguments were validated before plan gating");
                 if args.delivery == StateDelivery::Delta {
                     return self
                         .ensure_plan_feature(PlanFeature::SemanticDelta)
@@ -398,7 +451,8 @@ impl<B: McpBackend> McpServer<B> {
     ) {
         match name {
             "get_state" => {
-                let args = parse_get_state_arguments(arguments);
+                let args = parse_get_state_arguments(arguments)
+                    .expect("tool arguments were validated before usage metering");
                 match args.delivery {
                     StateDelivery::Delta => {
                         self.usage_meters.state_generations.delta += 1;
@@ -471,6 +525,7 @@ enum StateDelivery {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GetStateArguments {
     #[serde(default)]
     format: StateFormat,
@@ -491,6 +546,7 @@ impl Default for GetStateArguments {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ActArguments {
     #[serde(default)]
     target_id: Option<i64>,
@@ -527,6 +583,7 @@ fn action_signature_for_act(args: &ActArguments) -> ActionSignature {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VerifyArguments {
     target_id: i64,
     #[serde(default)]
@@ -535,11 +592,13 @@ struct VerifyArguments {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VerifyExpected {
     text: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GetVisualArguments {
     #[serde(default = "default_visual_mode")]
     mode: String,
@@ -556,6 +615,7 @@ fn default_viewport() -> String {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AskHumanArguments {
     reason: String,
     #[serde(default)]
@@ -563,6 +623,7 @@ struct AskHumanArguments {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RunSkillArguments {
     skill_name: String,
     #[serde(default = "default_skill_params")]
@@ -573,8 +634,8 @@ fn default_skill_params() -> Value {
     json!({})
 }
 
-fn parse_get_state_arguments(arguments: &Value) -> GetStateArguments {
-    serde_json::from_value(arguments.clone()).unwrap_or_default()
+fn parse_get_state_arguments(arguments: &Value) -> Result<GetStateArguments> {
+    serde_json::from_value(arguments.clone()).context("invalid get_state arguments")
 }
 
 /// Outcome of [`resolve_speculative_state`] — distinguishes a verified
@@ -1161,7 +1222,7 @@ impl CoreRuntimeBackend {
 
 impl McpBackend for CoreRuntimeBackend {
     fn get_state(&mut self, arguments: Value) -> Result<Value> {
-        let args = parse_get_state_arguments(&arguments);
+        let args = parse_get_state_arguments(&arguments)?;
 
         match args.delivery {
             StateDelivery::Full => {
@@ -2139,7 +2200,11 @@ fn act_input_schema() -> Value {
         "additionalProperties": false,
         "required": ["action"],
         "properties": {
-            "target_id": { "type": "integer" },
+            "target_id": {
+                "type": "integer",
+                "minimum": i64::MIN,
+                "maximum": i64::MAX
+            },
             "target_stable_key": { "type": "string" },
             "action": {
                 "type": "string",
@@ -2156,7 +2221,11 @@ fn verify_input_schema() -> Value {
         "additionalProperties": false,
         "required": ["target_id", "expected"],
         "properties": {
-            "target_id": { "type": "integer" },
+            "target_id": {
+                "type": "integer",
+                "minimum": i64::MIN,
+                "maximum": i64::MAX
+            },
             "target_stable_key": { "type": "string" },
             "expected": {
                 "type": "object",
@@ -2220,6 +2289,54 @@ fn get_usage_report_input_schema() -> Value {
 }
 
 fn extract_input_schema() -> Value {
+    let inline_rule_schema = json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["selector"],
+                "properties": {
+                    "selector": { "type": "string", "minLength": 1 },
+                    "attribute": { "type": "string", "minLength": 1 }
+                }
+            },
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["selector", "fields"],
+                "properties": {
+                    "selector": { "type": "string", "minLength": 1 },
+                    "fields": {
+                        "type": "object",
+                        "minProperties": 1,
+                        "additionalProperties": { "type": "string", "minLength": 1 }
+                    }
+                }
+            },
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["items"],
+                "properties": {
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["selector", "fields"],
+                        "properties": {
+                            "selector": { "type": "string", "minLength": 1 },
+                            "fields": {
+                                "type": "object",
+                                "minProperties": 1,
+                                "additionalProperties": { "type": "string", "minLength": 1 }
+                            }
+                        }
+                    }
+                }
+            }
+        ],
+        "description": "Inline Deep Lens DSL rule"
+    });
+
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -2237,10 +2354,7 @@ fn extract_input_schema() -> Value {
             {
                 "required": ["inline"],
                 "properties": {
-                    "inline": {
-                        "type": "object",
-                        "description": "Inline Deep Lens DSL rule"
-                    }
+                    "inline": inline_rule_schema.clone()
                 }
             }
         ],
@@ -2250,10 +2364,7 @@ fn extract_input_schema() -> Value {
                 "minLength": 1,
                 "description": "Name of a pre-registered SchemaRegistry rule"
             },
-            "inline": {
-                "type": "object",
-                "description": "Inline Deep Lens DSL rule (used when rule_name is not provided)"
-            }
+            "inline": inline_rule_schema
         }
     })
 }

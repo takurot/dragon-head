@@ -156,16 +156,19 @@ fn test_mcp_contract_exposes_required_tools() {
 fn test_mcp_contract_all_tools_are_callable() {
     let mut server = McpServer::new(MockBackend);
 
-    for name in [
-        "get_state",
-        "act",
-        "verify",
-        "get_visual",
-        "ask_human",
-        "run_skill",
+    for (name, arguments) in [
+        ("get_state", json!({})),
+        ("act", json!({"action": "click"})),
+        (
+            "verify",
+            json!({"target_id": 1, "expected": {"text": "ready"}}),
+        ),
+        ("get_visual", json!({})),
+        ("ask_human", json!({"reason": "approval required"})),
+        ("run_skill", json!({"skill_name": "checkout"})),
     ] {
         let result = server
-            .call_tool(name, json!({}))
+            .call_tool(name, arguments)
             .unwrap_or_else(|_| panic!("tool call failed for {name}"));
         assert_eq!(result["ok"], json!(true));
         assert_eq!(result["tool"], json!(name));
