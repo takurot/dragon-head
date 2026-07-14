@@ -47,6 +47,9 @@ pub fn normalize_dom_with_viewport(
 pub struct SubtreeRefinementConfig<'a> {
     pub dirty_paths: &'a HashSet<String>,
     pub cached_paths: &'a HashMap<String, Vec<usize>>,
+    /// A tree previously returned by this module's normalization functions.
+    /// Reusing arbitrary externally-constructed nodes would bypass the
+    /// normalization and redaction invariants maintained here.
     pub cached_root: &'a SemanticNode,
 }
 
@@ -92,6 +95,10 @@ fn normalize_dom_internal(
     refinement: Option<&SubtreeRefinementConfig<'_>>,
 ) -> Result<SemanticNode> {
     let mut key_generator = StableKeyGenerator::new();
+    // Validate an externally supplied cache once at the boundary. Cached-path
+    // lookup then remains O(1), while raw SemanticNode trees cannot bypass the
+    // normalizer's redaction policy.
+    let refinement = refinement.filter(|config| cached_subtree_is_redacted(config.cached_root));
     // Start traversal with root path
     let internal_node = traverse_node(
         profile,
@@ -209,7 +216,10 @@ fn traverse_node(
 
     // Filter by role="presentation" (Ads/Layout)
     // Attributes in headless_chrome are Vec<String> [key1, val1, key2, val2...]
-    let mut attributes = BTreeMap::new();
+    // Keep control attributes separate from the values exposed to agents. The
+    // redactor can contain domain-specific patterns, so filtering, geometry,
+    // and sensitive-input classification must continue to use the raw values.
+    let mut raw_attributes = BTreeMap::new();
     if let Some(attrs) = &node.attributes {
         for chunk in attrs.chunks(2) {
             if chunk.len() == 2 {
@@ -224,24 +234,19 @@ fn traverse_node(
                 // Strip dynamic/generated class tokens to ensure deterministic hashing.
                 if key == "class" {
                     if let Some(filtered) = filter_dynamic_classes(val) {
-                        attributes.insert(key.clone(), filtered);
+                        raw_attributes.insert(key.clone(), filtered);
                     }
                     // If all classes were dynamic, skip the attribute entirely
                     continue;
                 }
 
-                attributes.insert(key.clone(), val.clone());
-            }
-        }
-
-        if node_name == "input" {
-            if let Some(t) = attributes.get("type") {
-                if (t == "password" || t == "email") && attributes.contains_key("value") {
-                    attributes.insert("value".to_string(), "***".to_string());
-                }
+                raw_attributes.insert(key.clone(), val.clone());
             }
         }
     }
+
+    let redactor = crate::privacy::global();
+    let attributes = redactor.redact_semantic_attributes(&raw_attributes);
 
     let mut children = Vec::new();
     if let Some(child_nodes) = &node.children {
@@ -271,7 +276,13 @@ fn traverse_node(
         .or_else(|| attributes.get("id").map(|s| s.as_str()))
         .or(text_hint.as_deref());
 
-    let quadrant = resolve_quadrant(&attributes, &node_name, label_hint, parent_path, viewport);
+    let quadrant = resolve_quadrant(
+        &raw_attributes,
+        &node_name,
+        label_hint,
+        parent_path,
+        viewport,
+    );
     let alias = build_alias(&node_name, label_hint, &attributes);
 
     let (stable_key, ambiguous) =
@@ -311,6 +322,10 @@ fn resolve_cached_subtree<'a>(
     } else {
         None
     }
+}
+
+fn cached_subtree_is_redacted(node: &SemanticNode) -> bool {
+    crate::privacy::global().redact_node(node.clone()) == *node
 }
 
 fn node_by_child_index_path<'a>(
@@ -683,6 +698,70 @@ mod tests {
     }
 
     #[test]
+    fn refinement_reuses_a_previously_redacted_tree() -> Result<()> {
+        let input = make_element_node(
+            104,
+            "input",
+            vec![("type", "text"), ("aria-label", "SSN 123-45-6789")],
+            vec![],
+        )?;
+        let body = make_element_node(103, "body", vec![], vec![input])?;
+        let html = make_element_node(102, "html", vec![], vec![body])?;
+        let previous_dom = make_document_node(101, vec![html])?;
+        let previous = normalize_dom(LoadProfile::Minimal, &previous_dom)?;
+
+        let cached_paths = HashMap::from([("root/#document".to_string(), vec![])]);
+        let dirty_paths = HashSet::new();
+        let next_dom = make_document_node(201, vec![])?;
+        let refined = normalize_dom_with_refinement(
+            LoadProfile::Minimal,
+            &next_dom,
+            SubtreeRefinementConfig {
+                dirty_paths: &dirty_paths,
+                cached_paths: &cached_paths,
+                cached_root: &previous,
+            },
+        )?;
+
+        let serialized = serde_json::to_string(&refined)?;
+        assert!(!serialized.contains("123-45-6789"));
+        assert!(serialized.contains("SSN [SSN]"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn refinement_rejects_an_unredacted_external_cache() -> Result<()> {
+        let raw_cache = SemanticNode {
+            role: "#document".to_string(),
+            attributes: Some(BTreeMap::from([(
+                "authorization".to_string(),
+                "Bearer opaque-secret".to_string(),
+            )])),
+            stable_key: Some("raw-derived-key".to_string()),
+            ..Default::default()
+        };
+        let cached_paths = HashMap::from([("root/#document".to_string(), vec![])]);
+        let dirty_paths = HashSet::new();
+        let next_dom = make_document_node(201, vec![])?;
+
+        let refined = normalize_dom_with_refinement(
+            LoadProfile::Minimal,
+            &next_dom,
+            SubtreeRefinementConfig {
+                dirty_paths: &dirty_paths,
+                cached_paths: &cached_paths,
+                cached_root: &raw_cache,
+            },
+        )?;
+
+        assert_ne!(refined.stable_key.as_deref(), Some("raw-derived-key"));
+        assert!(!serde_json::to_string(&refined)?.contains("opaque-secret"));
+
+        Ok(())
+    }
+
+    #[test]
     fn test_refinement_reparses_descendants_when_ancestor_is_dirty() -> Result<()> {
         let previous_dom = build_document_fixture("left_v1", "right_v1", 100)?;
         let previous = normalize_dom(LoadProfile::Minimal, &previous_dom)?;
@@ -793,6 +872,129 @@ mod tests {
             Some("Contact us at *** for help"),
             "traverse_node text-node path must redact email addresses"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_dom_redacts_generic_attributes_and_aria_label() -> Result<()> {
+        let input = make_element_node(
+            104,
+            "input",
+            vec![
+                ("type", "text"),
+                ("value", "4111-1111-1111-1111"),
+                ("aria-label", "SSN 123-45-6789"),
+                ("title", "Call +1 (415) 555-0100"),
+                ("data-contact", "user@example.com"),
+            ],
+            vec![],
+        )?;
+        let body = make_element_node(103, "body", vec![], vec![input])?;
+        let html = make_element_node(102, "html", vec![], vec![body])?;
+        let dom = make_document_node(101, vec![html])?;
+
+        let sem_node = normalize_dom(LoadProfile::Minimal, &dom)?;
+        let input_node = &sem_node.children[0].children[0].children[0];
+        let attributes = input_node.attributes.as_ref().unwrap();
+
+        assert_eq!(attributes["value"], "****-****-****-XXXX");
+        assert_eq!(attributes["aria-label"], "SSN [SSN]");
+        assert_eq!(attributes["title"], "Call [PHONE]");
+        assert_eq!(attributes["data-contact"], "***");
+        assert_eq!(input_node.label.as_deref(), Some("SSN [SSN]"));
+        assert_eq!(input_node.alias.as_deref(), Some("input_ssn_ssn"));
+
+        let serialized = serde_json::to_string(&sem_node)?;
+        for raw in [
+            "4111-1111-1111-1111",
+            "123-45-6789",
+            "+1 (415) 555-0100",
+            "user@example.com",
+        ] {
+            assert!(!serialized.contains(raw), "raw PII leaked: {raw}");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_dom_redacts_title_derived_label() -> Result<()> {
+        let input = make_element_node(
+            104,
+            "input",
+            vec![("type", "text"), ("title", "Call +1 (415) 555-0100")],
+            vec![],
+        )?;
+        let body = make_element_node(103, "body", vec![], vec![input])?;
+        let html = make_element_node(102, "html", vec![], vec![body])?;
+        let dom = make_document_node(101, vec![html])?;
+
+        let sem_node = normalize_dom(LoadProfile::Minimal, &dom)?;
+        let input_node = &sem_node.children[0].children[0].children[0];
+
+        assert_eq!(input_node.label.as_deref(), Some("Call [PHONE]"));
+        assert_eq!(input_node.alias.as_deref(), Some("input_call_phone"));
+        assert_eq!(
+            input_node.attributes.as_ref().unwrap()["title"],
+            "Call [PHONE]"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_dom_applies_sensitive_key_and_input_type_policy() -> Result<()> {
+        let hidden = make_element_node(
+            104,
+            "input",
+            vec![
+                ("type", "hidden"),
+                ("value", "opaque-session-value"),
+                ("data-ssn", "123456789"),
+                ("authorization", "Bearer opaque-token"),
+            ],
+            vec![],
+        )?;
+        let body = make_element_node(103, "body", vec![], vec![hidden])?;
+        let html = make_element_node(102, "html", vec![], vec![body])?;
+        let dom = make_document_node(101, vec![html])?;
+
+        let sem_node = normalize_dom(LoadProfile::Minimal, &dom)?;
+        let attributes = sem_node.children[0].children[0].children[0]
+            .attributes
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(attributes["value"], "***");
+        assert_eq!(attributes["data-ssn"], "***");
+        assert_eq!(attributes["authorization"], "***");
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_dom_stable_key_uses_redacted_label() -> Result<()> {
+        fn normalize_ssn(ssn: &str) -> Result<SemanticNode> {
+            let input = make_element_node(
+                104,
+                "input",
+                vec![("type", "text"), ("aria-label", ssn)],
+                vec![],
+            )?;
+            let body = make_element_node(103, "body", vec![], vec![input])?;
+            let html = make_element_node(102, "html", vec![], vec![body])?;
+            normalize_dom(LoadProfile::Minimal, &make_document_node(101, vec![html])?)
+        }
+
+        let first = normalize_ssn("SSN 123-45-6789")?;
+        let second = normalize_ssn("SSN 987-65-4321")?;
+        let first_input = &first.children[0].children[0].children[0];
+        let second_input = &second.children[0].children[0].children[0];
+
+        assert_eq!(first_input.label.as_deref(), Some("SSN [SSN]"));
+        assert_eq!(second_input.label.as_deref(), Some("SSN [SSN]"));
+        assert_eq!(first_input.stable_key, second_input.stable_key);
 
         Ok(())
     }

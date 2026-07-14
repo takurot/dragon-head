@@ -188,7 +188,7 @@ impl PiiRedactor {
         }
     }
 
-    fn redact_node(&self, node: SemanticNode) -> SemanticNode {
+    pub(crate) fn redact_node(&self, node: SemanticNode) -> SemanticNode {
         let label = node.label.map(|l| {
             if Self::is_sensitive_role(&node.role) {
                 "***".to_string()
@@ -199,27 +199,9 @@ impl PiiRedactor {
 
         let alias = node.alias.map(|a| self.redact_text(&a));
 
-        let attributes = node.attributes.map(|attrs| {
-            // Detect context: if any attribute declares a sensitive type (e.g.
-            // type="password"), treat the `value` attribute as sensitive too.
-            let has_sensitive_type = attrs
-                .get("type")
-                .is_some_and(|t| matches!(t.to_ascii_lowercase().as_str(), "password" | "hidden"));
-            attrs
-                .into_iter()
-                .map(|(k, v)| {
-                    let k_lower = k.to_ascii_lowercase();
-                    let v_redacted = if Self::is_sensitive_key(&k)
-                        || (has_sensitive_type && k_lower == "value")
-                    {
-                        "***".to_string()
-                    } else {
-                        self.redact_text(&v)
-                    };
-                    (k, v_redacted)
-                })
-                .collect::<BTreeMap<_, _>>()
-        });
+        let attributes = node
+            .attributes
+            .map(|attrs| self.redact_semantic_attributes(&attrs));
 
         SemanticNode {
             role: node.role,
@@ -236,6 +218,32 @@ impl PiiRedactor {
             backend_node_id: node.backend_node_id,
             security_flags: node.security_flags,
         }
+    }
+
+    pub(crate) fn redact_semantic_attributes(
+        &self,
+        attributes: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
+        let has_sensitive_type = attributes.get("type").is_some_and(|input_type| {
+            matches!(
+                input_type.to_ascii_lowercase().as_str(),
+                "password" | "hidden" | "email"
+            )
+        });
+        attributes
+            .iter()
+            .map(|(key, value)| {
+                let key_lower = key.to_ascii_lowercase();
+                let redacted = if Self::is_sensitive_key(key)
+                    || (has_sensitive_type && key_lower == "value")
+                {
+                    "***".to_string()
+                } else {
+                    self.redact_text(value)
+                };
+                (key.clone(), redacted)
+            })
+            .collect()
     }
 
     // -------------------------------------------------------------------------
