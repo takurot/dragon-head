@@ -217,7 +217,11 @@ impl KmsAdapter for RecordingKms {
         self.inner.add_key(key, key_id, make_current);
     }
 
-    fn stage_key_rotation(&mut self, key: [u8; 32], key_id: String) -> anyhow::Result<()> {
+    fn stage_key_rotation(
+        &mut self,
+        key: zeroize::Zeroizing<[u8; 32]>,
+        key_id: String,
+    ) -> anyhow::Result<()> {
         self.inner.stage_key_rotation(key, key_id)
     }
 

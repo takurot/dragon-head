@@ -50,7 +50,7 @@ pub trait KmsAdapter: Send + Sync {
 
     /// Stages and activates a key for rotation without overwriting an existing
     /// key ID.
-    fn stage_key_rotation(&mut self, _key: [u8; 32], _key_id: String) -> Result<()> {
+    fn stage_key_rotation(&mut self, _key: Zeroizing<[u8; 32]>, _key_id: String) -> Result<()> {
         anyhow::bail!("KMS adapter does not support atomic key rotation")
     }
 
@@ -107,7 +107,7 @@ pub trait SessionVault: Send + Sync {
     async fn load_session(&self, session_id: &str) -> Result<Option<SessionData>>;
 
     /// Rotates keys by re-encrypting all stored sessions with a new key.
-    async fn rotate_key(&self, new_key: [u8; 32], new_key_id: String) -> Result<()>;
+    async fn rotate_key(&self, new_key: Zeroizing<[u8; 32]>, new_key_id: String) -> Result<()>;
 }
 
 type VaultStorage = HashMap<String, (Vec<u8>, String)>;
@@ -125,6 +125,16 @@ impl LocalSessionVault {
             kms: Arc::new(Mutex::new(kms)),
             storage: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Wraps raw key bytes before constructing the rotation future, so dropping
+    /// an unpolled future still wipes its pending key material.
+    pub fn rotate_key(
+        &self,
+        new_key: [u8; 32],
+        new_key_id: String,
+    ) -> impl std::future::Future<Output = Result<()>> + '_ {
+        <Self as SessionVault>::rotate_key(self, Zeroizing::new(new_key), new_key_id)
     }
 }
 
@@ -160,7 +170,7 @@ impl SessionVault for LocalSessionVault {
         Ok(Some(data))
     }
 
-    async fn rotate_key(&self, new_key: [u8; 32], new_key_id: String) -> Result<()> {
+    async fn rotate_key(&self, new_key: Zeroizing<[u8; 32]>, new_key_id: String) -> Result<()> {
         let mut kms_guard = self.kms.lock().await;
         let mut storage = self.storage.lock().await;
 
@@ -287,8 +297,7 @@ impl KmsAdapter for SoftwareKms {
         }
     }
 
-    fn stage_key_rotation(&mut self, key: [u8; 32], key_id: String) -> Result<()> {
-        let key = Zeroizing::new(key);
+    fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
         if self.keys.contains_key(&key_id) {
             anyhow::bail!("Key ID already exists: {key_id}");
         }
@@ -385,7 +394,7 @@ mod tests {
             self.inner.add_key(key, key_id, make_current);
         }
 
-        fn stage_key_rotation(&mut self, key: [u8; 32], key_id: String) -> Result<()> {
+        fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
             self.inner.stage_key_rotation(key, key_id)
         }
 
@@ -417,7 +426,7 @@ mod tests {
             self.inner.add_key(key, key_id, make_current);
         }
 
-        fn stage_key_rotation(&mut self, key: [u8; 32], key_id: String) -> Result<()> {
+        fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
             self.inner.stage_key_rotation(key, key_id)
         }
 
@@ -457,7 +466,7 @@ mod tests {
             self.inner.add_key(key, key_id, make_current);
         }
 
-        fn stage_key_rotation(&mut self, key: [u8; 32], key_id: String) -> Result<()> {
+        fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
             self.inner.stage_key_rotation(key, key_id)
         }
 
