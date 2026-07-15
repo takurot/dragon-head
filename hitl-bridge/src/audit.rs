@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use core_runtime::OutcomeProjection;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use uuid::Uuid;
@@ -65,15 +65,37 @@ impl BridgeAuditTrail {
     }
 
     /// Append `record` as a single NDJSON line, fsync'd before returning.
+    /// Replaying the same request ID with an identical record is idempotent;
+    /// reusing an ID for different decision data is rejected.
     pub fn record(&self, record: &AuditRecord) -> Result<()> {
         let line = serde_json::to_string(record).context("failed to serialize audit record")?;
 
         let _guard = self.write_lock.lock().expect("audit trail mutex poisoned");
         let mut file = OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(&self.path)
             .with_context(|| format!("failed to open audit trail at {}", self.path.display()))?;
+
+        for existing_line in BufReader::new(&file).lines() {
+            let existing_line = existing_line.context("failed to inspect audit trail")?;
+            if existing_line.trim().is_empty() {
+                continue;
+            }
+            let existing: AuditRecord = serde_json::from_str(&existing_line)
+                .context("failed to parse existing audit record")?;
+            if existing.id == record.id {
+                if existing != *record {
+                    anyhow::bail!(
+                        "audit record {} conflicts with an existing decision",
+                        record.id
+                    );
+                }
+                file.sync_all().context("failed to fsync audit trail")?;
+                return Ok(());
+            }
+        }
 
         writeln!(file, "{line}").context("failed to write audit record")?;
         file.sync_all().context("failed to fsync audit trail")?;
@@ -157,6 +179,19 @@ mod tests {
             assert!(parsed.get("decided_by").is_some());
             assert!(parsed.get("outcome_projection").is_some());
         }
+    }
+
+    #[test]
+    fn recording_the_same_decision_twice_is_idempotent() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("audit.ndjson");
+        let trail = BridgeAuditTrail::new(&path);
+        let record = sample_record(Uuid::new_v4(), AuditDecision::Approved);
+
+        trail.record(&record).expect("first record");
+        trail.record(&record).expect("idempotent retry");
+
+        assert_eq!(trail.read_all().expect("read audit trail"), vec![record]);
     }
 
     #[test]
