@@ -58,6 +58,7 @@ pub struct BridgeAuditTrail {
 #[derive(Default)]
 struct AuditState {
     initialized: bool,
+    persistent_index: bool,
     recent_records: VecDeque<AuditRecord>,
 }
 
@@ -103,7 +104,16 @@ impl BridgeAuditTrail {
                 );
             }
         }
-        std::fs::create_dir_all(self.index_dir()).context("failed to create audit index")?;
+        state.persistent_index = match std::fs::create_dir_all(self.index_dir()) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "persistent HITL audit index unavailable; using on-disk scan fallback"
+                );
+                false
+            }
+        };
         let file = match std::fs::File::open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -119,12 +129,17 @@ impl BridgeAuditTrail {
             }
             match serde_json::from_str::<AuditRecord>(&existing_line) {
                 Ok(existing) => {
-                    std::fs::write(
-                        self.index_path(existing.id),
-                        serde_json::to_vec(&existing)
-                            .context("failed to serialize audit index record")?,
-                    )
-                    .context("failed to rebuild audit index")?;
+                    if state.persistent_index {
+                        let bytes = serde_json::to_vec(&existing)
+                            .context("failed to serialize audit index record")?;
+                        if let Err(error) = std::fs::write(self.index_path(existing.id), bytes) {
+                            tracing::warn!(
+                                %error,
+                                "persistent HITL audit index became unavailable; using scan fallback"
+                            );
+                            state.persistent_index = false;
+                        }
+                    }
                     state.remember(existing);
                 }
                 Err(error) => tracing::warn!(
@@ -141,6 +156,23 @@ impl BridgeAuditTrail {
     pub fn prepare(&self) -> Result<()> {
         let mut state = self.state.lock().expect("audit trail mutex poisoned");
         self.prepare_locked(&mut state)
+    }
+
+    fn find_record_in_history(&self, id: Uuid) -> Result<Option<AuditRecord>> {
+        let file = match std::fs::File::open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("failed to search audit trail"),
+        };
+        for line in BufReader::new(file).lines() {
+            let line = line.context("failed to search audit trail")?;
+            if let Ok(record) = serde_json::from_str::<AuditRecord>(&line) {
+                if record.id == id {
+                    return Ok(Some(record));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Append `record` as a single NDJSON line, fsync'd before returning.
@@ -162,7 +194,7 @@ impl BridgeAuditTrail {
             .iter()
             .find(|existing| existing.id == record.id)
             .cloned();
-        let indexed = if cached.is_none() {
+        let indexed = if cached.is_none() && state.persistent_index {
             match std::fs::read(self.index_path(record.id)) {
                 Ok(bytes) => Some(
                     serde_json::from_slice::<AuditRecord>(&bytes)
@@ -174,7 +206,12 @@ impl BridgeAuditTrail {
         } else {
             None
         };
-        if let Some(existing) = cached.as_ref().or(indexed.as_ref()) {
+        let scanned = if cached.is_none() && indexed.is_none() && !state.persistent_index {
+            self.find_record_in_history(record.id)?
+        } else {
+            None
+        };
+        if let Some(existing) = cached.as_ref().or(indexed.as_ref()).or(scanned.as_ref()) {
             if existing != record {
                 anyhow::bail!(
                     "audit record {} conflicts with an existing decision",
@@ -188,11 +225,17 @@ impl BridgeAuditTrail {
         writeln!(file, "{line}").context("failed to write audit record")?;
         state.remember(record.clone());
         file.sync_all().context("failed to fsync audit trail")?;
-        std::fs::write(
-            self.index_path(record.id),
-            serde_json::to_vec(record).context("failed to serialize audit index record")?,
-        )
-        .context("failed to persist audit index record")?;
+        if state.persistent_index {
+            let bytes =
+                serde_json::to_vec(record).context("failed to serialize audit index record")?;
+            if let Err(error) = std::fs::write(self.index_path(record.id), bytes) {
+                tracing::warn!(
+                    %error,
+                    "persistent HITL audit index became unavailable; using scan fallback"
+                );
+                state.persistent_index = false;
+            }
+        }
         Ok(())
     }
 
