@@ -82,6 +82,67 @@ impl BridgeAuditTrail {
         &self.path
     }
 
+    fn index_dir(&self) -> PathBuf {
+        PathBuf::from(format!("{}.index", self.path.to_string_lossy()))
+    }
+
+    fn index_path(&self, id: Uuid) -> PathBuf {
+        self.index_dir().join(format!("{id}.json"))
+    }
+
+    fn prepare_locked(&self, state: &mut AuditState) -> Result<()> {
+        if state.initialized {
+            return Ok(());
+        }
+
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.is_dir() {
+                anyhow::bail!(
+                    "audit trail parent directory does not exist: {}",
+                    parent.display()
+                );
+            }
+        }
+        std::fs::create_dir_all(self.index_dir()).context("failed to create audit index")?;
+        let file = match std::fs::File::open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                state.initialized = true;
+                return Ok(());
+            }
+            Err(error) => return Err(error).context("failed to open audit trail for indexing"),
+        };
+        for existing_line in BufReader::new(file).lines() {
+            let existing_line = existing_line.context("failed to inspect audit trail")?;
+            if existing_line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<AuditRecord>(&existing_line) {
+                Ok(existing) => {
+                    std::fs::write(
+                        self.index_path(existing.id),
+                        serde_json::to_vec(&existing)
+                            .context("failed to serialize audit index record")?,
+                    )
+                    .context("failed to rebuild audit index")?;
+                    state.remember(existing);
+                }
+                Err(error) => tracing::warn!(
+                    %error,
+                    "ignoring malformed historical HITL audit record"
+                ),
+            }
+        }
+        state.initialized = true;
+        Ok(())
+    }
+
+    /// Prepares the persistent request-ID index before gateway mutation.
+    pub fn prepare(&self) -> Result<()> {
+        let mut state = self.state.lock().expect("audit trail mutex poisoned");
+        self.prepare_locked(&mut state)
+    }
+
     /// Append `record` as a single NDJSON line, fsync'd before returning.
     /// Replaying the same request ID with an identical record is idempotent;
     /// reusing an ID for different decision data is rejected.
@@ -89,35 +150,31 @@ impl BridgeAuditTrail {
         let line = serde_json::to_string(record).context("failed to serialize audit record")?;
 
         let mut state = self.state.lock().expect("audit trail mutex poisoned");
+        self.prepare_locked(&mut state)?;
         let mut file = OpenOptions::new()
             .create(true)
-            .read(true)
             .append(true)
             .open(&self.path)
             .with_context(|| format!("failed to open audit trail at {}", self.path.display()))?;
 
-        if !state.initialized {
-            for existing_line in BufReader::new(&file).lines() {
-                let existing_line = existing_line.context("failed to inspect audit trail")?;
-                if existing_line.trim().is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<AuditRecord>(&existing_line) {
-                    Ok(existing) => state.remember(existing),
-                    Err(error) => tracing::warn!(
-                        %error,
-                        "ignoring malformed historical HITL audit record"
-                    ),
-                }
-            }
-            state.initialized = true;
-        }
-
-        if let Some(existing) = state
+        let cached = state
             .recent_records
             .iter()
             .find(|existing| existing.id == record.id)
-        {
+            .cloned();
+        let indexed = if cached.is_none() {
+            match std::fs::read(self.index_path(record.id)) {
+                Ok(bytes) => Some(
+                    serde_json::from_slice::<AuditRecord>(&bytes)
+                        .context("failed to parse audit index record")?,
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error).context("failed to read audit index record"),
+            }
+        } else {
+            None
+        };
+        if let Some(existing) = cached.as_ref().or(indexed.as_ref()) {
             if existing != record {
                 anyhow::bail!(
                     "audit record {} conflicts with an existing decision",
@@ -131,6 +188,11 @@ impl BridgeAuditTrail {
         writeln!(file, "{line}").context("failed to write audit record")?;
         state.remember(record.clone());
         file.sync_all().context("failed to fsync audit trail")?;
+        std::fs::write(
+            self.index_path(record.id),
+            serde_json::to_vec(record).context("failed to serialize audit index record")?,
+        )
+        .context("failed to persist audit index record")?;
         Ok(())
     }
 
@@ -266,6 +328,36 @@ mod tests {
                 .recent_records
                 .len(),
             MAX_RECENT_AUDIT_RECORDS
+        );
+    }
+
+    #[test]
+    fn persistent_index_deduplicates_records_older_than_the_memory_window() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("audit.ndjson");
+        let first = sample_record(Uuid::new_v4(), AuditDecision::Approved);
+        let mut records = vec![first.clone()];
+        records.extend(
+            (0..MAX_RECENT_AUDIT_RECORDS)
+                .map(|_| sample_record(Uuid::new_v4(), AuditDecision::Approved)),
+        );
+        let contents = records
+            .iter()
+            .map(|record| serde_json::to_string(record).expect("serialize record"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&path, contents).expect("seed long audit trail");
+        let trail = BridgeAuditTrail::new(&path);
+
+        trail.record(&first).expect("old duplicate is idempotent");
+
+        assert_eq!(
+            std::fs::read_to_string(path)
+                .expect("read audit trail")
+                .lines()
+                .count(),
+            records.len()
         );
     }
 

@@ -211,6 +211,7 @@ impl Bridge {
         }
 
         if !progress_guard.gateway_applied {
+            self.audit.prepare()?;
             match decision {
                 Decision::Approved => self.gateway.approve(id)?,
                 Decision::Rejected => self.gateway.reject(id)?,
@@ -632,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_retries_audit_without_reapplying_the_gateway() {
+    fn resolve_retries_after_audit_preparation_without_reapplying_the_gateway() {
         let dir = tempdir().expect("tempdir");
         let audit_dir = dir.path().join("missing");
         let id = Uuid::new_v4();
@@ -646,6 +647,7 @@ mod tests {
 
         bridge.poll_once().expect("poll");
         assert!(bridge.resolve(id, Decision::Approved, "alice").is_err());
+        assert!(gateway.resolutions().is_empty());
         std::fs::create_dir(&audit_dir).expect("create audit directory");
         bridge
             .resolve(id, Decision::Approved, "alice")
