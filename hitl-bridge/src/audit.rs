@@ -9,6 +9,7 @@
 use anyhow::{Context, Result};
 use core_runtime::OutcomeProjection;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
@@ -88,7 +89,13 @@ impl BridgeAuditTrail {
     }
 
     fn index_path(&self, id: Uuid) -> PathBuf {
-        self.index_dir().join(format!("{id}.json"))
+        self.index_dir().join(format!("{id}.sha256"))
+    }
+
+    fn record_digest(record: &AuditRecord) -> Result<String> {
+        let bytes =
+            serde_json::to_vec(record).context("failed to serialize audit record digest")?;
+        Ok(hex::encode(Sha256::digest(bytes)))
     }
 
     fn prepare_locked(&self, state: &mut AuditState) -> Result<()> {
@@ -130,8 +137,7 @@ impl BridgeAuditTrail {
             match serde_json::from_str::<AuditRecord>(&existing_line) {
                 Ok(existing) => {
                     if state.persistent_index {
-                        let bytes = serde_json::to_vec(&existing)
-                            .context("failed to serialize audit index record")?;
+                        let bytes = Self::record_digest(&existing)?;
                         if let Err(error) = std::fs::write(self.index_path(existing.id), bytes) {
                             tracing::warn!(
                                 %error,
@@ -194,25 +200,34 @@ impl BridgeAuditTrail {
             .iter()
             .find(|existing| existing.id == record.id)
             .cloned();
-        let indexed = if cached.is_none() && state.persistent_index {
+        let indexed_digest = if cached.is_none() && state.persistent_index {
             match std::fs::read(self.index_path(record.id)) {
-                Ok(bytes) => Some(
-                    serde_json::from_slice::<AuditRecord>(&bytes)
-                        .context("failed to parse audit index record")?,
-                ),
+                Ok(bytes) => {
+                    Some(String::from_utf8(bytes).context("failed to parse audit index digest")?)
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error).context("failed to read audit index record"),
             }
         } else {
             None
         };
-        let scanned = if cached.is_none() && indexed.is_none() && !state.persistent_index {
+        let scanned = if cached.is_none() && indexed_digest.is_none() && !state.persistent_index {
             self.find_record_in_history(record.id)?
         } else {
             None
         };
-        if let Some(existing) = cached.as_ref().or(indexed.as_ref()).or(scanned.as_ref()) {
+        if let Some(existing) = cached.as_ref().or(scanned.as_ref()) {
             if existing != record {
+                anyhow::bail!(
+                    "audit record {} conflicts with an existing decision",
+                    record.id
+                );
+            }
+            file.sync_all().context("failed to fsync audit trail")?;
+            return Ok(());
+        }
+        if let Some(existing_digest) = indexed_digest {
+            if existing_digest != Self::record_digest(record)? {
                 anyhow::bail!(
                     "audit record {} conflicts with an existing decision",
                     record.id
@@ -226,8 +241,7 @@ impl BridgeAuditTrail {
         state.remember(record.clone());
         file.sync_all().context("failed to fsync audit trail")?;
         if state.persistent_index {
-            let bytes =
-                serde_json::to_vec(record).context("failed to serialize audit index record")?;
+            let bytes = Self::record_digest(record)?;
             if let Err(error) = std::fs::write(self.index_path(record.id), bytes) {
                 tracing::warn!(
                     %error,
