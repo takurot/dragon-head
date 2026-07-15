@@ -28,6 +28,7 @@ aes-gcm = "0.10"
 pbkdf2 = "0.12"
 rand = "0.9"
 hmac = "0.12"
+zeroize = "1.8"
 plugin-host = { path = "../plugin-host" }
 
 [[example]]

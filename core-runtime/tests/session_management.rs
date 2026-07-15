@@ -216,6 +216,19 @@ impl KmsAdapter for RecordingKms {
     fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
         self.inner.add_key(key, key_id, make_current);
     }
+
+    fn stage_key_rotation(&mut self, key: [u8; 32], key_id: String) -> anyhow::Result<()> {
+        self.inner.stage_key_rotation(key, key_id)
+    }
+
+    fn rollback_key_rotation(&mut self, previous_key_id: &str, staged_key_id: &str) {
+        self.inner
+            .rollback_key_rotation(previous_key_id, staged_key_id);
+    }
+
+    fn finalize_key_rotation(&mut self, key_ids: &[String]) -> anyhow::Result<()> {
+        self.inner.finalize_key_rotation(key_ids)
+    }
 }
 
 fn clear_decrypt_log(log: &Arc<Mutex<KmsCallLog>>) {
