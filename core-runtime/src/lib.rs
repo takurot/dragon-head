@@ -35,4 +35,6 @@ pub use policy::{
 pub use prompt_injection::{
     PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig,
 };
-pub use session_vault::{KmsAdapter, LocalSessionVault, SessionData, SessionVault, SoftwareKms};
+pub use session_vault::{
+    AtomicKmsRotation, KmsAdapter, LocalSessionVault, SessionData, SessionVault, SoftwareKms,
+};

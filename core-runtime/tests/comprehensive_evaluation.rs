@@ -14,8 +14,8 @@ use core_runtime::{
     },
     speculative::{ActionSignature, SpeculativeEngine, SpeculativePrediction, StateDelta},
     sre::{normalize_dom, LoadProfile, SemanticState},
-    ActionError, BrowserClient, KmsAdapter, LocalSessionVault, PageSession, PolicyAction,
-    PolicyRule, SoftwareKms,
+    ActionError, AtomicKmsRotation, BrowserClient, KmsAdapter, LocalSessionVault, PageSession,
+    PolicyAction, PolicyRule, SoftwareKms,
 };
 use serde_json::{json, Value};
 use test_bench_support::{EvaluationBench, EvaluationMode};
@@ -490,6 +490,12 @@ impl KmsAdapter for RecordingKms {
         self.inner.add_key(key, key_id, make_current);
     }
 
+    fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+        Some(self)
+    }
+}
+
+impl AtomicKmsRotation for RecordingKms {
     fn stage_key_rotation(
         &mut self,
         key: zeroize::Zeroizing<[u8; 32]>,

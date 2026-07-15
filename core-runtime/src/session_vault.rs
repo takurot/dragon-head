@@ -48,31 +48,40 @@ pub trait KmsAdapter: Send + Sync {
     /// Adds a new key to the adapter.
     fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool);
 
-    /// Stages and activates a key for rotation without overwriting an existing
-    /// key ID.
-    fn stage_key_rotation(&mut self, _key: Zeroizing<[u8; 32]>, _key_id: String) -> Result<()> {
-        anyhow::bail!("KMS adapter does not support atomic key rotation")
-    }
-
-    /// Restores the pre-rotation state after a later phase fails.
-    fn rollback_key_rotation(&mut self, _previous_key_id: &str, _staged_key_id: &str) {}
-
-    /// Atomically retires superseded keys. If this returns an error, none of
-    /// the requested keys may have been removed.
-    fn finalize_key_rotation(&mut self, _retired_key_ids: &[String]) -> Result<()> {
-        anyhow::bail!("KMS adapter does not support atomic key rotation")
+    /// Returns atomic rotation support when the adapter implements the full
+    /// stage/rollback/finalize contract.
+    fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+        None
     }
 }
 
+/// Opt-in capability for KMS adapters that can rotate keys transactionally.
+pub trait AtomicKmsRotation: KmsAdapter {
+    /// Stages and activates a key for rotation without overwriting an existing
+    /// key ID.
+    fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()>;
+
+    /// Restores the pre-rotation state after a later phase fails.
+    fn rollback_key_rotation(&mut self, previous_key_id: &str, staged_key_id: &str);
+
+    /// Atomically retires superseded keys. If this returns an error, none of
+    /// the requested keys may have been removed.
+    fn finalize_key_rotation(&mut self, retired_key_ids: &[String]) -> Result<()>;
+}
+
 struct KeyRotationGuard<'a> {
-    kms: &'a mut dyn KmsAdapter,
+    kms: &'a mut dyn AtomicKmsRotation,
     previous_key_id: String,
     staged_key_id: String,
     committed: bool,
 }
 
 impl<'a> KeyRotationGuard<'a> {
-    fn new(kms: &'a mut dyn KmsAdapter, previous_key_id: String, staged_key_id: String) -> Self {
+    fn new(
+        kms: &'a mut dyn AtomicKmsRotation,
+        previous_key_id: String,
+        staged_key_id: String,
+    ) -> Self {
         Self {
             kms,
             previous_key_id,
@@ -107,7 +116,16 @@ pub trait SessionVault: Send + Sync {
     async fn load_session(&self, session_id: &str) -> Result<Option<SessionData>>;
 
     /// Rotates keys by re-encrypting all stored sessions with a new key.
-    async fn rotate_key(&self, new_key: Zeroizing<[u8; 32]>, new_key_id: String) -> Result<()>;
+    async fn rotate_key(&self, new_key: [u8; 32], new_key_id: String) -> Result<()>;
+
+    /// Rotation entry point for callers that already own zeroizing key bytes.
+    async fn rotate_key_secret(
+        &self,
+        new_key: Zeroizing<[u8; 32]>,
+        new_key_id: String,
+    ) -> Result<()> {
+        self.rotate_key(*new_key, new_key_id).await
+    }
 }
 
 type VaultStorage = HashMap<String, (Vec<u8>, String)>;
@@ -134,7 +152,7 @@ impl LocalSessionVault {
         new_key: [u8; 32],
         new_key_id: String,
     ) -> impl std::future::Future<Output = Result<()>> + '_ {
-        <Self as SessionVault>::rotate_key(self, Zeroizing::new(new_key), new_key_id)
+        <Self as SessionVault>::rotate_key_secret(self, Zeroizing::new(new_key), new_key_id)
     }
 }
 
@@ -170,7 +188,16 @@ impl SessionVault for LocalSessionVault {
         Ok(Some(data))
     }
 
-    async fn rotate_key(&self, new_key: Zeroizing<[u8; 32]>, new_key_id: String) -> Result<()> {
+    async fn rotate_key(&self, new_key: [u8; 32], new_key_id: String) -> Result<()> {
+        self.rotate_key_secret(Zeroizing::new(new_key), new_key_id)
+            .await
+    }
+
+    async fn rotate_key_secret(
+        &self,
+        new_key: Zeroizing<[u8; 32]>,
+        new_key_id: String,
+    ) -> Result<()> {
         let mut kms_guard = self.kms.lock().await;
         let mut storage = self.storage.lock().await;
 
@@ -187,9 +214,12 @@ impl SessionVault for LocalSessionVault {
 
         // 2. Stage and activate the new key. Duplicate IDs are rejected so
         // existing key material can never be overwritten mid-rotation.
-        kms_guard.stage_key_rotation(new_key, new_key_id.clone())?;
+        let rotation_adapter = kms_guard
+            .atomic_rotation()
+            .context("KMS adapter does not support atomic key rotation")?;
+        rotation_adapter.stage_key_rotation(new_key, new_key_id.clone())?;
         let mut rotation =
-            KeyRotationGuard::new(kms_guard.as_mut(), old_current_key_id, new_key_id.clone());
+            KeyRotationGuard::new(rotation_adapter, old_current_key_id, new_key_id.clone());
 
         // 3. Build the complete replacement map before committing any entry.
         let mut reencrypted = HashMap::with_capacity(decrypted_items.len());
@@ -297,6 +327,12 @@ impl KmsAdapter for SoftwareKms {
         }
     }
 
+    fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+        Some(self)
+    }
+}
+
+impl AtomicKmsRotation for SoftwareKms {
     fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
         if self.keys.contains_key(&key_id) {
             anyhow::bail!("Key ID already exists: {key_id}");
@@ -394,6 +430,12 @@ mod tests {
             self.inner.add_key(key, key_id, make_current);
         }
 
+        fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+            Some(self)
+        }
+    }
+
+    impl AtomicKmsRotation for PendingOnRotatedKeyKms {
         fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
             self.inner.stage_key_rotation(key, key_id)
         }
@@ -426,6 +468,12 @@ mod tests {
             self.inner.add_key(key, key_id, make_current);
         }
 
+        fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+            Some(self)
+        }
+    }
+
+    impl AtomicKmsRotation for FailOnRetireKms {
         fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
             self.inner.stage_key_rotation(key, key_id)
         }
@@ -466,6 +514,12 @@ mod tests {
             self.inner.add_key(key, key_id, make_current);
         }
 
+        fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+            Some(self)
+        }
+    }
+
+    impl AtomicKmsRotation for FailOnEncryptKms {
         fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
             self.inner.stage_key_rotation(key, key_id)
         }

@@ -2,7 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 
-use core_runtime::{BrowserClient, KmsAdapter, LocalSessionVault, SessionVault, SoftwareKms};
+use core_runtime::{
+    AtomicKmsRotation, BrowserClient, KmsAdapter, LocalSessionVault, SessionVault, SoftwareKms,
+};
 
 #[tokio::test]
 async fn test_session_management_cross_domain_save_restore() -> anyhow::Result<()> {
@@ -217,6 +219,12 @@ impl KmsAdapter for RecordingKms {
         self.inner.add_key(key, key_id, make_current);
     }
 
+    fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+        Some(self)
+    }
+}
+
+impl AtomicKmsRotation for RecordingKms {
     fn stage_key_rotation(
         &mut self,
         key: zeroize::Zeroizing<[u8; 32]>,
