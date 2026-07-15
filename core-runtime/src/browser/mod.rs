@@ -927,12 +927,12 @@ impl PageSession {
 
     /// Approve the latest pending policy request.
     pub fn approve_pending_policy_action(&self) -> Result<()> {
-        let mut guard = self
+        let guard = self
             .policy_approvals
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
 
-        let Some(request) = guard.pending.take() else {
+        let Some(request) = guard.pending.clone() else {
             anyhow::bail!("No pending policy approval request");
         };
 
@@ -952,6 +952,10 @@ impl PageSession {
             .policy_approvals
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
+        if guard.pending.as_ref() != Some(&request) {
+            anyhow::bail!("Pending policy approval request changed before commit");
+        }
+        guard.pending = None;
         guard.granted.push(GrantedPolicyApproval {
             request,
             granted_navigation_epoch,

@@ -9,13 +9,17 @@
 use anyhow::{Context, Result};
 use core_runtime::OutcomeProjection;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::lock::Decision;
+
+const MAX_RECENT_AUDIT_RECORDS: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,14 +53,30 @@ pub struct AuditRecord {
 /// `fsync`s before returning, so a crash never leaves a torn or missing entry.
 pub struct BridgeAuditTrail {
     path: PathBuf,
-    write_lock: Mutex<()>,
+    state: Mutex<AuditState>,
+}
+
+#[derive(Default)]
+struct AuditState {
+    initialized: bool,
+    persistent_index: bool,
+    recent_records: VecDeque<AuditRecord>,
+}
+
+impl AuditState {
+    fn remember(&mut self, record: AuditRecord) {
+        self.recent_records.push_back(record);
+        while self.recent_records.len() > MAX_RECENT_AUDIT_RECORDS {
+            self.recent_records.pop_front();
+        }
+    }
 }
 
 impl BridgeAuditTrail {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
-            write_lock: Mutex::new(()),
+            state: Mutex::new(AuditState::default()),
         }
     }
 
@@ -64,19 +84,172 @@ impl BridgeAuditTrail {
         &self.path
     }
 
+    fn index_dir(&self) -> PathBuf {
+        PathBuf::from(format!("{}.index", self.path.to_string_lossy()))
+    }
+
+    fn index_path(&self, id: Uuid) -> PathBuf {
+        self.index_dir().join(format!("{id}.sha256"))
+    }
+
+    fn record_digest(record: &AuditRecord) -> Result<String> {
+        let bytes =
+            serde_json::to_vec(record).context("failed to serialize audit record digest")?;
+        Ok(hex::encode(Sha256::digest(bytes)))
+    }
+
+    fn prepare_locked(&self, state: &mut AuditState) -> Result<()> {
+        if state.initialized {
+            return Ok(());
+        }
+
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.is_dir() {
+                anyhow::bail!(
+                    "audit trail parent directory does not exist: {}",
+                    parent.display()
+                );
+            }
+        }
+        state.persistent_index = match std::fs::create_dir_all(self.index_dir()) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "persistent HITL audit index unavailable; using on-disk scan fallback"
+                );
+                false
+            }
+        };
+        let file = match std::fs::File::open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                state.initialized = true;
+                return Ok(());
+            }
+            Err(error) => return Err(error).context("failed to open audit trail for indexing"),
+        };
+        for existing_line in BufReader::new(file).lines() {
+            let existing_line = existing_line.context("failed to inspect audit trail")?;
+            if existing_line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<AuditRecord>(&existing_line) {
+                Ok(existing) => {
+                    if state.persistent_index {
+                        let bytes = Self::record_digest(&existing)?;
+                        if let Err(error) = std::fs::write(self.index_path(existing.id), bytes) {
+                            tracing::warn!(
+                                %error,
+                                "persistent HITL audit index became unavailable; using scan fallback"
+                            );
+                            state.persistent_index = false;
+                        }
+                    }
+                    state.remember(existing);
+                }
+                Err(error) => tracing::warn!(
+                    %error,
+                    "ignoring malformed historical HITL audit record"
+                ),
+            }
+        }
+        state.initialized = true;
+        Ok(())
+    }
+
+    /// Prepares the persistent request-ID index before gateway mutation.
+    pub fn prepare(&self) -> Result<()> {
+        let mut state = self.state.lock().expect("audit trail mutex poisoned");
+        self.prepare_locked(&mut state)
+    }
+
+    fn find_record_in_history(&self, id: Uuid) -> Result<Option<AuditRecord>> {
+        let file = match std::fs::File::open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("failed to search audit trail"),
+        };
+        for line in BufReader::new(file).lines() {
+            let line = line.context("failed to search audit trail")?;
+            if let Ok(record) = serde_json::from_str::<AuditRecord>(&line) {
+                if record.id == id {
+                    return Ok(Some(record));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Append `record` as a single NDJSON line, fsync'd before returning.
+    /// Replaying the same request ID with an identical record is idempotent;
+    /// reusing an ID for different decision data is rejected.
     pub fn record(&self, record: &AuditRecord) -> Result<()> {
         let line = serde_json::to_string(record).context("failed to serialize audit record")?;
 
-        let _guard = self.write_lock.lock().expect("audit trail mutex poisoned");
+        let mut state = self.state.lock().expect("audit trail mutex poisoned");
+        self.prepare_locked(&mut state)?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)
             .with_context(|| format!("failed to open audit trail at {}", self.path.display()))?;
 
+        let cached = state
+            .recent_records
+            .iter()
+            .find(|existing| existing.id == record.id)
+            .cloned();
+        let indexed_digest = if cached.is_none() && state.persistent_index {
+            match std::fs::read(self.index_path(record.id)) {
+                Ok(bytes) => {
+                    Some(String::from_utf8(bytes).context("failed to parse audit index digest")?)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error).context("failed to read audit index record"),
+            }
+        } else {
+            None
+        };
+        let scanned = if cached.is_none() && indexed_digest.is_none() && !state.persistent_index {
+            self.find_record_in_history(record.id)?
+        } else {
+            None
+        };
+        if let Some(existing) = cached.as_ref().or(scanned.as_ref()) {
+            if existing != record {
+                anyhow::bail!(
+                    "audit record {} conflicts with an existing decision",
+                    record.id
+                );
+            }
+            file.sync_all().context("failed to fsync audit trail")?;
+            return Ok(());
+        }
+        if let Some(existing_digest) = indexed_digest {
+            if existing_digest != Self::record_digest(record)? {
+                anyhow::bail!(
+                    "audit record {} conflicts with an existing decision",
+                    record.id
+                );
+            }
+            file.sync_all().context("failed to fsync audit trail")?;
+            return Ok(());
+        }
+
         writeln!(file, "{line}").context("failed to write audit record")?;
+        state.remember(record.clone());
         file.sync_all().context("failed to fsync audit trail")?;
+        if state.persistent_index {
+            let bytes = Self::record_digest(record)?;
+            if let Err(error) = std::fs::write(self.index_path(record.id), bytes) {
+                tracing::warn!(
+                    %error,
+                    "persistent HITL audit index became unavailable; using scan fallback"
+                );
+                state.persistent_index = false;
+            }
+        }
         Ok(())
     }
 
@@ -85,7 +258,7 @@ impl BridgeAuditTrail {
     /// Intended for tests and operator inspection — the bridge itself is
     /// write-only.
     pub fn read_all(&self) -> Result<Vec<AuditRecord>> {
-        let _guard = self.write_lock.lock().expect("audit trail mutex poisoned");
+        let _guard = self.state.lock().expect("audit trail mutex poisoned");
         let contents = match std::fs::read_to_string(&self.path) {
             Ok(contents) => contents,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -157,6 +330,92 @@ mod tests {
             assert!(parsed.get("decided_by").is_some());
             assert!(parsed.get("outcome_projection").is_some());
         }
+    }
+
+    #[test]
+    fn recording_the_same_decision_twice_is_idempotent() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("audit.ndjson");
+        let trail = BridgeAuditTrail::new(&path);
+        let record = sample_record(Uuid::new_v4(), AuditDecision::Approved);
+
+        trail.record(&record).expect("first record");
+        trail.record(&record).expect("idempotent retry");
+
+        assert_eq!(trail.read_all().expect("read audit trail"), vec![record]);
+    }
+
+    #[test]
+    fn malformed_history_does_not_block_new_audit_records() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("audit.ndjson");
+        std::fs::write(&path, "{truncated\n").expect("write malformed history");
+        let trail = BridgeAuditTrail::new(&path);
+        let record = sample_record(Uuid::new_v4(), AuditDecision::Approved);
+
+        trail
+            .record(&record)
+            .expect("malformed history must not block a new decision");
+
+        let contents = std::fs::read_to_string(path).expect("read audit trail");
+        assert_eq!(contents.lines().count(), 2);
+        assert_eq!(
+            serde_json::from_str::<AuditRecord>(contents.lines().nth(1).expect("new record"))
+                .expect("valid appended record"),
+            record
+        );
+    }
+
+    #[test]
+    fn in_memory_audit_index_is_bounded() {
+        let dir = tempdir().expect("tempdir");
+        let trail = BridgeAuditTrail::new(dir.path().join("audit.ndjson"));
+
+        for _ in 0..=MAX_RECENT_AUDIT_RECORDS {
+            trail
+                .record(&sample_record(Uuid::new_v4(), AuditDecision::Approved))
+                .expect("record");
+        }
+
+        assert_eq!(
+            trail
+                .state
+                .lock()
+                .expect("audit trail mutex")
+                .recent_records
+                .len(),
+            MAX_RECENT_AUDIT_RECORDS
+        );
+    }
+
+    #[test]
+    fn persistent_index_deduplicates_records_older_than_the_memory_window() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("audit.ndjson");
+        let first = sample_record(Uuid::new_v4(), AuditDecision::Approved);
+        let mut records = vec![first.clone()];
+        records.extend(
+            (0..MAX_RECENT_AUDIT_RECORDS)
+                .map(|_| sample_record(Uuid::new_v4(), AuditDecision::Approved)),
+        );
+        let contents = records
+            .iter()
+            .map(|record| serde_json::to_string(record).expect("serialize record"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&path, contents).expect("seed long audit trail");
+        let trail = BridgeAuditTrail::new(&path);
+
+        trail.record(&first).expect("old duplicate is idempotent");
+
+        assert_eq!(
+            std::fs::read_to_string(path)
+                .expect("read audit trail")
+                .lines()
+                .count(),
+            records.len()
+        );
     }
 
     #[test]

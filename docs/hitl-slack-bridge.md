@@ -20,9 +20,9 @@ PageSession (ask_human pending) ──poll──▶ Bridge ──notify──▶
                                              │              reviewer clicks Approve/Reject
                                              │                        │
                                              ▼                        ▼
-                                  SessionLockRegistry ◀── POST /slack/interactions
+                                  ResolutionRegistry ◀── POST /slack/interactions
                                              │
-                              (winner) ──▶ gateway.approve()/reject() ──▶ audit trail ──▶ chat update
+                    (owner / exact retry) ──▶ gateway.approve()/reject() ──▶ audit trail ──▶ chat update
 ```
 
 1. **Polling** (`Bridge::poll_once`, `bridge.rs`): on a fixed interval (default 1s),
@@ -36,10 +36,11 @@ PageSession (ask_human pending) ──poll──▶ Bridge ──notify──▶
    (≤5 minutes, matching Slack's documented recommendation). Verification fails
    closed — malformed, unsigned, stale, or mis-signed requests are rejected (`401`)
    before any gateway/lock/audit state is touched.
-3. **Resolution** (`Bridge::resolve`): enforces a strict order — **claim the
-   session-level lock → mutate the gateway (approve/reject) → write the audit
-   record → update the chat message**. A lock loss never leaves a partial mutation;
-   a lock win is always durably recorded before the chat message changes.
+3. **Resolution** (`Bridge::resolve`): enforces resumable phases — **claim the
+   request → mutate the gateway (approve/reject) → write the audit record → update
+   the chat message**. The first reviewer and decision own the request. If a phase
+   fails, only that exact reviewer/decision pair may retry, starting at the first
+   incomplete phase; competing decisions never repeat an earlier side effect.
 
 ## Message format
 
@@ -68,21 +69,22 @@ Once resolved, the original message is replaced (`chat.update`) with a static
 
 ## Session-lock / "first decision wins" semantics
 
-`SessionLockRegistry` (`lock.rs`) is a `Mutex<HashMap<Uuid, Claim>>`. `try_claim`
-atomically checks-and-sets: the first caller for a given request ID wins
-(`ClaimOutcome::Won`) and proceeds to mutate the gateway, write the audit record, and
-update chat; every subsequent caller for the same ID loses (`ClaimOutcome::LostTo {
-decided_by, decision }`) and is told who already resolved it and what they decided —
-no gateway, audit, or notifier mutation happens on the losing path. This is what
+`Bridge` keeps a per-request `ResolutionProgress` behind a mutex. Creating the entry
+atomically claims the request for one `(decided_by, decision)` pair. A competing pair
+is told who already resolved it and cannot touch the gateway, audit trail, or chat.
+The owning pair may retry an incomplete `gateway_applied`, `audited`, or
+`chat_updated` phase; completed phases are skipped. The registry is capped at 1,024
+entries. Completed history is evicted oldest-first, while a registry full of
+unrepaired failures rejects new claims instead of growing without bound. This is what
 `tests/bridge_flow.rs::concurrent_resolutions_of_the_same_request_apply_exactly_once`
-verifies: four reviewers race to resolve the same request and exactly one mutation,
-one audit record, and one chat update occur.
+and the fail-once phase tests in `bridge.rs` verify.
 
 ## Audit trail format
 
 `BridgeAuditTrail` (`audit.rs`) is an append-only NDJSON log — one immutable JSON
-record per line, opened in append mode and `fsync`'d on every write so a crash never
-leaves a torn or missing entry:
+record per line, opened in append mode and `fsync`'d before a write reports success.
+An identical retry for an existing request ID is idempotent; conflicting decision
+data for the same ID is rejected:
 
 ```json
 {"id":"5b1b...","decision":"approved","decided_by":"alice","decided_at_ms":1717740000000,"outcome_projection":{"projected_amount":900.5,"risk_level":"high"}}
@@ -143,10 +145,11 @@ curl -s -o /dev/null -w '%{http_code}\n' \
   http://localhost:8787/slack/interactions
 ```
 
-A `200` indicates the bridge claimed the lock, mutated the gateway, wrote an audit
-record, and updated the chat message; a `409` indicates the lock was already claimed
-by another reviewer; a `401`/`400` indicates signature verification or payload
-parsing failed (check the bridge's `tracing` logs for the rejection reason).
+A `200` indicates all resolution phases completed. A `409` indicates either that a
+different reviewer/decision owns the request or that the owning decision hit a
+retryable gateway, audit, or chat-update failure; a `401`/`400` indicates signature
+verification or payload parsing failed (check the bridge's `tracing` logs for the
+rejection reason).
 
 ## Evaluation-bench exemption
 
