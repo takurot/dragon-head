@@ -1,8 +1,12 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
+use zeroize::Zeroizing;
 
 /// Encapsulates cookie data for storage and restoration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -43,6 +47,63 @@ pub trait KmsAdapter: Send + Sync {
 
     /// Adds a new key to the adapter.
     fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool);
+
+    /// Returns atomic rotation support when the adapter implements the full
+    /// stage/rollback/finalize contract.
+    fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+        None
+    }
+}
+
+/// Opt-in capability for KMS adapters that can rotate keys transactionally.
+pub trait AtomicKmsRotation: KmsAdapter {
+    /// Stages and activates a key for rotation without overwriting an existing
+    /// key ID.
+    fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()>;
+
+    /// Restores the pre-rotation state after a later phase fails.
+    fn rollback_key_rotation(&mut self, previous_key_id: &str, staged_key_id: &str);
+
+    /// Atomically retires superseded keys. If this returns an error, none of
+    /// the requested keys may have been removed.
+    fn finalize_key_rotation(&mut self, retired_key_ids: &[String]) -> Result<()>;
+}
+
+struct KeyRotationGuard<'a> {
+    kms: &'a mut dyn AtomicKmsRotation,
+    previous_key_id: String,
+    staged_key_id: String,
+    committed: bool,
+}
+
+impl<'a> KeyRotationGuard<'a> {
+    fn new(
+        kms: &'a mut dyn AtomicKmsRotation,
+        previous_key_id: String,
+        staged_key_id: String,
+    ) -> Self {
+        Self {
+            kms,
+            previous_key_id,
+            staged_key_id,
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self, retired_key_ids: &[String]) -> Result<()> {
+        self.kms.finalize_key_rotation(retired_key_ids)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for KeyRotationGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.kms
+                .rollback_key_rotation(&self.previous_key_id, &self.staged_key_id);
+        }
+    }
 }
 
 /// Trait for storing and loading encrypted session data.
@@ -56,6 +117,15 @@ pub trait SessionVault: Send + Sync {
 
     /// Rotates keys by re-encrypting all stored sessions with a new key.
     async fn rotate_key(&self, new_key: [u8; 32], new_key_id: String) -> Result<()>;
+
+    /// Rotation entry point for callers that already own zeroizing key bytes.
+    async fn rotate_key_secret(
+        &self,
+        new_key: Zeroizing<[u8; 32]>,
+        new_key_id: String,
+    ) -> Result<()> {
+        self.rotate_key(*new_key, new_key_id).await
+    }
 }
 
 type VaultStorage = HashMap<String, (Vec<u8>, String)>;
@@ -74,58 +144,104 @@ impl LocalSessionVault {
             storage: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+
+    /// Wraps raw key bytes before constructing the rotation future, so dropping
+    /// an unpolled future still wipes its pending key material.
+    pub fn rotate_key(
+        &self,
+        new_key: [u8; 32],
+        new_key_id: String,
+    ) -> impl std::future::Future<Output = Result<()>> + '_ {
+        <Self as SessionVault>::rotate_key_secret(self, Zeroizing::new(new_key), new_key_id)
+    }
 }
 
 #[async_trait]
 impl SessionVault for LocalSessionVault {
     async fn store_session(&self, session_id: &str, data: &SessionData) -> Result<()> {
-        let plaintext = serde_json::to_vec(data).context("Failed to serialize session data")?;
-        let (ciphertext, key_id) = {
-            let kms = self.kms.lock().await;
-            kms.encrypt(&plaintext).await?
-        };
+        let plaintext =
+            Zeroizing::new(serde_json::to_vec(data).context("Failed to serialize session data")?);
+        let kms = self.kms.lock().await;
+        let (ciphertext, key_id) = kms.encrypt(&plaintext).await?;
         let mut storage = self.storage.lock().await;
         storage.insert(session_id.to_string(), (ciphertext, key_id));
         Ok(())
     }
 
     async fn load_session(&self, session_id: &str) -> Result<Option<SessionData>> {
-        let entry = {
+        {
             let storage = self.storage.lock().await;
-            storage.get(session_id).cloned()
-        };
-
-        let (ciphertext, key_id) = match entry {
-            Some(e) => e,
+            if !storage.contains_key(session_id) {
+                return Ok(None);
+            }
+        }
+        let kms = self.kms.lock().await;
+        let storage = self.storage.lock().await;
+        let (ciphertext, key_id) = match storage.get(session_id) {
+            Some(entry) => entry,
             None => return Ok(None),
         };
 
-        let kms = self.kms.lock().await;
-        let plaintext = kms.decrypt(&ciphertext, &key_id).await?;
+        let plaintext = Zeroizing::new(kms.decrypt(ciphertext, key_id).await?);
         let data =
             serde_json::from_slice(&plaintext).context("Failed to deserialize session data")?;
         Ok(Some(data))
     }
 
     async fn rotate_key(&self, new_key: [u8; 32], new_key_id: String) -> Result<()> {
+        self.rotate_key_secret(Zeroizing::new(new_key), new_key_id)
+            .await
+    }
+
+    async fn rotate_key_secret(
+        &self,
+        new_key: Zeroizing<[u8; 32]>,
+        new_key_id: String,
+    ) -> Result<()> {
         let mut kms_guard = self.kms.lock().await;
         let mut storage = self.storage.lock().await;
 
-        // 1. Decrypt everything with current keys
+        let old_current_key_id = kms_guard.current_key_id();
+        let mut retired_key_ids = HashSet::from([old_current_key_id.clone()]);
+
+        // 1. Decrypt everything with current keys without mutating storage.
         let mut decrypted_items = Vec::with_capacity(storage.len());
         for (sid, (ct, kid)) in storage.iter() {
-            let pt = kms_guard.decrypt(ct, kid).await?;
-            decrypted_items.push((sid.clone(), pt));
+            let plaintext = Zeroizing::new(kms_guard.decrypt(ct, kid).await?);
+            retired_key_ids.insert(kid.clone());
+            decrypted_items.push((sid.clone(), plaintext));
         }
 
-        // 2. Add new key and make it current
-        kms_guard.add_key(new_key, new_key_id, true);
+        // 2. Stage and activate the new key. Duplicate IDs are rejected so
+        // existing key material can never be overwritten mid-rotation.
+        let rotation_adapter = kms_guard
+            .atomic_rotation()
+            .context("KMS adapter does not support atomic key rotation")?;
+        rotation_adapter.stage_key_rotation(new_key, new_key_id.clone())?;
+        let mut rotation =
+            KeyRotationGuard::new(rotation_adapter, old_current_key_id, new_key_id.clone());
 
-        // 3. Re-encrypt everything with the NEW current key
+        // 3. Build the complete replacement map before committing any entry.
+        let mut reencrypted = HashMap::with_capacity(decrypted_items.len());
         for (sid, pt) in decrypted_items {
-            let (ct, kid) = kms_guard.encrypt(&pt).await?;
-            storage.insert(sid, (ct, kid));
+            let encrypted = rotation.kms.encrypt(&pt).await;
+            let (ciphertext, key_id) = match encrypted {
+                Ok(encrypted) => encrypted,
+                Err(err) => return Err(err).context("Failed to re-encrypt stored sessions"),
+            };
+            reencrypted.insert(sid, (ciphertext, key_id));
         }
+
+        // 4. Retire superseded keys atomically before the infallible storage
+        // swap, so an error cannot expose a partially committed rotation.
+        let retired_key_ids: Vec<String> = retired_key_ids
+            .into_iter()
+            .filter(|key_id| key_id != &new_key_id)
+            .collect();
+        rotation
+            .commit(&retired_key_ids)
+            .context("Failed to retire superseded session keys")?;
+        *storage = reencrypted;
 
         Ok(())
     }
@@ -133,7 +249,7 @@ impl SessionVault for LocalSessionVault {
 
 /// Software-based KMS implementation using local keys.
 pub struct SoftwareKms {
-    keys: HashMap<String, [u8; 32]>,
+    keys: HashMap<String, Zeroizing<[u8; 32]>>,
     current_key_id: String,
 }
 
@@ -141,7 +257,7 @@ impl SoftwareKms {
     /// Creates a new SoftwareKms with an initial key.
     pub fn new(key: [u8; 32], key_id: String) -> Self {
         let mut keys = HashMap::new();
-        keys.insert(key_id.clone(), key);
+        keys.insert(key_id.clone(), Zeroizing::new(key));
         Self {
             keys,
             current_key_id: key_id,
@@ -162,7 +278,8 @@ impl KmsAdapter for SoftwareKms {
             .keys
             .get(&self.current_key_id)
             .context("Current key not found")?;
-        let cipher = Aes256Gcm::new(key.into());
+        let cipher = Aes256Gcm::new_from_slice(key.as_ref())
+            .expect("SoftwareKms always stores 32-byte AES-256 keys");
         let mut nonce_bytes = [0u8; 12];
         rand::rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
@@ -188,7 +305,8 @@ impl KmsAdapter for SoftwareKms {
             anyhow::bail!("Invalid ciphertext length");
         }
 
-        let cipher = Aes256Gcm::new(key.into());
+        let cipher = Aes256Gcm::new_from_slice(key.as_ref())
+            .expect("SoftwareKms always stores 32-byte AES-256 keys");
         let nonce = Nonce::from_slice(&ciphertext[..12]);
         let ciphertext = &ciphertext[12..];
 
@@ -202,16 +320,227 @@ impl KmsAdapter for SoftwareKms {
     }
 
     fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
+        let key = Zeroizing::new(key);
         self.keys.insert(key_id.clone(), key);
         if make_current {
             self.current_key_id = key_id;
         }
+    }
+
+    fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+        Some(self)
+    }
+}
+
+impl AtomicKmsRotation for SoftwareKms {
+    fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
+        if self.keys.contains_key(&key_id) {
+            anyhow::bail!("Key ID already exists: {key_id}");
+        }
+        self.keys.insert(key_id.clone(), key);
+        self.current_key_id = key_id;
+        Ok(())
+    }
+
+    fn rollback_key_rotation(&mut self, previous_key_id: &str, staged_key_id: &str) {
+        if self.keys.contains_key(previous_key_id) {
+            self.current_key_id = previous_key_id.to_string();
+        }
+        self.keys.remove(staged_key_id);
+    }
+
+    fn finalize_key_rotation(&mut self, key_ids: &[String]) -> Result<()> {
+        for key_id in key_ids {
+            if self.current_key_id == *key_id {
+                anyhow::bail!("Cannot remove the current key: {key_id}");
+            }
+            if !self.keys.contains_key(key_id) {
+                anyhow::bail!("Key not found: {key_id}");
+            }
+        }
+        for key_id in key_ids {
+            self.keys.remove(key_id);
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct FailOnEncryptKms {
+        inner: SoftwareKms,
+        encrypt_calls: AtomicUsize,
+        fail_on_call: usize,
+    }
+
+    struct FailOnRetireKms {
+        inner: SoftwareKms,
+        fail_once: bool,
+    }
+
+    struct PendingOnRotatedKeyKms {
+        inner: SoftwareKms,
+    }
+
+    struct LegacyKms {
+        inner: SoftwareKms,
+    }
+
+    #[async_trait]
+    impl KmsAdapter for LegacyKms {
+        async fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, String)> {
+            self.inner.encrypt(plaintext).await
+        }
+
+        async fn decrypt(&self, ciphertext: &[u8], key_id: &str) -> Result<Vec<u8>> {
+            self.inner.decrypt(ciphertext, key_id).await
+        }
+
+        fn current_key_id(&self) -> String {
+            self.inner.current_key_id()
+        }
+
+        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
+            self.inner.add_key(key, key_id, make_current);
+        }
+    }
+
+    #[async_trait]
+    impl KmsAdapter for PendingOnRotatedKeyKms {
+        async fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, String)> {
+            if self.inner.current_key_id() == "key-2" {
+                std::future::pending().await
+            } else {
+                self.inner.encrypt(plaintext).await
+            }
+        }
+
+        async fn decrypt(&self, ciphertext: &[u8], key_id: &str) -> Result<Vec<u8>> {
+            self.inner.decrypt(ciphertext, key_id).await
+        }
+
+        fn current_key_id(&self) -> String {
+            self.inner.current_key_id()
+        }
+
+        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
+            self.inner.add_key(key, key_id, make_current);
+        }
+
+        fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+            Some(self)
+        }
+    }
+
+    impl AtomicKmsRotation for PendingOnRotatedKeyKms {
+        fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
+            self.inner.stage_key_rotation(key, key_id)
+        }
+
+        fn rollback_key_rotation(&mut self, previous_key_id: &str, staged_key_id: &str) {
+            self.inner
+                .rollback_key_rotation(previous_key_id, staged_key_id);
+        }
+
+        fn finalize_key_rotation(&mut self, key_ids: &[String]) -> Result<()> {
+            self.inner.finalize_key_rotation(key_ids)
+        }
+    }
+
+    #[async_trait]
+    impl KmsAdapter for FailOnRetireKms {
+        async fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, String)> {
+            self.inner.encrypt(plaintext).await
+        }
+
+        async fn decrypt(&self, ciphertext: &[u8], key_id: &str) -> Result<Vec<u8>> {
+            self.inner.decrypt(ciphertext, key_id).await
+        }
+
+        fn current_key_id(&self) -> String {
+            self.inner.current_key_id()
+        }
+
+        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
+            self.inner.add_key(key, key_id, make_current);
+        }
+
+        fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+            Some(self)
+        }
+    }
+
+    impl AtomicKmsRotation for FailOnRetireKms {
+        fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
+            self.inner.stage_key_rotation(key, key_id)
+        }
+
+        fn rollback_key_rotation(&mut self, previous_key_id: &str, staged_key_id: &str) {
+            self.inner
+                .rollback_key_rotation(previous_key_id, staged_key_id);
+        }
+
+        fn finalize_key_rotation(&mut self, key_ids: &[String]) -> Result<()> {
+            if self.fail_once {
+                self.fail_once = false;
+                anyhow::bail!("injected key retirement failure");
+            }
+            self.inner.finalize_key_rotation(key_ids)
+        }
+    }
+
+    #[async_trait]
+    impl KmsAdapter for FailOnEncryptKms {
+        async fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, String)> {
+            let call = self.encrypt_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == self.fail_on_call {
+                anyhow::bail!("injected encryption failure");
+            }
+            self.inner.encrypt(plaintext).await
+        }
+
+        async fn decrypt(&self, ciphertext: &[u8], key_id: &str) -> Result<Vec<u8>> {
+            self.inner.decrypt(ciphertext, key_id).await
+        }
+
+        fn current_key_id(&self) -> String {
+            self.inner.current_key_id()
+        }
+
+        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
+            self.inner.add_key(key, key_id, make_current);
+        }
+
+        fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
+            Some(self)
+        }
+    }
+
+    impl AtomicKmsRotation for FailOnEncryptKms {
+        fn stage_key_rotation(&mut self, key: Zeroizing<[u8; 32]>, key_id: String) -> Result<()> {
+            self.inner.stage_key_rotation(key, key_id)
+        }
+
+        fn rollback_key_rotation(&mut self, previous_key_id: &str, staged_key_id: &str) {
+            self.inner
+                .rollback_key_rotation(previous_key_id, staged_key_id);
+        }
+
+        fn finalize_key_rotation(&mut self, key_ids: &[String]) -> Result<()> {
+            self.inner.finalize_key_rotation(key_ids)
+        }
+    }
+
+    fn sample_session(domain: &str) -> SessionData {
+        SessionData {
+            domain: domain.to_string(),
+            cookies: Vec::new(),
+            tokens: HashMap::new(),
+        }
+    }
 
     #[tokio::test]
     async fn test_local_session_vault_roundtrip() -> Result<()> {
@@ -279,6 +608,13 @@ mod tests {
 
         // Store with key1
         vault.store_session(session_id, &data).await?;
+        let (old_ciphertext, old_key_id) = vault
+            .storage
+            .lock()
+            .await
+            .get(session_id)
+            .cloned()
+            .expect("stored session");
 
         // Rotate to key2
         let key2 = [2u8; 32];
@@ -293,7 +629,132 @@ mod tests {
         let storage = vault.storage.lock().await;
         let (_, key_id) = storage.get(session_id).unwrap();
         assert_eq!(key_id, "key-2");
+        drop(storage);
 
+        let kms = vault.kms.lock().await;
+        assert!(
+            kms.decrypt(&old_ciphertext, &old_key_id).await.is_err(),
+            "the superseded key must be retired after every session is re-encrypted"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_key_rotation_retires_the_old_key_for_an_empty_vault() -> Result<()> {
+        let kms = Box::new(SoftwareKms::new([1u8; 32], "key-1".to_string()));
+        let vault = LocalSessionVault::new(kms);
+        let (old_ciphertext, old_key_id) = {
+            let kms = vault.kms.lock().await;
+            kms.encrypt(b"secret").await?
+        };
+
+        vault.rotate_key([2u8; 32], "key-2".to_string()).await?;
+
+        let kms = vault.kms.lock().await;
+        assert!(
+            kms.decrypt(&old_ciphertext, &old_key_id).await.is_err(),
+            "rotation must retire the previous current key even when storage is empty"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_failed_key_rotation_leaves_storage_and_current_key_unchanged() -> Result<()> {
+        let kms = Box::new(FailOnEncryptKms {
+            inner: SoftwareKms::new([1u8; 32], "key-1".to_string()),
+            encrypt_calls: AtomicUsize::new(0),
+            fail_on_call: 4,
+        });
+        let vault = LocalSessionVault::new(kms);
+        vault
+            .store_session("first", &sample_session("first.example"))
+            .await?;
+        vault
+            .store_session("second", &sample_session("second.example"))
+            .await?;
+        let storage_before = vault.storage.lock().await.clone();
+
+        let result = vault.rotate_key([2u8; 32], "key-2".to_string()).await;
+
+        assert!(
+            result.is_err(),
+            "the injected encryption failure must surface"
+        );
+        assert_eq!(
+            *vault.storage.lock().await,
+            storage_before,
+            "rotation must commit the re-encrypted map atomically"
+        );
+        assert_eq!(vault.kms.lock().await.current_key_id(), "key-1");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_failed_key_retirement_rolls_back_the_staged_rotation() -> Result<()> {
+        let kms = Box::new(FailOnRetireKms {
+            inner: SoftwareKms::new([1u8; 32], "key-1".to_string()),
+            fail_once: true,
+        });
+        let vault = LocalSessionVault::new(kms);
+        vault
+            .store_session("session", &sample_session("example.com"))
+            .await?;
+        let storage_before = vault.storage.lock().await.clone();
+
+        let result = vault.rotate_key([2u8; 32], "key-2".to_string()).await;
+
+        assert!(result.is_err(), "the retirement failure must surface");
+        assert_eq!(*vault.storage.lock().await, storage_before);
+        assert_eq!(vault.kms.lock().await.current_key_id(), "key-1");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_key_rotation_rolls_back_the_staged_key() -> Result<()> {
+        let kms = Box::new(PendingOnRotatedKeyKms {
+            inner: SoftwareKms::new([1u8; 32], "key-1".to_string()),
+        });
+        let vault = LocalSessionVault::new(kms);
+        let session = sample_session("example.com");
+        vault.store_session("session", &session).await?;
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            vault.rotate_key([2u8; 32], "key-2".to_string()),
+        )
+        .await;
+
+        assert!(result.is_err(), "rotation should be cancelled by timeout");
+        assert_eq!(vault.kms.lock().await.current_key_id(), "key-1");
+        assert_eq!(
+            vault
+                .load_session("session")
+                .await?
+                .expect("stored session")
+                .domain,
+            session.domain
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_legacy_kms_adapter_rejects_rotation_without_mutating_state() -> Result<()> {
+        let kms = Box::new(LegacyKms {
+            inner: SoftwareKms::new([1u8; 32], "key-1".to_string()),
+        });
+        let vault = LocalSessionVault::new(kms);
+
+        let error = vault
+            .rotate_key([2u8; 32], "key-2".to_string())
+            .await
+            .expect_err("legacy adapters must fail closed");
+
+        assert!(error.to_string().contains("does not support"));
+        assert_eq!(vault.kms.lock().await.current_key_id(), "key-1");
         Ok(())
     }
 }

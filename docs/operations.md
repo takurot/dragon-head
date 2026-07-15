@@ -142,10 +142,14 @@ Operational rules:
    the session ID.
 4. For integrations that need durable storage, provide an explicit
    `SessionVault` implementation and a KMS-backed `KmsAdapter`; do not rely on
-   the default in-memory vault.
+   the default in-memory vault. Adapters that support vault-managed rotation
+   must implement `AtomicKmsRotation` and return it from `atomic_rotation`;
+   adapters without that capability fail closed instead of retaining old keys.
 5. Rotate keys by calling `rotate_key(new_key, new_key_id)` on the vault
-   implementation. Verify that existing sessions still load before retiring
-   the previous key material.
+   implementation. New generic vault integrations should prefer
+   `rotate_key_secret` so pending key bytes remain zeroizing even if the future
+   is cancelled. Verify that existing sessions still load before retiring the
+   previous key material.
 6. After suspected key exposure, stop the MCP client, revoke the affected
    website sessions upstream, rotate vault keys, and restart the client.
 

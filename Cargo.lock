@@ -474,6 +474,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "wat",
+ "zeroize",
 ]
 
 [[package]]
