@@ -295,10 +295,15 @@ impl PluginHost {
     /// callers from both compiling the same module (expensive, redundant work).
     fn get_or_compile_module(&self, wasm_bytes: &[u8]) -> Result<Arc<Module>, PluginError> {
         let cache_key = hex::encode(Sha256::digest(wasm_bytes));
-        let mut cache = self
-            .module_cache
-            .lock()
-            .expect("module cache lock poisoned");
+        let mut cache = match self.module_cache.lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => {
+                let mut cache = poisoned.into_inner();
+                cache.clear();
+                self.module_cache.clear_poison();
+                cache
+            }
+        };
 
         if let Some(module) = cache.get(&cache_key) {
             return Ok(Arc::clone(module));
@@ -689,4 +694,30 @@ fn validate_sbom(sbom: &SbomDocument) -> Result<(), PluginError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn poisoned_module_cache_is_rebuilt_and_remains_usable() {
+        let host = PluginHost::default();
+        let wasm = wat::parse_str("(module)").unwrap();
+        let original = host.get_or_compile_module(&wasm).unwrap();
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = host.module_cache.lock().unwrap();
+            panic!("poison module cache");
+        }));
+        assert!(panic.is_err());
+        assert!(host.module_cache.is_poisoned());
+
+        let rebuilt = host.get_or_compile_module(&wasm).unwrap();
+        assert!(!Arc::ptr_eq(&original, &rebuilt));
+        assert!(!host.module_cache.is_poisoned());
+
+        let cached = host.get_or_compile_module(&wasm).unwrap();
+        assert!(Arc::ptr_eq(&rebuilt, &cached));
+    }
 }

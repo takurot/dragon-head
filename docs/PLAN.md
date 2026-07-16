@@ -143,6 +143,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - Exit Criteria
   - [x] プラグイン起動時間が 1ms 以下に短縮。
 
+> **Follow-up (ISSUE-209)**: `RollingFileSink`、Wasm module cache、
+> `SpeculativeEngine` の mutex poison をサブシステム別に安全回復する。
+> 監査書き込みは当該イベントを明示エラーにして新規ファイルへ切り替え、
+> disposable cache は再構築し、予測状態は cold reset して通常 capture へフォールバックする。
+
 ### PR-27: Unified PII Redactor Utility
 - Status: `DONE`
 - Spec Ref: Section 3.4, ISSUE-08, ISSUE-17
