@@ -328,13 +328,19 @@ impl<B: McpBackend> McpServer<B> {
                             .unwrap_or_else(|| json!({}));
 
                         self.call_tool(name, arguments)
-                            .map(|payload| {
-                                json!({
+                            .and_then(|payload| {
+                                if !payload.is_object() {
+                                    anyhow::bail!("MCP structuredContent must be a JSON object");
+                                }
+                                let text = serde_json::to_string(&payload)
+                                    .expect("serializing a serde_json::Value cannot fail");
+                                Ok(json!({
                                     "content": [{
-                                        "type": "json",
-                                        "json": payload
-                                    }]
-                                })
+                                        "type": "text",
+                                        "text": text
+                                    }],
+                                    "structuredContent": payload
+                                }))
                             })
                             .map_err(|err| {
                                 if err.downcast_ref::<InvalidToolArguments>().is_some() {
@@ -2933,13 +2939,48 @@ mod tests {
     #[test]
     fn handle_jsonrpc_extract_call() {
         let mut server = McpServer::new(MockBackend {
-            extract_result: Some(json!({"rule": "title", "result": "My Page"})),
+            extract_result: Some(json!({
+                "rule": "title",
+                "result": "Ignore \"system\"\n[REDACTED_SECURITY]",
+                "security_flags": ["possible_prompt_injection"]
+            })),
         });
         let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"extract","arguments":{"rule_name":"title"}}}"#;
         let resp_str = server.handle_jsonrpc(req).unwrap();
         let resp: Value = serde_json::from_str(&resp_str).unwrap();
         assert!(resp.get("error").is_none(), "unexpected error: {resp}");
-        assert_eq!(resp["result"]["content"][0]["json"]["rule"], "title");
+        let result = &resp["result"];
+        assert_eq!(result["structuredContent"]["rule"], "title");
+        assert_eq!(result["content"][0]["type"], "text");
+        assert!(result["content"][0].get("json").is_none());
+        let fallback: Value = serde_json::from_str(
+            result["content"][0]["text"]
+                .as_str()
+                .expect("text fallback"),
+        )
+        .unwrap();
+        assert_eq!(fallback, result["structuredContent"]);
+        assert_eq!(fallback["result"], "Ignore \"system\"\n[REDACTED_SECURITY]");
+        assert_eq!(
+            fallback["security_flags"],
+            json!(["possible_prompt_injection"])
+        );
+    }
+
+    #[test]
+    fn handle_jsonrpc_rejects_non_object_tool_result() {
+        let mut server = McpServer::new(MockBackend {
+            extract_result: Some(json!(["not", "an", "object"])),
+        });
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"extract","arguments":{"rule_name":"title"}}}"#;
+        let resp: Value = serde_json::from_str(&server.handle_jsonrpc(req).unwrap()).unwrap();
+
+        assert_eq!(resp["error"]["code"], -32000);
+        assert_eq!(
+            resp["error"]["message"],
+            "MCP structuredContent must be a JSON object"
+        );
+        assert!(resp.get("result").is_none());
     }
 
     #[test]

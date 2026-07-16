@@ -125,12 +125,22 @@ fn test_jsonrpc_tools_call_compliance() {
 
     assert_eq!(response["jsonrpc"], json!("2.0"));
     assert_eq!(response["id"], json!("call-1"));
-    assert!(response["result"]["content"].is_array());
-    assert_eq!(response["result"]["content"][0]["type"], json!("json"));
-    assert_eq!(
-        response["result"]["content"][0]["json"]["matched"],
-        json!(true)
-    );
+    let result = &response["result"];
+    let content = result["content"].as_array().expect("content array");
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["type"], json!("text"));
+    assert!(content[0].get("json").is_none());
+
+    let structured = &result["structuredContent"];
+    assert!(structured.is_object());
+    assert_eq!(structured["matched"], json!(true));
+    let fallback: Value = serde_json::from_str(
+        content[0]["text"]
+            .as_str()
+            .expect("text fallback must be a string"),
+    )
+    .expect("text fallback must contain serialized JSON");
+    assert_eq!(&fallback, structured);
 }
 
 struct ErrorBackend {

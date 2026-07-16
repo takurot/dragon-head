@@ -363,8 +363,15 @@ fn test_delta_via_jsonrpc_returns_correct_shape() -> Result<()> {
     let response: Value = serde_json::from_str(&response_str).unwrap();
 
     assert!(response["error"].is_null(), "no error expected");
-    let payload = &response["result"]["content"][0]["json"];
+    let payload = &response["result"]["structuredContent"];
     assert_eq!(payload["type"], json!("delta"));
+
+    let fallback: Value = serde_json::from_str(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text fallback"),
+    )?;
+    assert_eq!(&fallback, payload);
 
     Ok(())
 }

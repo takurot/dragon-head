@@ -123,8 +123,11 @@ fn protocol_tools_call_get_usage_report() {
     let resp: Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 3);
     let content = &resp["result"]["content"][0];
-    assert_eq!(content["type"], "json");
-    let json_content = &content["json"];
+    assert_eq!(content["type"], "text");
+    assert!(content.get("json").is_none());
+    let json_content = &resp["result"]["structuredContent"];
+    let fallback: Value = serde_json::from_str(content["text"].as_str().unwrap()).unwrap();
+    assert_eq!(&fallback, json_content);
     assert!(json_content["plan_tier"].is_string());
     assert!(json_content["state_generations"].is_object());
     assert!(json_content["actions_executed"].is_number());
@@ -426,8 +429,11 @@ fn test_mcp_binary_full_handshake_and_tools_call() -> anyhow::Result<()> {
 
     assert_eq!(response["id"], 3);
     let content = &response["result"]["content"][0];
-    assert_eq!(content["type"], "json");
-    let json_content = &content["json"];
+    assert_eq!(content["type"], "text");
+    assert!(content.get("json").is_none());
+    let json_content = &response["result"]["structuredContent"];
+    let fallback: Value = serde_json::from_str(content["text"].as_str().unwrap()).unwrap();
+    assert_eq!(&fallback, json_content);
     assert!(json_content["plan_tier"].is_string());
     assert!(json_content["state_generations"].is_object());
     assert!(json_content["actions_executed"].is_number());
