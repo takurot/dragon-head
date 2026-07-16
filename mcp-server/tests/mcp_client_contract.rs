@@ -2,6 +2,7 @@ use anyhow::Result;
 use json_patch::diff;
 use mcp_server::{McpBackend, McpServer};
 use serde_json::{json, Value};
+use std::{fs, path::Path};
 
 #[derive(Default)]
 struct MockBackend;
@@ -214,6 +215,56 @@ fn make_full_state(url: &str) -> Value {
     })
 }
 
+fn example_payload(file_name: &str) -> Result<Value> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../examples/mcp_examples")
+        .join(file_name);
+    let response: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+    Ok(response["result"]["structuredContent"].clone())
+}
+
+#[test]
+fn delta_response_examples_match_actual_tool_outputs() -> Result<()> {
+    use mcp_server::PlanTier;
+
+    let initial = example_payload("get_state_response.json")?;
+
+    let mut server = McpServer::new_with_plan(
+        SemanticMockBackend::with_states(vec![initial.clone()]),
+        PlanTier::Pro,
+    );
+    assert_eq!(
+        server.call_tool("get_state", json!({"delivery": "delta"}))?,
+        example_payload("get_state_delta_first_response.json")?
+    );
+
+    let mut server = McpServer::new_with_plan(
+        SemanticMockBackend::with_states(vec![initial.clone(), initial.clone()]),
+        PlanTier::Pro,
+    );
+    server.call_tool("get_state", json!({"delivery": "delta"}))?;
+    assert_eq!(
+        server.call_tool("get_state", json!({"delivery": "delta"}))?,
+        example_payload("get_state_delta_no_change_response.json")?
+    );
+
+    let mut changed = initial.clone();
+    changed["metadata"]["state_hash"] =
+        json!("c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4");
+    changed["interactive_elements"][1]["attributes"]["disabled"] = json!(true);
+    let mut server = McpServer::new_with_plan(
+        SemanticMockBackend::with_states(vec![initial, changed]),
+        PlanTier::Pro,
+    );
+    server.call_tool("get_state", json!({"delivery": "delta"}))?;
+    assert_eq!(
+        server.call_tool("get_state", json!({"delivery": "delta"}))?,
+        example_payload("get_state_delta_response.json")?
+    );
+
+    Ok(())
+}
+
 /// First call with delta delivery when no previous state exists returns full state
 /// with a `no_previous_state` hint.
 #[test]
@@ -363,8 +414,15 @@ fn test_delta_via_jsonrpc_returns_correct_shape() -> Result<()> {
     let response: Value = serde_json::from_str(&response_str).unwrap();
 
     assert!(response["error"].is_null(), "no error expected");
-    let payload = &response["result"]["content"][0]["json"];
+    let payload = &response["result"]["structuredContent"];
     assert_eq!(payload["type"], json!("delta"));
+
+    let fallback: Value = serde_json::from_str(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text fallback"),
+    )?;
+    assert_eq!(&fallback, payload);
 
     Ok(())
 }

@@ -485,6 +485,10 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - Exit Criteria
   - [x] 仕様ツール群を外部クライアントから一貫利用できる。
 
+> **Follow-up (ISSUE-204)**: `tools/call` の成功結果を MCP 標準の
+> `structuredContent` と JSON を直列化した `text` content block の組み合わせへ修正し、
+> strict client との相互運用性と後方互換 fallback の一致を契約テストで固定する。
+
 ### PR-15: NFR Benchmark & Capacity Validation
 - Status: `DONE` (Local)
 - Spec Ref: Section 6

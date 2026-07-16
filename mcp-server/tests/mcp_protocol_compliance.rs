@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use mcp_server::{McpBackend, McpServer, PlanTier};
 use serde_json::{json, Value};
+use std::{fs, path::Path};
 
 #[derive(Default)]
 struct MockBackend;
@@ -125,12 +126,22 @@ fn test_jsonrpc_tools_call_compliance() {
 
     assert_eq!(response["jsonrpc"], json!("2.0"));
     assert_eq!(response["id"], json!("call-1"));
-    assert!(response["result"]["content"].is_array());
-    assert_eq!(response["result"]["content"][0]["type"], json!("json"));
-    assert_eq!(
-        response["result"]["content"][0]["json"]["matched"],
-        json!(true)
-    );
+    let result = &response["result"];
+    let content = result["content"].as_array().expect("content array");
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["type"], json!("text"));
+    assert!(content[0].get("json").is_none());
+
+    let structured = &result["structuredContent"];
+    assert!(structured.is_object());
+    assert_eq!(structured["matched"], json!(true));
+    let fallback: Value = serde_json::from_str(
+        content[0]["text"]
+            .as_str()
+            .expect("text fallback must be a string"),
+    )
+    .expect("text fallback must contain serialized JSON");
+    assert_eq!(&fallback, structured);
 }
 
 struct ErrorBackend {
@@ -395,4 +406,37 @@ fn omitted_optional_fields_keep_current_defaults() {
     assert_eq!(report["state_generations"]["full"], 1);
     assert_eq!(report["state_generations"]["delta"], 0);
     assert_eq!(report["visual_captures"], 1);
+}
+
+#[test]
+fn checked_in_mcp_response_examples_match_the_tool_result_contract() -> Result<()> {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/mcp_examples");
+
+    for entry in fs::read_dir(examples)? {
+        let path = entry?.path();
+        if !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with("_response.json"))
+        {
+            continue;
+        }
+
+        let response: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+        let result = &response["result"];
+        let structured = &result["structuredContent"];
+        assert!(structured.is_object(), "{}", path.display());
+        let content = result["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 1, "{}", path.display());
+        assert_eq!(content[0]["type"], "text", "{}", path.display());
+        assert!(content[0].get("json").is_none(), "{}", path.display());
+        let fallback: Value = serde_json::from_str(
+            content[0]["text"]
+                .as_str()
+                .expect("serialized JSON fallback"),
+        )?;
+        assert_eq!(&fallback, structured, "{}", path.display());
+    }
+
+    Ok(())
 }

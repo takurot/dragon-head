@@ -4,11 +4,12 @@
   "result": {
     "content": [
       {
-        "type": "json",
-        "json": {
-          "matched": true
-        }
+        "type": "text",
+        "text": "{\"matched\":true}"
       }
-    ]
+    ],
+    "structuredContent": {
+      "matched": true
+    }
   }
 }

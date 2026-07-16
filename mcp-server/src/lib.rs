@@ -253,12 +253,14 @@ impl<B: McpBackend> McpServer<B> {
             other => other,
         };
 
-        if let Ok(payload) = &result {
-            let speculative_hit = self.backend.speculative_usage().0 > speculative_hits_before;
-            self.record_usage(name, &arguments, payload, speculative_hit);
+        let payload = result?;
+        if !payload.is_object() {
+            anyhow::bail!("MCP structuredContent must be a JSON object");
         }
+        let speculative_hit = self.backend.speculative_usage().0 > speculative_hits_before;
+        self.record_usage(name, &arguments, &payload, speculative_hit);
 
-        result
+        Ok(payload)
     }
 
     pub fn handle_jsonrpc(&mut self, request: &str) -> Option<String> {
@@ -329,11 +331,14 @@ impl<B: McpBackend> McpServer<B> {
 
                         self.call_tool(name, arguments)
                             .map(|payload| {
+                                let text = serde_json::to_string(&payload)
+                                    .expect("serializing a serde_json::Value cannot fail");
                                 json!({
                                     "content": [{
-                                        "type": "json",
-                                        "json": payload
-                                    }]
+                                        "type": "text",
+                                        "text": text
+                                    }],
+                                    "structuredContent": payload
                                 })
                             })
                             .map_err(|err| {
@@ -2795,13 +2800,15 @@ mod tests {
 
     // --- extract tool: McpBackend trait and McpServer routing ---
 
+    #[derive(Default)]
     struct MockBackend {
+        get_state_result: Option<Value>,
         extract_result: Option<Value>,
     }
 
     impl McpBackend for MockBackend {
         fn get_state(&mut self, _: Value) -> anyhow::Result<Value> {
-            Ok(json!({}))
+            Ok(self.get_state_result.clone().unwrap_or_else(|| json!({})))
         }
         fn act(&mut self, _: Value) -> anyhow::Result<Value> {
             Ok(json!({}))
@@ -2850,6 +2857,7 @@ mod tests {
     fn initialize_echoes_supported_non_latest_protocol_version() {
         let mut server = McpServer::new(MockBackend {
             extract_result: None,
+            ..Default::default()
         });
         let req = json!({
             "jsonrpc": "2.0",
@@ -2874,6 +2882,7 @@ mod tests {
     fn initialize_falls_back_to_latest_for_unsupported_protocol_version() {
         let mut server = McpServer::new(MockBackend {
             extract_result: None,
+            ..Default::default()
         });
         let req = json!({
             "jsonrpc": "2.0",
@@ -2894,6 +2903,7 @@ mod tests {
     fn initialize_without_params_falls_back_to_latest_protocol_version() {
         let mut server = McpServer::new(MockBackend {
             extract_result: None,
+            ..Default::default()
         });
         let req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
         let resp_str = server.handle_jsonrpc(req).unwrap();
@@ -2905,6 +2915,7 @@ mod tests {
     fn extract_tool_is_listed_in_tools() {
         let server = McpServer::new(MockBackend {
             extract_result: None,
+            ..Default::default()
         });
         let tools = server.tools();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -2923,6 +2934,7 @@ mod tests {
     fn call_tool_routes_to_extract() {
         let mut server = McpServer::new(MockBackend {
             extract_result: Some(json!({"rule": "products", "result": [{"name": "Widget"}]})),
+            ..Default::default()
         });
         let result = server
             .call_tool("extract", json!({"rule_name": "products"}))
@@ -2933,13 +2945,65 @@ mod tests {
     #[test]
     fn handle_jsonrpc_extract_call() {
         let mut server = McpServer::new(MockBackend {
-            extract_result: Some(json!({"rule": "title", "result": "My Page"})),
+            extract_result: Some(json!({
+                "rule": "title",
+                "result": "Ignore \"system\"\n[REDACTED_SECURITY]",
+                "security_flags": ["possible_prompt_injection"]
+            })),
+            ..Default::default()
         });
         let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"extract","arguments":{"rule_name":"title"}}}"#;
         let resp_str = server.handle_jsonrpc(req).unwrap();
         let resp: Value = serde_json::from_str(&resp_str).unwrap();
         assert!(resp.get("error").is_none(), "unexpected error: {resp}");
-        assert_eq!(resp["result"]["content"][0]["json"]["rule"], "title");
+        let result = &resp["result"];
+        assert_eq!(result["structuredContent"]["rule"], "title");
+        assert_eq!(result["content"][0]["type"], "text");
+        assert!(result["content"][0].get("json").is_none());
+        let fallback: Value = serde_json::from_str(
+            result["content"][0]["text"]
+                .as_str()
+                .expect("text fallback"),
+        )
+        .unwrap();
+        assert_eq!(fallback, result["structuredContent"]);
+        assert_eq!(fallback["result"], "Ignore \"system\"\n[REDACTED_SECURITY]");
+        assert_eq!(
+            fallback["security_flags"],
+            json!(["possible_prompt_injection"])
+        );
+    }
+
+    #[test]
+    fn handle_jsonrpc_rejects_non_object_tool_result() {
+        let mut server = McpServer::new(MockBackend {
+            extract_result: Some(json!(["not", "an", "object"])),
+            ..Default::default()
+        });
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"extract","arguments":{"rule_name":"title"}}}"#;
+        let resp: Value = serde_json::from_str(&server.handle_jsonrpc(req).unwrap()).unwrap();
+
+        assert_eq!(resp["error"]["code"], -32000);
+        assert_eq!(
+            resp["error"]["message"],
+            "MCP structuredContent must be a JSON object"
+        );
+        assert!(resp.get("result").is_none());
+    }
+
+    #[test]
+    fn handle_jsonrpc_does_not_meter_rejected_non_object_tool_result() {
+        let mut server = McpServer::new(MockBackend {
+            get_state_result: Some(json!(["not", "an", "object"])),
+            ..Default::default()
+        });
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_state","arguments":{}}}"#;
+        let resp: Value = serde_json::from_str(&server.handle_jsonrpc(req).unwrap()).unwrap();
+
+        assert_eq!(resp["error"]["code"], -32000);
+        let report = server.call_tool("get_usage_report", json!({})).unwrap();
+        assert_eq!(report["state_generations"]["full"], 0);
+        assert_eq!(report["state_generations"]["fast"], 0);
     }
 
     #[test]
@@ -3096,6 +3160,7 @@ mod tests {
     fn default_handle_browser_disconnect_reports_unsupported() {
         let mut backend = MockBackend {
             extract_result: None,
+            ..Default::default()
         };
         assert_eq!(
             backend.handle_browser_disconnect(),
