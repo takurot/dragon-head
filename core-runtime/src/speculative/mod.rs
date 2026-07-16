@@ -83,6 +83,19 @@ struct Inner {
     last_action: Option<ActionSignature>,
 }
 
+impl Inner {
+    fn new(domain_hints: Vec<DomainHint>) -> Self {
+        Self {
+            model: TransitionModel::new(),
+            domain_hints,
+            snapshot_cache: HashMap::new(),
+            snapshot_order: VecDeque::with_capacity(SNAPSHOT_CACHE_CAPACITY),
+            mismatch_log: VecDeque::with_capacity(MISMATCH_LOG_CAPACITY),
+            last_action: None,
+        }
+    }
+}
+
 /// Predicts the AI's next action/state and pre-stages cached
 /// [`SemanticState`] snapshots for near-zero-TTFT serving (PR-20 / ISSUE-10,
 /// Spec §3.5).
@@ -97,21 +110,21 @@ pub struct SpeculativeEngine {
 impl SpeculativeEngine {
     pub fn new(domain_hints: Vec<DomainHint>) -> Self {
         Self {
-            inner: Mutex::new(Inner {
-                model: TransitionModel::new(),
-                domain_hints,
-                snapshot_cache: HashMap::new(),
-                snapshot_order: VecDeque::with_capacity(SNAPSHOT_CACHE_CAPACITY),
-                mismatch_log: VecDeque::with_capacity(MISMATCH_LOG_CAPACITY),
-                last_action: None,
-            }),
+            inner: Mutex::new(Inner::new(domain_hints)),
         }
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner
-            .lock()
-            .expect("speculative engine mutex poisoned")
+        match self.inner.lock() {
+            Ok(inner) => inner,
+            Err(poisoned) => {
+                let mut inner = poisoned.into_inner();
+                let domain_hints = inner.domain_hints.clone();
+                *inner = Inner::new(domain_hints);
+                self.inner.clear_poison();
+                inner
+            }
+        }
     }
 
     /// Drops cached state snapshots and the engine-internal action-sequence
@@ -634,5 +647,46 @@ mod tests {
         let engine = SpeculativeEngine::new(vec![]);
         let err = engine.import_model(&[0xFF, 0x00]).unwrap_err();
         assert!(matches!(err, SpeculativeCodecError::Malformed { .. }));
+    }
+
+    #[test]
+    fn poisoned_engine_resets_to_cold_state_and_relearns() {
+        let hint_from = action("click:domain_navigation");
+        let hint_next = action("type:hinted_search");
+        let engine = SpeculativeEngine::new(vec![DomainHint {
+            from_action: hint_from.clone(),
+            predicted_next_action: hint_next.clone(),
+            weight: 1.0,
+        }]);
+        let click = action("click:search_button");
+        let type_input = action("type:search_input");
+        let next_state = Arc::new(state_with_label("stale predicted page"));
+        let next_hash = next_state.state_hash().to_string();
+
+        engine.record_transition("hash_a", &click, &next_hash);
+        engine.record_transition("hash_a", &type_input, &next_hash);
+        engine.record_transition("hash_a", &type_input, &next_hash);
+        engine.observe_state(next_state);
+        assert!(engine.pre_generate("hash_a", Some(&click)).is_some());
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = engine.inner.lock().unwrap();
+            panic!("poison speculative engine state");
+        }));
+        assert!(panic.is_err());
+        assert!(engine.inner.is_poisoned());
+
+        assert_eq!(engine.pre_generate("hash_a", Some(&click)), None);
+        assert!(!engine.inner.is_poisoned());
+        assert_eq!(engine.predict("hash_a", Some(&click)), None);
+        let hinted = engine.predict("unknown_hash", Some(&hint_from)).unwrap();
+        assert_eq!(hinted.predicted_action, hint_next);
+        assert_eq!(hinted.predicted_state_hash, None);
+
+        engine.record_transition("hash_a", &click, "hash_b");
+        engine.record_transition("hash_b", &type_input, "hash_c");
+        let prediction = engine.predict("hash_b", Some(&click)).unwrap();
+        assert_eq!(prediction.predicted_action, type_input);
+        assert_eq!(prediction.predicted_state_hash, Some("hash_c".to_string()));
     }
 }

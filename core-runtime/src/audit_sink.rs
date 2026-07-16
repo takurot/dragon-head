@@ -36,6 +36,8 @@ pub enum AuditSinkError {
     InvalidUrl(String),
     #[error("Failed to configure webhook HTTP client: {0}")]
     HttpClient(String),
+    #[error("Rolling audit file state was poisoned and has been reset")]
+    Poisoned,
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +165,15 @@ impl AuditSink for RollingFileSink {
         };
         let bytes = line.len() as u64;
 
-        let mut guard = self.state.lock().expect("audit sink mutex poisoned");
+        let mut guard = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                *guard = None;
+                self.state.clear_poison();
+                return Err(AuditSinkError::Poisoned);
+            }
+        };
 
         // Initialise on first write or rotate if over limit.
         let needs_new = match guard.as_ref() {
@@ -559,6 +569,50 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("TOOL_CALL"));
         assert!(lines[1].contains("TOOL_CALL"));
+    }
+
+    #[test]
+    fn rolling_file_sink_reports_poison_once_then_reopens_cleanly() {
+        let dir = tempdir().unwrap();
+        let sink = MeteredSink::new(RollingFileSink::new(dir.path(), "poison", 0).unwrap());
+        sink.write(&tool_call_event(1)).unwrap();
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = sink.inner.state.lock().unwrap();
+            panic!("poison rolling file state");
+        }));
+        assert!(panic.is_err());
+        assert!(sink.inner.state.is_poisoned());
+
+        let error = sink.write(&tool_call_event(2)).unwrap_err();
+        assert!(matches!(error, AuditSinkError::Poisoned));
+        assert_eq!(sink.errors(), 1);
+        assert!(!sink.inner.state.is_poisoned());
+
+        sink.write(&tool_call_event(3)).unwrap();
+        let files = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 2, "recovery must open a new audit file");
+
+        let mut timestamps = files
+            .into_iter()
+            .flat_map(|entry| {
+                fs::read_to_string(entry.path())
+                    .unwrap()
+                    .lines()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(&line).unwrap()["timestamp"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        timestamps.sort_unstable();
+        assert_eq!(timestamps, vec![1, 3]);
     }
 
     #[test]
