@@ -4,11 +4,12 @@
   "result": {
     "content": [
       {
-        "type": "json",
-        "json": {
-          "status": "ok"
-        }
+        "type": "text",
+        "text": "{\"status\":\"ok\"}"
       }
-    ]
+    ],
+    "structuredContent": {
+      "status": "ok"
+    }
   }
 }

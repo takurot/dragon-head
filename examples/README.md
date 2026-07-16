@@ -138,6 +138,8 @@ Skills are executed by the Skills Engine (Layer 3). Steps follow the
 
 The `mcp_examples/` directory contains paired request/response JSON files that
 document every MCP tool call your LLM or integration layer will make.
+Successful responses place the JSON object in `result.structuredContent` and
+repeat its serialized form in a `text` content block for client fallback.
 
 | File pair | Tool | Scenario |
 |-----------|------|----------|

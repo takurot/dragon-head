@@ -4,14 +4,15 @@
   "result": {
     "content": [
       {
-        "type": "json",
-        "json": {
-          "matched": false,
-          "target_id": 42,
-          "expected": "Purchase",
-          "actual": "Add to Cart"
-        }
+        "type": "text",
+        "text": "{\"matched\":false,\"target_id\":42,\"expected\":\"Purchase\",\"actual\":\"Add to Cart\"}"
       }
-    ]
+    ],
+    "structuredContent": {
+      "matched": false,
+      "target_id": 42,
+      "expected": "Purchase",
+      "actual": "Add to Cart"
+    }
   }
 }

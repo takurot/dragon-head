@@ -4,13 +4,14 @@
   "result": {
     "content": [
       {
-        "type": "json",
-        "json": {
-          "status": "requires_human_approval",
-          "rule_id": "require-approval-financial-action",
-          "scope": "action_only"
-        }
+        "type": "text",
+        "text": "{\"status\":\"requires_human_approval\",\"rule_id\":\"require-approval-financial-action\",\"scope\":\"action_only\"}"
       }
-    ]
+    ],
+    "structuredContent": {
+      "status": "requires_human_approval",
+      "rule_id": "require-approval-financial-action",
+      "scope": "action_only"
+    }
   }
 }
