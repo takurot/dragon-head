@@ -195,9 +195,11 @@ response shapes depending on the call context:
 ```json
 {
   "type": "full",
-  "state_hash": "a1b2c3d4...",
-  "metadata": { "..." },
-  "interactive_elements": [ "..." ]
+  "hash": "a1b2c3d4...",
+  "state": {
+    "metadata": { "..." },
+    "interactive_elements": [ "..." ]
+  }
 }
 ```
 
@@ -209,7 +211,8 @@ reducing token consumption by up to 95 %:
   "base_hash": "a1b2c3d4...",
   "next_hash": "c3d4e5f6...",
   "patch": [
-    { "op": "replace", "path": "/interactive_elements/0/attributes/disabled", "value": true }
+    { "op": "replace", "path": "/interactive_elements/1/attributes/disabled", "value": true },
+    { "op": "replace", "path": "/metadata/state_hash", "value": "c3d4e5f6..." }
   ]
 }
 ```
@@ -219,7 +222,7 @@ returns a lightweight sentinel so the agent can skip re-processing:
 ```json
 {
   "type": "no_change",
-  "state_hash": "a1b2c3d4..."
+  "hash": "a1b2c3d4..."
 }
 ```
 

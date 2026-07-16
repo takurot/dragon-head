@@ -5,7 +5,7 @@
     "content": [
       {
         "type": "text",
-        "text": "{\"type\":\"delta\",\"base_hash\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\",\"next_hash\":\"c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4\",\"patch\":[{\"op\":\"replace\",\"path\":\"/interactive_elements/0/attributes/disabled\",\"value\":true}]}"
+        "text": "{\"type\":\"delta\",\"base_hash\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\",\"next_hash\":\"c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4\",\"patch\":[{\"op\":\"replace\",\"path\":\"/interactive_elements/1/attributes/disabled\",\"value\":true},{\"op\":\"replace\",\"path\":\"/metadata/state_hash\",\"value\":\"c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4\"}]}"
       }
     ],
     "structuredContent": {
@@ -15,8 +15,13 @@
       "patch": [
         {
           "op": "replace",
-          "path": "/interactive_elements/0/attributes/disabled",
+          "path": "/interactive_elements/1/attributes/disabled",
           "value": true
+        },
+        {
+          "op": "replace",
+          "path": "/metadata/state_hash",
+          "value": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
         }
       ]
     }

@@ -5,58 +5,60 @@
     "content": [
       {
         "type": "text",
-        "text": "{\"type\":\"full\",\"state_hash\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\",\"metadata\":{\"url\":\"https://example.com/checkout\",\"page_instance_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"state_hash\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\",\"load_profile\":\"interactive\",\"timestamp\":1707530000},\"interactive_elements\":[{\"id\":43,\"stable_key\":\"b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3\",\"alias\":\"input_email\",\"role\":\"input\",\"name\":\"Email address\",\"attributes\":{\"type\":\"email\",\"required\":true},\"bbox\":[100,150,300,40],\"policy_flags\":[]},{\"id\":42,\"stable_key\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\",\"alias\":\"btn_purchase\",\"role\":\"button\",\"name\":\"Purchase\",\"attributes\":{\"disabled\":false},\"bbox\":[100,200,150,50],\"policy_flags\":[\"financial_transaction\"]}]}"
+        "text": "{\"type\":\"full\",\"hash\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\",\"state\":{\"metadata\":{\"url\":\"https://example.com/checkout\",\"page_instance_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"state_hash\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\",\"load_profile\":\"interactive\",\"timestamp\":1707530000},\"interactive_elements\":[{\"id\":43,\"stable_key\":\"b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3\",\"alias\":\"input_email\",\"role\":\"input\",\"name\":\"Email address\",\"attributes\":{\"type\":\"email\",\"required\":true},\"bbox\":[100,150,300,40],\"policy_flags\":[]},{\"id\":42,\"stable_key\":\"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\",\"alias\":\"btn_purchase\",\"role\":\"button\",\"name\":\"Purchase\",\"attributes\":{\"disabled\":false},\"bbox\":[100,200,150,50],\"policy_flags\":[\"financial_transaction\"]}]}}"
       }
     ],
     "structuredContent": {
       "type": "full",
-      "state_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-      "metadata": {
-        "url": "https://example.com/checkout",
-        "page_instance_id": "550e8400-e29b-41d4-a716-446655440000",
-        "state_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-        "load_profile": "interactive",
-        "timestamp": 1707530000
-      },
-      "interactive_elements": [
-        {
-          "id": 43,
-          "stable_key": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
-          "alias": "input_email",
-          "role": "input",
-          "name": "Email address",
-          "attributes": {
-            "type": "email",
-            "required": true
-          },
-          "bbox": [
-            100,
-            150,
-            300,
-            40
-          ],
-          "policy_flags": []
+      "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "state": {
+        "metadata": {
+          "url": "https://example.com/checkout",
+          "page_instance_id": "550e8400-e29b-41d4-a716-446655440000",
+          "state_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          "load_profile": "interactive",
+          "timestamp": 1707530000
         },
-        {
-          "id": 42,
-          "stable_key": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-          "alias": "btn_purchase",
-          "role": "button",
-          "name": "Purchase",
-          "attributes": {
-            "disabled": false
+        "interactive_elements": [
+          {
+            "id": 43,
+            "stable_key": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+            "alias": "input_email",
+            "role": "input",
+            "name": "Email address",
+            "attributes": {
+              "type": "email",
+              "required": true
+            },
+            "bbox": [
+              100,
+              150,
+              300,
+              40
+            ],
+            "policy_flags": []
           },
-          "bbox": [
-            100,
-            200,
-            150,
-            50
-          ],
-          "policy_flags": [
-            "financial_transaction"
-          ]
-        }
-      ]
+          {
+            "id": 42,
+            "stable_key": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+            "alias": "btn_purchase",
+            "role": "button",
+            "name": "Purchase",
+            "attributes": {
+              "disabled": false
+            },
+            "bbox": [
+              100,
+              200,
+              150,
+              50
+            ],
+            "policy_flags": [
+              "financial_transaction"
+            ]
+          }
+        ]
+      }
     }
   }
 }
