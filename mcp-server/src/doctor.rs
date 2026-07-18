@@ -133,14 +133,17 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
     }
 
     let summary = format!(
-        "chrome_path={}, prompt_injection.mode={:?}, policy.file={}",
+        "chrome_path={}, prompt_injection.mode={:?}, \
+         prompt_injection.additional_phrases={}, policy.file={}, supported_env=[{}]",
         resolved.chrome_path.as_deref().unwrap_or("<unset>"),
         resolved.injection_mode,
+        resolved.injection_additional_phrases.len(),
         resolved
             .policy_file
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<unset>".to_string()),
+        config::HONORED_CONFIG_ENV_VARS.join(","),
     );
 
     let detail = match (&path, &file_config) {
@@ -158,6 +161,9 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
 }
 
 fn config_file_detail() -> (bool, String, bool) {
+    if let Err(err) = config::validate_unicode_additional_phrases_env() {
+        return (false, format!("environment — {err}"), false);
+    }
     config_file_detail_with(|key| std::env::var(key).ok())
 }
 
@@ -451,5 +457,48 @@ mod tests {
         if !config_path.exists() {
             assert!(informational, "missing config file should be informational");
         }
+    }
+
+    #[test]
+    fn config_summary_advertises_exact_supported_env_contract() {
+        use std::collections::BTreeSet;
+
+        let (passed, detail, _) = config_file_detail_with(|_| None);
+        assert!(passed, "detail: {detail}");
+        let advertised = detail
+            .split_once("supported_env=[")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(names, _)| {
+                names
+                    .split(',')
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| panic!("missing supported_env list: {detail}"));
+        let unique = advertised.iter().cloned().collect::<BTreeSet<_>>();
+
+        assert_eq!(advertised.len(), unique.len(), "detail: {detail}");
+        assert_eq!(
+            unique,
+            config::HONORED_CONFIG_ENV_VARS
+                .iter()
+                .copied()
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn config_summary_reports_phrase_count_without_phrase_contents() {
+        let secret = "doctor-must-not-print-this-phrase";
+        let (passed, detail, _) = config_file_detail_with(|key| {
+            (key == config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES)
+                .then(|| format!(r#"["{secret}"]"#))
+        });
+
+        assert!(passed, "detail: {detail}");
+        assert!(detail.contains("prompt_injection.additional_phrases=1"));
+        assert!(!detail.contains(secret));
     }
 }

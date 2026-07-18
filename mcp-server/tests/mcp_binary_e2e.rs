@@ -362,6 +362,10 @@ fn binary_doctor_reports_resolved_summary_for_valid_config() -> anyhow::Result<(
         .arg("--doctor")
         .env("XDG_CONFIG_HOME", dir.path())
         .env_remove("PROMPT_INJECTION_MODE")
+        .env(
+            mcp_server::config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES,
+            r#"["doctor-secret-phrase"]"#,
+        )
         .output()?;
 
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -373,6 +377,164 @@ fn binary_doctor_reports_resolved_summary_for_valid_config() -> anyhow::Result<(
         !stdout.contains("✗ Config file"),
         "a valid config file must not fail the Config file check: {stdout}"
     );
+    assert!(
+        stdout.contains("prompt_injection.additional_phrases=1"),
+        "stdout should report only the effective phrase count: {stdout}"
+    );
+    assert!(!stdout.contains("doctor-secret-phrase"));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("doctor-secret-phrase"));
+    for name in mcp_server::config::HONORED_CONFIG_ENV_VARS {
+        assert!(stdout.contains(name), "missing {name} in: {stdout}");
+    }
+    Ok(())
+}
+
+#[test]
+fn binary_doctor_rejects_file_additional_phrase_limits_without_disclosure() -> anyhow::Result<()> {
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+    let phrases = (0..=mcp_server::config::MAX_ADDITIONAL_PHRASES)
+        .map(|index| format!("file-secret-phrase-{index}"))
+        .map(|phrase| format!("{phrase:?}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        format!("[prompt_injection]\nadditional_phrases = [{phrases}]"),
+    )?;
+
+    let out = Command::new(&bin)
+        .arg("--doctor")
+        .env("XDG_CONFIG_HOME", dir.path())
+        .env_remove(mcp_server::config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES)
+        .output()?;
+
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("✗ Config file"));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("file-secret-phrase"));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("file-secret-phrase"));
+    Ok(())
+}
+
+#[test]
+fn binary_rejects_malformed_config_without_disclosing_phrase_contents() -> anyhow::Result<()> {
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        "[prompt_injection]\nadditional_phrases = [\"file-parse-secret-phrase\"",
+    )?;
+
+    for args in [&["--doctor"][..], &[][..]] {
+        let out = Command::new(&bin)
+            .args(args)
+            .env("XDG_CONFIG_HOME", dir.path())
+            .env_remove(mcp_server::config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES)
+            .output()?;
+
+        assert!(!out.status.success());
+        if args.is_empty() {
+            assert!(out.stdout.is_empty(), "stdout must remain JSON-RPC clean");
+        }
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("file-parse-secret-phrase"));
+        assert!(!String::from_utf8_lossy(&out.stderr).contains("file-parse-secret-phrase"));
+    }
+    Ok(())
+}
+
+#[test]
+fn binary_doctor_rejects_invalid_additional_phrase_env_without_disclosure() -> anyhow::Result<()> {
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let too_many = serde_json::to_string(
+        &(0..=mcp_server::config::MAX_ADDITIONAL_PHRASES)
+            .map(|index| format!("doctor-secret-phrase-{index}"))
+            .collect::<Vec<_>>(),
+    )?;
+
+    for raw in [
+        "".to_string(),
+        r#"["doctor-secret-phrase""#.to_string(),
+        r#"[{"secret":"doctor-secret-phrase"}]"#.to_string(),
+        too_many,
+    ] {
+        let out = Command::new(&bin)
+            .arg("--doctor")
+            .env("XDG_CONFIG_HOME", dir.path())
+            .env(
+                mcp_server::config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES,
+                &raw,
+            )
+            .output()?;
+
+        assert!(!out.status.success(), "raw={raw:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!stdout.contains("doctor-secret-phrase"), "{stdout}");
+        assert!(!stderr.contains("doctor-secret-phrase"), "{stderr}");
+    }
+    Ok(())
+}
+
+#[test]
+fn binary_startup_rejects_invalid_additional_phrase_env_without_stdout_or_disclosure(
+) -> anyhow::Result<()> {
+    let bin = build_binary_once()?;
+    let too_many = serde_json::to_string(
+        &(0..=mcp_server::config::MAX_ADDITIONAL_PHRASES)
+            .map(|index| format!("startup-secret-phrase-{index}"))
+            .collect::<Vec<_>>(),
+    )?;
+    for raw in [
+        r#"["startup-secret-phrase""#.to_string(),
+        r#"[{"secret":"startup-secret-phrase"}]"#.to_string(),
+        too_many,
+    ] {
+        let out = Command::new(&bin)
+            .env(
+                mcp_server::config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES,
+                &raw,
+            )
+            .output()?;
+
+        assert!(!out.status.success());
+        assert!(out.stdout.is_empty(), "stdout must remain JSON-RPC clean");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!stderr.contains("startup-secret-phrase"), "{stderr}");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn binary_doctor_rejects_non_unicode_additional_phrase_env() -> anyhow::Result<()> {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let bin = build_binary_once()?;
+    let out = Command::new(&bin)
+        .arg("--doctor")
+        .env(
+            mcp_server::config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES,
+            OsString::from_vec(vec![b'[', b'"', 0xff, b'"', b']']),
+        )
+        .output()?;
+
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("✗ Config file"));
+
+    let out = Command::new(&bin)
+        .env(
+            mcp_server::config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES,
+            OsString::from_vec(vec![b'[', b'"', 0xff, b'"', b']']),
+        )
+        .output()?;
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty(), "stdout must remain JSON-RPC clean");
     Ok(())
 }
 
@@ -391,6 +553,7 @@ fn binary_doctor_fails_for_invalid_injection_mode_config() -> anyhow::Result<()>
         .arg("--doctor")
         .env("XDG_CONFIG_HOME", dir.path())
         .env_remove("PROMPT_INJECTION_MODE")
+        .env_remove(mcp_server::config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES)
         .output()?;
 
     assert!(
@@ -437,6 +600,7 @@ fn test_mcp_binary_stdio_smoke() -> anyhow::Result<()> {
         .stderr(Stdio::inherit())
         .env("XDG_CONFIG_HOME", config_home.path())
         .env_remove("PROMPT_INJECTION_MODE")
+        .env_remove(mcp_server::config::ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES)
         .env_remove("POLICY_FILE")
         .env_remove("AUDIT_LOG_DIR")
         .env_remove("AUDIT_LOG_MAX_BYTES")

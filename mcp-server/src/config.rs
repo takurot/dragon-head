@@ -7,7 +7,35 @@
 
 use core_runtime::PromptInjectionMode;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
+
+pub const ENV_CHROME_PATH: &str = "CHROME_PATH";
+pub const ENV_PROMPT_INJECTION_MODE: &str = "PROMPT_INJECTION_MODE";
+pub const ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES: &str = "PROMPT_INJECTION_ADDITIONAL_PHRASES";
+pub const ENV_POLICY_FILE: &str = "POLICY_FILE";
+pub const ENV_AUDIT_LOG_DIR: &str = "AUDIT_LOG_DIR";
+pub const ENV_AUDIT_LOG_MAX_BYTES: &str = "AUDIT_LOG_MAX_BYTES";
+pub const ENV_AUDIT_DURABILITY: &str = "AUDIT_DURABILITY";
+/// Historical name retained for compatibility; audit events are mirrored to stderr.
+pub const ENV_AUDIT_LOG_STDERR_MIRROR: &str = "AUDIT_LOG_STDOUT";
+
+pub const HONORED_CONFIG_ENV_VARS: &[&str] = &[
+    ENV_CHROME_PATH,
+    ENV_PROMPT_INJECTION_MODE,
+    ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES,
+    ENV_POLICY_FILE,
+    ENV_AUDIT_LOG_DIR,
+    ENV_AUDIT_LOG_MAX_BYTES,
+    ENV_AUDIT_DURABILITY,
+    ENV_AUDIT_LOG_STDERR_MIRROR,
+];
+
+pub const MAX_ADDITIONAL_PHRASES: usize = 64;
+pub const MAX_ADDITIONAL_PHRASE_BYTES: usize = 512;
+pub const MAX_ADDITIONAL_PHRASES_BYTES: usize = 8 * 1024;
 
 /// Raw `config.toml` contents.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -54,16 +82,36 @@ pub enum ConfigError {
         #[source]
         source: std::io::Error,
     },
-    #[error("failed to parse config file {path}: {source}")]
+    #[error("failed to parse config file {path}")]
     Parse {
         path: PathBuf,
-        #[source]
-        source: toml::de::Error,
+        details: toml::de::Error,
     },
     #[error("invalid prompt_injection.mode '{0}' (expected 'off', 'report_only', or 'redact')")]
     InvalidInjectionMode(String),
     #[error("invalid audit.durability '{0}' (expected 'flush' or 'sync')")]
     InvalidAuditDurability(String),
+    #[error(
+        "invalid {ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES} (expected a JSON array of strings)"
+    )]
+    InvalidAdditionalPhrasesFormat,
+    #[error("too many prompt-injection additional phrases (maximum {max})")]
+    TooManyAdditionalPhrases { max: usize },
+    #[error("prompt-injection additional phrase exceeds {max_bytes} UTF-8 bytes")]
+    AdditionalPhraseTooLong { max_bytes: usize },
+    #[error("prompt-injection additional phrases exceed {max_bytes} total UTF-8 bytes")]
+    AdditionalPhrasesTooLarge { max_bytes: usize },
+    #[error("environment variable {name} is not valid UTF-8")]
+    NonUnicodeEnvVar { name: &'static str },
+}
+
+pub fn validate_unicode_additional_phrases_env() -> Result<(), ConfigError> {
+    match std::env::var(ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES) {
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(ConfigError::NonUnicodeEnvVar {
+            name: ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES,
+        }),
+    }
 }
 
 /// The default config file path: `$XDG_CONFIG_HOME/dragon-head/config.toml`, falling back to
@@ -103,7 +151,7 @@ pub fn load_config_file(path: &Path) -> Result<Option<FileConfig>, ConfigError> 
         .map(Some)
         .map_err(|err| ConfigError::Parse {
             path: path.to_path_buf(),
-            source: err,
+            details: err,
         })
 }
 
@@ -124,7 +172,9 @@ pub struct ResolvedConfig {
 /// environment-variable overrides supplied via `lookup`.
 ///
 /// Precedence (env wins): `CHROME_PATH` > `chrome_path`; `PROMPT_INJECTION_MODE` >
-/// `prompt_injection.mode` (default `report_only`); `POLICY_FILE` > `policy.file`;
+/// `prompt_injection.mode` (default `report_only`);
+/// `PROMPT_INJECTION_ADDITIONAL_PHRASES` > `prompt_injection.additional_phrases`;
+/// `POLICY_FILE` > `policy.file`;
 /// `AUDIT_LOG_DIR`/`AUDIT_LOG_MAX_BYTES`/`AUDIT_DURABILITY` > `audit.*`.
 pub fn resolve_config(
     file_config: Option<&FileConfig>,
@@ -133,21 +183,28 @@ pub fn resolve_config(
     let empty = FileConfig::default();
     let fc = file_config.unwrap_or(&empty);
 
-    let chrome_path = lookup("CHROME_PATH").or_else(|| fc.chrome_path.clone());
+    let chrome_path = lookup(ENV_CHROME_PATH).or_else(|| fc.chrome_path.clone());
 
     let injection_mode =
-        match lookup("PROMPT_INJECTION_MODE").or_else(|| fc.prompt_injection.mode.clone()) {
+        match lookup(ENV_PROMPT_INJECTION_MODE).or_else(|| fc.prompt_injection.mode.clone()) {
             None => PromptInjectionMode::ReportOnly,
             Some(mode) => parse_injection_mode(&mode)?,
         };
 
-    let policy_file = lookup("POLICY_FILE")
+    let injection_additional_phrases = match lookup(ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES) {
+        Some(raw) => serde_json::from_str::<Vec<String>>(&raw)
+            .map_err(|_| ConfigError::InvalidAdditionalPhrasesFormat)?,
+        None => fc.prompt_injection.additional_phrases.clone(),
+    };
+    let injection_additional_phrases = normalize_additional_phrases(injection_additional_phrases)?;
+
+    let policy_file = lookup(ENV_POLICY_FILE)
         .or_else(|| fc.policy.file.clone())
         .map(PathBuf::from);
 
-    let audit_log_dir = lookup("AUDIT_LOG_DIR").or_else(|| fc.audit.log_dir.clone());
+    let audit_log_dir = lookup(ENV_AUDIT_LOG_DIR).or_else(|| fc.audit.log_dir.clone());
 
-    let audit_max_bytes = match lookup("AUDIT_LOG_MAX_BYTES") {
+    let audit_max_bytes = match lookup(ENV_AUDIT_LOG_MAX_BYTES) {
         Some(raw) => match raw.parse::<u64>() {
             Ok(bytes) => Some(bytes),
             Err(_) => {
@@ -161,7 +218,7 @@ pub fn resolve_config(
         None => fc.audit.max_bytes,
     };
 
-    let audit_durability = lookup("AUDIT_DURABILITY").or_else(|| fc.audit.durability.clone());
+    let audit_durability = lookup(ENV_AUDIT_DURABILITY).or_else(|| fc.audit.durability.clone());
     if let Some(durability) = &audit_durability {
         if durability != "flush" && durability != "sync" {
             return Err(ConfigError::InvalidAuditDurability(durability.clone()));
@@ -171,12 +228,46 @@ pub fn resolve_config(
     Ok(ResolvedConfig {
         chrome_path,
         injection_mode,
-        injection_additional_phrases: fc.prompt_injection.additional_phrases.clone(),
+        injection_additional_phrases,
         policy_file,
         audit_log_dir,
         audit_max_bytes,
         audit_durability,
     })
+}
+
+fn normalize_additional_phrases(phrases: Vec<String>) -> Result<Vec<String>, ConfigError> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    let mut total_bytes = 0usize;
+    for phrase in phrases {
+        let phrase = phrase.trim();
+        if phrase.is_empty() {
+            continue;
+        }
+        let phrase = phrase.to_string();
+        if !seen.insert(phrase.clone()) {
+            continue;
+        }
+        if normalized.len() == MAX_ADDITIONAL_PHRASES {
+            return Err(ConfigError::TooManyAdditionalPhrases {
+                max: MAX_ADDITIONAL_PHRASES,
+            });
+        }
+        if phrase.len() > MAX_ADDITIONAL_PHRASE_BYTES {
+            return Err(ConfigError::AdditionalPhraseTooLong {
+                max_bytes: MAX_ADDITIONAL_PHRASE_BYTES,
+            });
+        }
+        total_bytes += phrase.len();
+        if total_bytes > MAX_ADDITIONAL_PHRASES_BYTES {
+            return Err(ConfigError::AdditionalPhrasesTooLarge {
+                max_bytes: MAX_ADDITIONAL_PHRASES_BYTES,
+            });
+        }
+        normalized.push(phrase);
+    }
+    Ok(normalized)
 }
 
 fn parse_injection_mode(mode: &str) -> Result<PromptInjectionMode, ConfigError> {
@@ -425,6 +516,240 @@ durability = "sync"
         assert_eq!(resolved.audit_log_dir, Some("/tmp/audit".to_string()));
         assert_eq!(resolved.audit_max_bytes, Some(4096));
         assert_eq!(resolved.audit_durability, Some("flush".to_string()));
+    }
+
+    #[test]
+    fn resolve_config_additional_phrases_env_replaces_file_value() {
+        let fc = FileConfig {
+            prompt_injection: PromptInjectionFileConfig {
+                additional_phrases: vec!["from file".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolve_config(Some(&fc), |key| {
+            (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES)
+                .then(|| r#"["from env","second phrase"]"#.to_string())
+        })
+        .unwrap();
+
+        assert_eq!(
+            resolved.injection_additional_phrases,
+            vec!["from env".to_string(), "second phrase".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_config_empty_additional_phrases_env_clears_file_value() {
+        let fc = FileConfig {
+            prompt_injection: PromptInjectionFileConfig {
+                additional_phrases: vec!["from file".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolve_config(Some(&fc), |key| {
+            (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES).then(|| "[]".to_string())
+        })
+        .unwrap();
+
+        assert!(resolved.injection_additional_phrases.is_empty());
+    }
+
+    #[test]
+    fn resolve_config_rejects_invalid_additional_phrases_env_without_echoing_value() {
+        for raw in ["", r#"["secret phrase""#, r#"[{"secret":"phrase"}]"#] {
+            let err = resolve_config(None, |key| {
+                (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES).then(|| raw.to_string())
+            })
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::InvalidAdditionalPhrasesFormat));
+            if !raw.is_empty() {
+                assert!(!err.to_string().contains(raw));
+            }
+            assert!(!err.to_string().contains("secret phrase"));
+        }
+    }
+
+    #[test]
+    fn resolve_config_normalizes_empty_and_duplicate_additional_phrases() {
+        let resolved = resolve_config(None, |key| {
+            (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES)
+                .then(|| r#"["  keep me  ","","keep me","   "]"#.to_string())
+        })
+        .unwrap();
+
+        assert_eq!(
+            resolved.injection_additional_phrases,
+            vec!["keep me".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_config_normalizes_file_additional_phrases_preserving_order() {
+        let fc = FileConfig {
+            prompt_injection: PromptInjectionFileConfig {
+                additional_phrases: vec![
+                    "  first phrase  ".to_string(),
+                    "".to_string(),
+                    "second phrase".to_string(),
+                    "first phrase".to_string(),
+                    "   ".to_string(),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolve_config(Some(&fc), no_env).unwrap();
+
+        assert_eq!(
+            resolved.injection_additional_phrases,
+            vec!["first phrase".to_string(), "second phrase".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_config_counts_effective_additional_phrases_after_normalization() {
+        let raw = serde_json::to_string(
+            &(0..=MAX_ADDITIONAL_PHRASES)
+                .map(|_| " duplicate phrase ")
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+
+        let resolved = resolve_config(None, |key| {
+            (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES).then(|| raw.clone())
+        })
+        .unwrap();
+
+        assert_eq!(
+            resolved.injection_additional_phrases,
+            vec!["duplicate phrase".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_config_rejects_file_additional_phrase_limits_without_disclosure() {
+        let secret = "file-secret-phrase";
+        let fc = FileConfig {
+            prompt_injection: PromptInjectionFileConfig {
+                additional_phrases: (0..=MAX_ADDITIONAL_PHRASES)
+                    .map(|index| format!("{secret}-{index}"))
+                    .collect(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let err = resolve_config(Some(&fc), no_env).unwrap_err();
+
+        assert!(matches!(err, ConfigError::TooManyAdditionalPhrases { .. }));
+        assert!(!err.to_string().contains(secret));
+    }
+
+    #[test]
+    fn resolve_config_rejects_additional_phrase_resource_limits() {
+        let too_many = serde_json::to_string(
+            &(0..=MAX_ADDITIONAL_PHRASES)
+                .map(|index| format!("phrase {index}"))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let err = resolve_config(None, |key| {
+            (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES).then(|| too_many.clone())
+        })
+        .unwrap_err();
+        assert!(matches!(err, ConfigError::TooManyAdditionalPhrases { .. }));
+
+        let too_long =
+            serde_json::to_string(&vec!["x".repeat(MAX_ADDITIONAL_PHRASE_BYTES + 1)]).unwrap();
+        let err = resolve_config(None, |key| {
+            (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES).then(|| too_long.clone())
+        })
+        .unwrap_err();
+        assert!(matches!(err, ConfigError::AdditionalPhraseTooLong { .. }));
+
+        let count = MAX_ADDITIONAL_PHRASES_BYTES / MAX_ADDITIONAL_PHRASE_BYTES + 1;
+        let too_large = serde_json::to_string(
+            &(0..count)
+                .map(|index| format!("{index:04}{}", "x".repeat(MAX_ADDITIONAL_PHRASE_BYTES - 4)))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let err = resolve_config(None, |key| {
+            (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES).then(|| too_large.clone())
+        })
+        .unwrap_err();
+        assert!(matches!(err, ConfigError::AdditionalPhrasesTooLarge { .. }));
+    }
+
+    #[test]
+    fn resolve_config_accepts_additional_phrase_resource_boundaries() {
+        let max_count = serde_json::to_string(
+            &(0..MAX_ADDITIONAL_PHRASES)
+                .map(|index| format!("phrase {index}"))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let resolved = resolve_config(None, |key| {
+            (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES).then(|| max_count.clone())
+        })
+        .unwrap();
+        assert_eq!(
+            resolved.injection_additional_phrases.len(),
+            MAX_ADDITIONAL_PHRASES
+        );
+
+        let exact_total = serde_json::to_string(
+            &(0..(MAX_ADDITIONAL_PHRASES_BYTES / MAX_ADDITIONAL_PHRASE_BYTES))
+                .map(|index| format!("{index:04}{}", "x".repeat(MAX_ADDITIONAL_PHRASE_BYTES - 4)))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        resolve_config(None, |key| {
+            (key == ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES).then(|| exact_total.clone())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn resolve_config_applies_additional_phrase_limits_to_file_values() {
+        let fc = FileConfig {
+            prompt_injection: PromptInjectionFileConfig {
+                additional_phrases: (0..=MAX_ADDITIONAL_PHRASES)
+                    .map(|index| format!("phrase {index}"))
+                    .collect(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let err = resolve_config(Some(&fc), no_env).unwrap_err();
+        assert!(matches!(err, ConfigError::TooManyAdditionalPhrases { .. }));
+    }
+
+    #[test]
+    fn resolve_config_queries_every_registered_resolver_env_var() {
+        use std::cell::RefCell;
+        use std::collections::BTreeSet;
+
+        let queried = RefCell::new(BTreeSet::new());
+        resolve_config(None, |key| {
+            queried.borrow_mut().insert(key.to_string());
+            None
+        })
+        .unwrap();
+
+        let expected = HONORED_CONFIG_ENV_VARS
+            .iter()
+            .copied()
+            .filter(|key| *key != ENV_AUDIT_LOG_STDERR_MIRROR)
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(*queried.borrow(), expected);
     }
 
     #[test]
