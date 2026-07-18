@@ -1801,6 +1801,7 @@ dependencies = [
  "hex",
  "json-patch",
  "jsonschema",
+ "libc",
  "plugin-host",
  "serde",
  "serde_json",

@@ -366,13 +366,23 @@ jobs:
 
   mcp-protocol-compliance:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@v2
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run MCP client contract and protocol compliance tests
       run: |
         cargo test -p mcp-server --test mcp_client_contract --verbose
         cargo test -p mcp-server --test mcp_protocol_compliance --verbose
+    - name: Run shipped MCP binary stdio smoke test
+      run: |
+        set -o pipefail
+        chrome_path="$(command -v google-chrome)"
+        smoke_log="${RUNNER_TEMP}/mcp-binary-stdio-smoke.log"
+        CHROME_PATH="${chrome_path}" cargo test -p mcp-server --test mcp_binary_e2e test_mcp_binary_stdio_smoke -- --ignored --exact --nocapture 2>&1 | tee "${smoke_log}"
+        grep -F "test result: ok. 1 passed; 0 failed; 0 ignored;" "${smoke_log}"
 
   mcp-api-schema-diff:
     runs-on: ubuntu-latest

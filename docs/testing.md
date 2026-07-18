@@ -34,6 +34,10 @@ We follow the "Testing Pyramid" approach with the following layers:
 The CI pipeline is defined in `.github/workflows/`.
 
 - **`ci.yml`**: Runs `fmt`, `clippy`, unit tests, and integration tests.
+- **MCP binary stdio smoke (PR required)**: `ci.yml` starts the shipped
+  `dragon-head-mcp` binary with Chrome and verifies `initialize`,
+  `notifications/initialized`, and `tools/list` over real stdio. The gate rejects
+  stdout contamination, missing required tools, startup hangs, and unclean shutdowns.
 - **Playwright comparison harness**: `ci.yml` installs and tests `bench-playwright` at the
   supported Node.js 20.19, 22.12, and 24 boundaries, and rejects moderate-or-higher npm
   audit findings.
@@ -141,6 +145,9 @@ automatically files or updates a GitHub Issue labelled **`nightly-failure`**.
 
    # MCP binary E2E
    CHROME_PATH=/usr/bin/chromium-browser cargo test -p mcp-server --test mcp_binary_e2e -- --ignored --nocapture
+
+   # PR-required shipped-binary stdio smoke only
+   CHROME_PATH="$(command -v google-chrome)" cargo test -p mcp-server --test mcp_binary_e2e test_mcp_binary_stdio_smoke -- --ignored --exact --nocapture
    ```
 4. Fix the regression, open a PR, and close the `nightly-failure` issue once CI is green.
 

@@ -25,6 +25,7 @@ path = "src/main.rs"
 [dev-dependencies]
 escargot = "0.5"
 json-patch = "4.2"
+libc = "0.2"
 tempfile = "3.10"
 tokio = { workspace = true }
 urlencoding = "2.1"

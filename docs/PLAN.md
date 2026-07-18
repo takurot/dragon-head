@@ -494,6 +494,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `structuredContent` と JSON を直列化した `text` content block の組み合わせへ修正し、
 > strict client との相互運用性と後方互換 fallback の一致を契約テストで固定する。
 
+> **Follow-up (ISSUE-205)**: 実配布バイナリ `dragon-head-mcp` を起動し、stdio で
+> `initialize` → `notifications/initialized` → `tools/list` を実行するスモークテストを
+> PR 必須 CI に追加する。stdout が JSON-RPC 応答だけで構成されることと、stdin 終了後の
+> 正常 shutdown を検証し、起動・framing・stdio loop の回帰を merge 前に検出する。
+
 ### PR-15: NFR Benchmark & Capacity Validation
 - Status: `DONE` (Local)
 - Spec Ref: Section 6
