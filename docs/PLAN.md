@@ -598,6 +598,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > obfuscation は安全にフィールド全体を `[REDACTED_SECURITY]` へ置換する。
 > stable_key は sanitizer 適用前生成の値を保持する回帰テストで固定した。
 
+> **Follow-up (ISSUE-207, done)**: `skills-engine` の対応スキーマ版を
+> `SUPPORTED_SKILL_SCHEMA_VERSION` で一元管理し、JSON Schema、JSON parse、
+> typed definition の実行前検証で未対応版を拒否する。最初の未来版と version 0 の
+> 境界テストにより、未解釈のSkillが現行セマンティクスで実行されないことを固定した。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。
