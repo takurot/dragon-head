@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use skills_engine::{
-    SkillDefinition, skill_definition_schema, validate_skill_definition, validate_skill_json,
+    SUPPORTED_SKILL_SCHEMA_VERSION, SkillDefinition, SkillEngineError, parse_skill_definition,
+    skill_definition_schema, validate_skill_definition, validate_skill_json,
 };
 use std::{fs, path::PathBuf};
 
@@ -9,6 +10,42 @@ const UPDATE_ENV: &str = "UPDATE_SKILL_SCHEMA";
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SCHEMA_FIXTURE)
+}
+
+fn valid_skill_json() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": SUPPORTED_SKILL_SCHEMA_VERSION,
+        "name": "search-and-extract",
+        "steps": [
+            {
+                "type": "locate",
+                "id": "locate_product",
+                "query": "search button",
+                "control": { "max_retries": 0 }
+            },
+            {
+                "type": "verify",
+                "id": "verify_product",
+                "target": "search button",
+                "expected": "enabled",
+                "control": {}
+            },
+            {
+                "type": "act",
+                "id": "click_product",
+                "action": "click",
+                "target": "search button",
+                "control": {}
+            },
+            {
+                "type": "extract",
+                "id": "extract_product",
+                "key": "product_name",
+                "selector": "#product-name",
+                "control": {}
+            }
+        ]
+    })
 }
 
 #[test]
@@ -50,39 +87,7 @@ fn test_skill_schema_backward_compatibility_fixture() -> Result<()> {
 
 #[test]
 fn test_skill_schema_validates_examples() {
-    let valid = serde_json::json!({
-        "schema_version": 1,
-        "name": "search-and-extract",
-        "steps": [
-            {
-                "type": "locate",
-                "id": "locate_product",
-                "query": "search button",
-                "control": { "max_retries": 0 }
-            },
-            {
-                "type": "verify",
-                "id": "verify_product",
-                "target": "search button",
-                "expected": "enabled",
-                "control": {}
-            },
-            {
-                "type": "act",
-                "id": "click_product",
-                "action": "click",
-                "target": "search button",
-                "control": {}
-            },
-            {
-                "type": "extract",
-                "id": "extract_product",
-                "key": "product_name",
-                "selector": "#product-name",
-                "control": {}
-            }
-        ]
-    });
+    let valid = valid_skill_json();
 
     validate_skill_json(&valid).expect("valid example should satisfy skill schema");
 
@@ -103,6 +108,63 @@ fn test_skill_schema_validates_examples() {
         validate_skill_json(&invalid).is_err(),
         "invalid skill json should fail schema validation"
     );
+}
+
+#[test]
+fn test_skill_schema_maximum_matches_supported_version() {
+    let schema = skill_definition_schema();
+    assert_eq!(
+        schema["properties"]["schema_version"]["maximum"],
+        serde_json::json!(SUPPORTED_SKILL_SCHEMA_VERSION)
+    );
+}
+
+#[test]
+fn test_skill_schema_rejects_first_unsupported_version() {
+    let mut future = valid_skill_json();
+    future["schema_version"] = serde_json::json!(SUPPORTED_SKILL_SCHEMA_VERSION + 1);
+
+    validate_skill_json(&future).expect_err("future skill schema must be rejected");
+}
+
+#[test]
+fn test_parse_skill_rejects_first_unsupported_version_with_dedicated_error() {
+    let version = SUPPORTED_SKILL_SCHEMA_VERSION + 1;
+    let mut future = valid_skill_json();
+    future["schema_version"] = serde_json::json!(version);
+
+    let error = parse_skill_definition(&future).expect_err("future skill schema must be rejected");
+    assert_eq!(
+        error,
+        SkillEngineError::UnsupportedSchemaVersion {
+            version: u64::from(version),
+            max: SUPPORTED_SKILL_SCHEMA_VERSION,
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "unsupported skill schema version {version} (max {SUPPORTED_SKILL_SCHEMA_VERSION})"
+        )
+    );
+}
+
+#[test]
+fn test_parse_skill_accepts_supported_version() {
+    let skill = parse_skill_definition(&valid_skill_json())
+        .expect("supported skill schema version must parse");
+    assert_eq!(skill.schema_version, SUPPORTED_SKILL_SCHEMA_VERSION);
+}
+
+#[test]
+fn test_parse_skill_keeps_generic_schema_errors_for_malformed_versions() {
+    for malformed in [serde_json::json!("2"), serde_json::json!(1.5)] {
+        let mut value = valid_skill_json();
+        value["schema_version"] = malformed;
+
+        let error = parse_skill_definition(&value).expect_err("malformed version must be rejected");
+        assert!(matches!(error, SkillEngineError::SchemaValidation { .. }));
+    }
 }
 
 #[test]

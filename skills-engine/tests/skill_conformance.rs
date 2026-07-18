@@ -1,6 +1,7 @@
 use skills_engine::{
-    ActStep, ExtractStep, HandoffStep, LocateStep, OperationOutcome, SkillDefinition, SkillEngine,
-    SkillEngineError, SkillRunStatus, SkillRuntime, SkillStep, StepControl, VerifyStep,
+    ActStep, ExtractStep, HandoffStep, LocateStep, OperationOutcome,
+    SUPPORTED_SKILL_SCHEMA_VERSION, SkillDefinition, SkillEngine, SkillEngineError, SkillRunStatus,
+    SkillRuntime, SkillStep, StepControl, VerifyStep, validate_skill_definition,
 };
 use std::collections::{HashMap, VecDeque};
 
@@ -66,6 +67,18 @@ impl SkillRuntime for MockRuntime {
     }
 }
 
+struct PanicRuntime;
+
+impl SkillRuntime for PanicRuntime {
+    fn locate(
+        &mut self,
+        _step: &LocateStep,
+        _ctx: &mut skills_engine::SkillExecutionContext,
+    ) -> OperationOutcome {
+        panic!("unsupported skill must be rejected before runtime calls")
+    }
+}
+
 fn happy_path_skill() -> SkillDefinition {
     SkillDefinition {
         schema_version: 1,
@@ -96,6 +109,43 @@ fn happy_path_skill() -> SkillDefinition {
                 control: StepControl::default(),
             }),
         ],
+    }
+}
+
+fn single_locate_skill(schema_version: u32) -> SkillDefinition {
+    SkillDefinition {
+        schema_version,
+        name: "version-boundary".to_string(),
+        steps: vec![SkillStep::Locate(LocateStep {
+            id: Some("locate".to_string()),
+            query: "button".to_string(),
+            control: StepControl::default(),
+        })],
+    }
+}
+
+#[test]
+fn test_validate_rejects_unsupported_typed_schema_versions() {
+    for version in [0, SUPPORTED_SKILL_SCHEMA_VERSION + 1] {
+        let error = validate_skill_definition(&single_locate_skill(version))
+            .expect_err("unsupported typed schema version must be rejected");
+        assert!(matches!(
+            error,
+            SkillEngineError::UnsupportedSchemaVersion { .. }
+        ));
+    }
+}
+
+#[test]
+fn test_run_rejects_unsupported_schema_versions_before_runtime_calls() {
+    for version in [0, SUPPORTED_SKILL_SCHEMA_VERSION + 1] {
+        let error = SkillEngine::new()
+            .run(&single_locate_skill(version), &mut PanicRuntime)
+            .expect_err("unsupported schema version must be rejected before execution");
+        assert!(matches!(
+            error,
+            SkillEngineError::UnsupportedSchemaVersion { .. }
+        ));
     }
 }
 

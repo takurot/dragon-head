@@ -4,6 +4,8 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use thiserror::Error;
 
+pub const SUPPORTED_SKILL_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillDefinition {
     pub schema_version: u32,
@@ -175,6 +177,8 @@ pub struct SkillRunReport {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum SkillEngineError {
+    #[error("unsupported skill schema version {version} (max {max})")]
+    UnsupportedSchemaVersion { version: u64, max: u32 },
     #[error("skill definition contains no steps")]
     EmptySkill,
     #[error("duplicate step id found: {step_id}")]
@@ -443,6 +447,13 @@ fn build_step_index(skill: &SkillDefinition) -> Result<HashMap<String, usize>, S
 }
 
 pub fn validate_skill_definition(skill: &SkillDefinition) -> Result<(), SkillEngineError> {
+    if skill.schema_version == 0 || skill.schema_version > SUPPORTED_SKILL_SCHEMA_VERSION {
+        return Err(SkillEngineError::UnsupportedSchemaVersion {
+            version: u64::from(skill.schema_version),
+            max: SUPPORTED_SKILL_SCHEMA_VERSION,
+        });
+    }
+
     if skill.steps.is_empty() {
         return Err(SkillEngineError::EmptySkill);
     }
@@ -590,7 +601,11 @@ pub fn skill_definition_schema() -> Value {
         "additionalProperties": false,
         "required": ["schema_version", "name", "steps"],
         "properties": {
-            "schema_version": { "type": "integer", "minimum": 1 },
+            "schema_version": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": SUPPORTED_SKILL_SCHEMA_VERSION
+            },
             "name": { "type": "string", "minLength": 1 },
             "steps": {
                 "type": "array",
@@ -695,6 +710,15 @@ pub fn validate_skill_json(value: &Value) -> Result<(), SkillSchemaError> {
 }
 
 pub fn parse_skill_definition(value: &Value) -> Result<SkillDefinition, SkillEngineError> {
+    if let Some(version) = value.get("schema_version").and_then(Value::as_u64)
+        && version > u64::from(SUPPORTED_SKILL_SCHEMA_VERSION)
+    {
+        return Err(SkillEngineError::UnsupportedSchemaVersion {
+            version,
+            max: SUPPORTED_SKILL_SCHEMA_VERSION,
+        });
+    }
+
     validate_skill_json(value).map_err(|err| SkillEngineError::SchemaValidation {
         message: err.to_string(),
     })?;

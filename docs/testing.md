@@ -41,6 +41,9 @@ The CI pipeline is defined in `.github/workflows/`.
 - **Playwright comparison harness**: `ci.yml` installs and tests `bench-playwright` at the
   supported Node.js 20.19, 22.12, and 24 boundaries, and rejects moderate-or-higher npm
   audit findings.
+- **Skill schema version gate**: `skill-schema-compatibility` rejects JSON definitions above
+  the supported schema version, while `skill-conformance` rejects unsupported typed
+  definitions before any runtime operation is invoked.
 - **`e2e.yml`**: Runs E2E tests against a headless browser.
 - **Performance Gate (PR Short)**: `ci.yml` runs a short NFR suite (`ttft`, `nfr_latency`, `nfr_bandwidth`, `nfr_capacity`) and generates `core-runtime/target/nfr-dashboard.md`.
 - **Performance Gate (Nightly Full)**: `e2e.yml` runs the full NFR suite (including long TTFT and full capacity targets) and publishes the same dashboard format for regression tracking.
@@ -79,6 +82,10 @@ cargo test --workspace --doc
 
 # Run a specific integration test
 cargo test -p core-runtime --test sre_determinism --verbose
+
+# Reproduce the skill schema version contract gates
+cargo test -p skills-engine --test skill_schema_compatibility --verbose
+cargo test -p skills-engine --test skill_conformance --verbose
 
 # Run E2E tests (requires Chrome; CHROME_INSTALLED=true is set by the container)
 CHROME_INSTALLED=true cargo test -p core-runtime --test semantic_wait
