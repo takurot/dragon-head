@@ -608,6 +608,10 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `core-runtime -> plugin-host` 依存を明記した。tool定義snapshotとdocs name-setの
 > 完全一致テストにより、tool追加・削除・改名時のdriftを必須CIで検出する。
 
+> **Follow-up (ISSUE-211, done)**: `prompt_injection.additional_phrases` にJSON配列形式の
+> env overrideを追加し、件数・個別長・総量を制限した。runtimeが認識するconfig env名を
+> READMEと`--doctor`へ同期し、完全一致contract testと値非開示binary testでdriftを防ぐ。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。

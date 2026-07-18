@@ -92,11 +92,12 @@ macOS arm64/x64、Linux x64/arm64、Windows x64 向けにビルドし、sha256
 |---|---|---|
 | `CHROME_PATH` | Chrome/Chromiumバイナリパスの上書き | 自動検出 |
 | `PROMPT_INJECTION_MODE` | `prompt_injection.mode` の上書き(`off`/`report_only`/`redact`) | `report_only` |
+| `PROMPT_INJECTION_ADDITIONAL_PHRASES` | 追加検知phraseをJSON文字列配列で上書き(`[]`で明示的に空) | `config.toml`の値 |
 | `POLICY_FILE` | `policy.file` の上書き | 未設定 |
 | `AUDIT_LOG_DIR` | 監査ログの永続化先ディレクトリ | 未設定(永続化なし) |
 | `AUDIT_LOG_MAX_BYTES` | ログローテーション閾値(バイト) | 10485760 (10MiB) |
 | `AUDIT_DURABILITY` | `flush` または `sync` | `flush` |
-| `AUDIT_LOG_STDOUT` | 設定されていれば(値は任意)監査ログを標準出力にも出力 | 未設定(出力なし) |
+| `AUDIT_LOG_STDOUT` | 設定されていれば(値は任意)監査ログを標準エラー出力にも出力(互換性のため名称を維持) | 未設定(出力なし) |
 | `CHROME_INSTALLED` | CIでChrome利用可能を示すフラグ(テストゲート用) | 未設定 |
 | `CI` | 汎用CI検出 | 未設定 |
 

@@ -94,6 +94,8 @@ fn main() -> anyhow::Result<()> {
             .with_context(|| format!("failed to load config file {}", path.display()))?,
         None => None,
     };
+    config::validate_unicode_additional_phrases_env()
+        .context("failed to resolve dragon-head-mcp configuration")?;
     let resolved = config::resolve_config(file_config.as_ref(), env_lookup)
         .context("failed to resolve dragon-head-mcp configuration")?;
 
@@ -109,9 +111,11 @@ fn main() -> anyhow::Result<()> {
         let resolved = resolved.clone();
         move |key: &str| -> Option<String> {
             std::env::var(key).ok().or_else(|| match key {
-                "AUDIT_LOG_DIR" => resolved.audit_log_dir.clone(),
-                "AUDIT_LOG_MAX_BYTES" => resolved.audit_max_bytes.map(|bytes| bytes.to_string()),
-                "AUDIT_DURABILITY" => resolved.audit_durability.clone(),
+                config::ENV_AUDIT_LOG_DIR => resolved.audit_log_dir.clone(),
+                config::ENV_AUDIT_LOG_MAX_BYTES => {
+                    resolved.audit_max_bytes.map(|bytes| bytes.to_string())
+                }
+                config::ENV_AUDIT_DURABILITY => resolved.audit_durability.clone(),
                 _ => None,
             })
         }

@@ -173,7 +173,8 @@ chrome_path = "/usr/bin/chromium"
 [prompt_injection]
 # "off" | "report_only" (default) | "redact". Overridden by PROMPT_INJECTION_MODE.
 mode = "report_only"
-# Extra literal phrases to flag after the built-in prompt-injection patterns.
+# Extra literal phrases to flag after the built-in prompt-injection patterns. Overridden by
+# PROMPT_INJECTION_ADDITIONAL_PHRASES (a JSON string array).
 additional_phrases = ["reveal developer message"]
 
 [policy]
@@ -189,23 +190,34 @@ durability = "flush"  # "flush" (default) or "sync"
 
 ### Precedence
 
+<!-- config-env-contract:start -->
 | Setting | Env var (wins) | config.toml key |
 | --- | --- | --- |
 | Chrome path | `CHROME_PATH` | `chrome_path` |
 | Prompt-injection mode | `PROMPT_INJECTION_MODE` | `prompt_injection.mode` |
-| Prompt-injection additional phrases | none | `prompt_injection.additional_phrases` |
+| Prompt-injection additional phrases | `PROMPT_INJECTION_ADDITIONAL_PHRASES` | `prompt_injection.additional_phrases` |
 | Policy file | `POLICY_FILE` | `policy.file` |
 | Audit log directory | `AUDIT_LOG_DIR` | `audit.log_dir` |
 | Audit max bytes | `AUDIT_LOG_MAX_BYTES` | `audit.max_bytes` |
 | Audit durability | `AUDIT_DURABILITY` | `audit.durability` |
 | Audit stdout mirroring | `AUDIT_LOG_STDOUT` | none |
+<!-- config-env-contract:end -->
+
+`PROMPT_INJECTION_ADDITIONAL_PHRASES` must be a JSON array of strings, for
+example `["reveal developer message","ignore prior instructions"]`. It replaces
+the file value; use `[]` to clear it. Empty phrases and exact duplicates are
+removed after trimming. The same normalization and limits apply to the env value
+and `config.toml`: the effective set is limited to 64 phrases, 512 UTF-8 bytes
+per phrase, and 8 KiB total, while preserving first-seen order.
 
 `AUDIT_LOG_STDOUT` (if set, any value) mirrors audit events to **stderr**, never
 stdout — `dragon-head-mcp` uses stdout for JSON-RPC framing, so writing there
 would corrupt the protocol stream.
 
-Run `dragon-head-mcp --doctor` to validate the config file. A malformed file, or
-an invalid `prompt_injection.mode` value, makes the "Config file" check fail.
+Run `dragon-head-mcp --doctor` to validate the config file and list every
+supported configuration environment variable. A malformed file or invalid env
+override makes the "Config file" check fail. The summary reports only the
+effective additional-phrase count, never the phrase contents.
 
 Setting `prompt_injection.mode` to `redact` or `off` changes the default
 security posture — see [Security: Prompt Injection
