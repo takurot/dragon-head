@@ -52,13 +52,27 @@ flowchart TD
 | `bench` | NFR/ROI benchmarking harness producing markdown dashboards |
 | `test-bench-support` | Shared `should_skip_browser_tests()` helper for Chrome-dependent tests |
 
+The canonical MCP tool names are:
+
+<!-- mcp-tool-list:start -->
+- `get_state`
+- `act`
+- `verify`
+- `get_visual`
+- `ask_human`
+- `run_skill`
+- `get_usage_report`
+- `extract`
+<!-- mcp-tool-list:end -->
+
 ## Dependency direction
 
 `mcp-server` depends on `core-runtime`, `skills-engine`, and `plugin-host`.
-`core-runtime` has no dependency on the other workspace crates — it's the
-foundation. `hitl-bridge`, `bench`, and `marketplace` are independent
-binaries/libraries that don't feed back into `core-runtime`. There is no
-cyclic dependency between workspace crates.
+`core-runtime` depends on `plugin-host` for the concrete loaded-plugin adapters
+implemented in `plugin_hooks`; `plugin-host` does not depend on `core-runtime`,
+so this edge remains acyclic. `hitl-bridge`, `bench`, and `marketplace` are
+independent binaries/libraries that don't feed back into `core-runtime`. There
+is no cyclic dependency between workspace crates.
 
 ## Data flow: `get_state`
 

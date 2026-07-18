@@ -2,7 +2,14 @@ use anyhow::Result;
 use json_patch::diff;
 use mcp_server::{McpBackend, McpServer};
 use serde_json::{json, Value};
-use std::{fs, path::Path};
+use std::{collections::BTreeSet, fs, path::Path};
+
+const TOOL_SNAPSHOT: &str = "tests/fixtures/mcp_tools.snapshot.json";
+const UPDATE_TOOL_SNAPSHOT: &str = "UPDATE_MCP_TOOL_SNAPSHOT";
+const TOOL_LIST_START: &str = "<!-- mcp-tool-list:start -->";
+const TOOL_LIST_END: &str = "<!-- mcp-tool-list:end -->";
+const TOOL_SEMANTICS_START: &str = "<!-- mcp-tool-semantics:start -->";
+const TOOL_SEMANTICS_END: &str = "<!-- mcp-tool-semantics:end -->";
 
 #[derive(Default)]
 struct MockBackend;
@@ -35,6 +42,170 @@ impl McpBackend for MockBackend {
     fn extract(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({"rule": "mock", "result": null}))
     }
+}
+
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("mcp-server must be inside the workspace")
+}
+
+fn canonical_tool_contract() -> Value {
+    let mut tools = McpServer::new(MockBackend).tools();
+    tools.sort_by(|left, right| left.name.cmp(&right.name));
+    serde_json::to_value(tools).expect("tool definitions must serialize")
+}
+
+fn runtime_tool_names() -> BTreeSet<String> {
+    let contract = canonical_tool_contract();
+    let tools = contract.as_array().expect("tool contract must be an array");
+    let names = tools
+        .iter()
+        .map(|tool| {
+            tool["name"]
+                .as_str()
+                .expect("tool name must be a string")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        names.len(),
+        tools.len(),
+        "McpServer::tools() must not define duplicate tool names"
+    );
+    names
+}
+
+fn section_between<'a>(body: &'a str, start: &str, end: &str) -> &'a str {
+    let (_, after_start) = body
+        .split_once(start)
+        .unwrap_or_else(|| panic!("missing section start marker: {start}"));
+    let (section, _) = after_start
+        .split_once(end)
+        .unwrap_or_else(|| panic!("missing section end marker: {end}"));
+    section
+}
+
+fn documented_tool_names(body: &str) -> BTreeSet<String> {
+    let documented = section_between(body, TOOL_LIST_START, TOOL_LIST_END)
+        .lines()
+        .filter_map(|line| {
+            let (_, after_tick) = line.split_once('`')?;
+            let (name, _) = after_tick.split_once('`')?;
+            Some(name.to_string())
+        })
+        .collect::<Vec<_>>();
+    let names = documented.iter().cloned().collect::<BTreeSet<_>>();
+    assert_eq!(
+        names.len(),
+        documented.len(),
+        "canonical MCP documentation list must not contain duplicate tool names"
+    );
+    names
+}
+
+fn read_workspace_file(path: &str) -> String {
+    fs::read_to_string(workspace_root().join(path))
+        .unwrap_or_else(|error| panic!("failed to read {path}: {error}"))
+}
+
+#[test]
+fn test_mcp_tool_contract_snapshot() -> Result<()> {
+    let generated = canonical_tool_contract();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(TOOL_SNAPSHOT);
+
+    if std::env::var(UPDATE_TOOL_SNAPSHOT).as_deref() == Ok("1") {
+        anyhow::ensure!(
+            std::env::var("CI").is_err(),
+            "{UPDATE_TOOL_SNAPSHOT}=1 is not allowed in CI"
+        );
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, serde_json::to_string_pretty(&generated)?)?;
+        return Ok(());
+    }
+
+    let expected: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+    assert_eq!(
+        generated, expected,
+        "MCP tool contract changed; update with {UPDATE_TOOL_SNAPSHOT}=1 cargo test -p mcp-server --test mcp_client_contract test_mcp_tool_contract_snapshot -- --exact"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_public_docs_tool_lists_exactly_match_runtime_contract() {
+    let runtime = runtime_tool_names();
+    for path in [
+        "README.md",
+        "docs/AI_CONTEXT.md",
+        "docs/ARCHITECTURE.md",
+        "docs/SPEC.md",
+    ] {
+        let body = read_workspace_file(path);
+        assert_eq!(
+            documented_tool_names(&body),
+            runtime,
+            "{path} MCP tool list must exactly match McpServer::tools()"
+        );
+    }
+}
+
+#[test]
+fn test_public_docs_preserve_read_only_tool_security_and_audit_semantics() {
+    for path in ["README.md", "docs/SPEC.md"] {
+        let body = read_workspace_file(path);
+        let semantics = section_between(&body, TOOL_SEMANTICS_START, TOOL_SEMANTICS_END);
+        assert!(
+            semantics.contains("prompt-injection sanitization"),
+            "{path}"
+        );
+        assert!(semantics.contains("PII redaction"), "{path}");
+        assert!(
+            semantics.contains("does not emit an action audit event"),
+            "{path}"
+        );
+        assert!(semantics.contains("does not meter itself"), "{path}");
+        assert!(semantics.contains("audit-retention snapshot"), "{path}");
+    }
+}
+
+#[test]
+fn test_architecture_dependency_direction_matches_manifests() -> Result<()> {
+    let core_manifest: toml::Value =
+        toml::from_str(&read_workspace_file("core-runtime/Cargo.toml"))?;
+    let core_depends_on_plugin_host = core_manifest
+        .get("dependencies")
+        .and_then(|dependencies| dependencies.get("plugin-host"))
+        .is_some();
+    let plugin_manifest: toml::Value =
+        toml::from_str(&read_workspace_file("plugin-host/Cargo.toml"))?;
+    let plugin_host_depends_on_core = plugin_manifest
+        .get("dependencies")
+        .and_then(|dependencies| dependencies.get("core-runtime"))
+        .is_some();
+
+    let architecture = read_workspace_file("docs/ARCHITECTURE.md");
+    let dependency_section = section_between(
+        &architecture,
+        "## Dependency direction",
+        "## Data flow: `get_state`",
+    );
+    let docs_have_core_to_plugin_edge =
+        dependency_section.contains("`core-runtime` depends on `plugin-host`");
+    let docs_have_plugin_to_core_edge =
+        dependency_section.contains("`plugin-host` depends on `core-runtime`");
+
+    assert_eq!(
+        docs_have_core_to_plugin_edge, core_depends_on_plugin_host,
+        "docs/ARCHITECTURE.md core-runtime -> plugin-host edge must match core-runtime/Cargo.toml"
+    );
+    assert_eq!(
+        docs_have_plugin_to_core_edge, plugin_host_depends_on_core,
+        "docs/ARCHITECTURE.md plugin-host -> core-runtime edge must match plugin-host/Cargo.toml"
+    );
+    Ok(())
 }
 
 /// A backend that returns controlled semantic state payloads for delta testing.

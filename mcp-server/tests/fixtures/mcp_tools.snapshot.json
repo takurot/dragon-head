@@ -1,0 +1,353 @@
+[
+  {
+    "description": "Execute an interaction action",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "click",
+            "type"
+          ],
+          "type": "string"
+        },
+        "target_id": {
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "target_stable_key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "act"
+  },
+  {
+    "description": "Resolve pending HITL request",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "type": "boolean"
+        },
+        "reason": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "name": "ask_human"
+  },
+  {
+    "description": "Extract structured data using Deep Lens DSL rule",
+    "inputSchema": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "rule_name": {
+              "description": "Name of a pre-registered SchemaRegistry rule",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule_name"
+          ]
+        },
+        {
+          "properties": {
+            "inline": {
+              "description": "Inline Deep Lens DSL rule",
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attribute": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "selector": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "selector"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fields": {
+                      "additionalProperties": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minProperties": 1,
+                      "type": "object"
+                    },
+                    "selector": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "selector",
+                    "fields"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fields": {
+                          "additionalProperties": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "minProperties": 1,
+                          "type": "object"
+                        },
+                        "selector": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "selector",
+                        "fields"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "required": [
+            "inline"
+          ]
+        }
+      ],
+      "properties": {
+        "inline": {
+          "description": "Inline Deep Lens DSL rule",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "attribute": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "selector": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "selector"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "fields": {
+                  "additionalProperties": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "minProperties": 1,
+                  "type": "object"
+                },
+                "selector": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "selector",
+                "fields"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fields": {
+                      "additionalProperties": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minProperties": 1,
+                      "type": "object"
+                    },
+                    "selector": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "selector",
+                    "fields"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "items"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "rule_name": {
+          "description": "Name of a pre-registered SchemaRegistry rule",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "extract"
+  },
+  {
+    "description": "Retrieve the semantic page state",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery": {
+          "enum": [
+            "full",
+            "delta"
+          ],
+          "type": "string"
+        },
+        "force_refresh": {
+          "type": "boolean"
+        },
+        "format": {
+          "enum": [
+            "json",
+            "markdown"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_state"
+  },
+  {
+    "description": "Retrieve usage meters and plan tier summary",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "get_usage_report"
+  },
+  {
+    "description": "Capture visual context with optional marks",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "clean",
+            "som"
+          ],
+          "type": "string"
+        },
+        "viewport": {
+          "enum": [
+            "full"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_visual"
+  },
+  {
+    "description": "Execute a declarative skill workflow",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "params": {
+          "type": "object"
+        },
+        "skill_name": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill_name"
+      ],
+      "type": "object"
+    },
+    "name": "run_skill"
+  },
+  {
+    "description": "Verify precondition text before acting",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "expected": {
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        "target_id": {
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "target_stable_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_id",
+        "expected"
+      ],
+      "type": "object"
+    },
+    "name": "verify"
+  }
+]

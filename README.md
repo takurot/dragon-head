@@ -356,6 +356,7 @@ specific Chromium build.
 `dragon-head-mcp` currently exposes 8 tools. The source of truth is
 `McpServer::tools()` in `mcp-server/src/lib.rs`:
 
+<!-- mcp-tool-list:start -->
 | Tool | Purpose |
 | --- | --- |
 | `get_state` | Retrieve the semantic page state. |
@@ -366,6 +367,14 @@ specific Chromium build.
 | `run_skill` | Execute a declarative skill workflow. |
 | `get_usage_report` | Retrieve usage meters and plan tier summary. |
 | `extract` | Extract structured data using a Deep Lens DSL rule. |
+<!-- mcp-tool-list:end -->
+
+<!-- mcp-tool-semantics:start -->
+`extract` applies prompt-injection sanitization and PII redaction before returning
+structured page data. It is read-only and does not emit an action audit event.
+`get_usage_report` is also read-only: it reports the plan tier, usage meters, and
+the audit-retention snapshot, but does not meter itself or emit an action audit event.
+<!-- mcp-tool-semantics:end -->
 
 ## Developer Examples
 
