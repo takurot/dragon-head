@@ -17,6 +17,7 @@ usage meters.
 The current MCP tool contract has 8 tools, defined in `McpServer::tools()` in
 `mcp-server/src/lib.rs`:
 
+<!-- mcp-tool-list:start -->
 - `get_state`
 - `act`
 - `verify`
@@ -25,6 +26,10 @@ The current MCP tool contract has 8 tools, defined in `McpServer::tools()` in
 - `run_skill`
 - `get_usage_report`
 - `extract`
+<!-- mcp-tool-list:end -->
+
+The required `mcp_client_contract` CI suite snapshots the full tool definitions
+and checks these canonical documentation lists for exact name-set equality.
 
 ## Primary Users
 

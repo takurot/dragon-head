@@ -208,16 +208,27 @@ AI とブラウザの間の会話を「操作」から「情報の取得」へ�
 
 Model Context Protocol (MCP) 準拠のツール定義。
 
+<!-- mcp-tool-list:start -->
 | Tool Name | Arguments | Description |
 | :--- | :--- | :--- |
-| `get_state` | `format`: "json"\|"markdown", `force_refresh`: bool | ページ状態の取得。 |
-| `get_state` output | `security_flags`: string[] | Prompt Injection Sanitization が検出した既知リスクを要素単位で返す。 |
-| `extract` output | `result`: any, `security_flags`: string[] | Deep Lens 抽出結果。`ReportOnly` では危険文字列を保持してリスクを返し、`Redact` では同じ境界で置換する。 |
+| `get_state` | `format`: "json"\|"markdown", `force_refresh`: bool | ページ状態と、検出した既知リスクを要素単位の `security_flags` で返す。 |
 | `act` | `target_id`: int, `target_stable_key`: string, `action`: "click"\|"type", `value`: string | アクション実行。 |
 | `verify` | `target_id`: int, `expected`: {text: string} | ハルシネーション防止の事前検証。 |
 | `get_visual` | `mode`: "clean"\|"som", `viewport`: "full" | 視覚情報の取得。 |
 | `ask_human` | `reason`: string, `context`: bool, `outcome_projection`: object | HITL要求（2FA/判断不能/高額決済時）。承認要求に未来投影データを同梱。 |
 | `run_skill` | `skill_name`: string, `params`: object | 定義済みSkillの実行。 |
+| `get_usage_report` | なし | 現在のplan tier、usage meters、audit-retention snapshotを返す。 |
+| `extract` | `rule_name`: string または `inline`: object | Deep Lens抽出を実行し、`result` と `security_flags` を返す。 |
+<!-- mcp-tool-list:end -->
+
+<!-- mcp-tool-semantics:start -->
+`extract` は結果を返す前に prompt-injection sanitization と PII redaction を適用する。
+これはread-only操作であり、action audit eventは生成しない
+(does not emit an action audit event)。`get_usage_report` もread-onlyで、usage meters、
+plan tier、audit-retention snapshotを読み取る。自身の呼び出しはmeterへ加算せず
+(does not meter itself)、action audit eventも生成しない
+(does not emit an action audit event)。
+<!-- mcp-tool-semantics:end -->
 
 **ACT-05: HITL Concurrency & Safety**
 - **Session Lock**: Slack/Teams 等のチャットツール連携において、複数人による同時承認を防ぐ排他ロック機構。

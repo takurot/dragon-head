@@ -603,6 +603,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > typed definition の実行前検証で未対応版を拒否する。最初の未来版と version 0 の
 > 境界テストにより、未解釈のSkillが現行セマンティクスで実行されないことを固定した。
 
+> **Follow-up (ISSUE-189, done)**: runtimeの8-tool MCP contractをREADME、AI context、
+> Architecture、SPECへ同期し、`extract` / `get_usage_report` のsecurity・audit境界と
+> `core-runtime -> plugin-host` 依存を明記した。tool定義snapshotとdocs name-setの
+> 完全一致テストにより、tool追加・削除・改名時のdriftを必須CIで検出する。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。
