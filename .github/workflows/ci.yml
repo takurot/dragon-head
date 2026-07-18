@@ -39,6 +39,31 @@ jobs:
     # EmbarkStudios/cargo-deny-action downloads a pre-built binary.
     - uses: EmbarkStudios/cargo-deny-action@v2
 
+  bench-playwright:
+    name: Bench Playwright (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20.19.0", "22.12.0", "24"]
+    defaults:
+      run:
+        working-directory: bench-playwright
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node }}
+        cache: npm
+        cache-dependency-path: bench-playwright/package-lock.json
+    - name: Install benchmark dependencies
+      run: npm ci
+    - name: Run benchmark harness tests
+      run: npm test
+    - name: Audit benchmark dependencies
+      if: matrix.node == '22.12.0'
+      run: npm audit --audit-level=moderate
+
   plugin-sandbox:
     name: Plugin sandbox (${{ matrix.arch }})
     strategy:

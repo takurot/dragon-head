@@ -34,6 +34,9 @@ We follow the "Testing Pyramid" approach with the following layers:
 The CI pipeline is defined in `.github/workflows/`.
 
 - **`ci.yml`**: Runs `fmt`, `clippy`, unit tests, and integration tests.
+- **Playwright comparison harness**: `ci.yml` installs and tests `bench-playwright` at the
+  supported Node.js 20.19, 22.12, and 24 boundaries, and rejects moderate-or-higher npm
+  audit findings.
 - **`e2e.yml`**: Runs E2E tests against a headless browser.
 - **Performance Gate (PR Short)**: `ci.yml` runs a short NFR suite (`ttft`, `nfr_latency`, `nfr_bandwidth`, `nfr_capacity`) and generates `core-runtime/target/nfr-dashboard.md`.
 - **Performance Gate (Nightly Full)**: `e2e.yml` runs the full NFR suite (including long TTFT and full capacity targets) and publishes the same dashboard format for regression tracking.
