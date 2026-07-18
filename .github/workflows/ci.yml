@@ -83,6 +83,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    # The workspace test build can exhaust the hosted runner's available disk
+    # after restoring cached artifacts. Remove unused preinstalled SDKs first.
+    - name: Free runner disk space
+      run: |
+        df -h /
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/.ghcup
+        sudo rm -rf /usr/share/swift
+        df -h /
     - uses: Swatinem/rust-cache@v2
     - name: Verify Chrome is available
       run: google-chrome --version
