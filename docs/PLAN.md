@@ -171,6 +171,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - Exit Criteria
   - [x] 導入メリットを定量的に示す Markdown レポートが出力可能。
 
+> **Follow-up (ISSUE-185)**: `bench-playwright` の Vitest/Vite 依存を監査済みの
+> バージョンへ更新し、Node.js の対応範囲を依存グラフと一致させる。PR CI で
+> `npm ci`、比較ハーネスのテスト、`npm audit --audit-level=moderate` を実行し、
+> ベンチ用dev toolingの既知脆弱性再混入を防止する。
+
 ### PR-29: config.toml Runtime Configuration Loading
 - Status: `DONE`
 - Spec Ref: ISSUE-146
