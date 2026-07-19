@@ -14,6 +14,10 @@ FLAGS:
     -V, --version     Print version information and exit
     -h, --help        Print this help message and exit
 
+CONFIGURATION:
+    config.toml [skills].files loads validated JSON skill definitions.
+    Relative skill paths resolve from the config.toml directory.
+
 With no flags, starts the stdio MCP server.";
 
 /// The action requested via command-line arguments.

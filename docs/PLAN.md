@@ -193,6 +193,12 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - Exit Criteria
   - [x] `config.toml` で `chrome_path` / `prompt_injection.mode` / `policy.file` / `audit.*` がユーザー設定可能になり、`--doctor` がその内容を検証する。
 
+> **Follow-up (ISSUE-247, done)**: `[skills].files` で standalone server の
+> SkillDefinition JSON を読み込む。config file 相対 path、件数・file size 上限、
+> schema/semantic validation、重複名拒否を startup/`--doctor` 共通 loader で実施し、
+> 全件検証後かつ stdio ready 通知前にのみ登録する。相対 fixture を用いた実バイナリ
+> Chrome E2E で `run_skill` 完了まで固定する。
+
 ### PR-30: Chrome Crash/Disconnect Recovery in Long-Running MCP Sessions
 - Status: `DONE`
 - Spec Ref: ISSUE-149

@@ -98,6 +98,8 @@ fn main() -> anyhow::Result<()> {
         .context("failed to resolve dragon-head-mcp configuration")?;
     let resolved = config::resolve_config(file_config.as_ref(), env_lookup)
         .context("failed to resolve dragon-head-mcp configuration")?;
+    let skills = config::load_configured_skills(config_path.as_deref(), file_config.as_ref())
+        .context("failed to load configured skills")?;
 
     if resolved.injection_mode != PromptInjectionMode::ReportOnly {
         eprintln!(
@@ -139,6 +141,9 @@ fn main() -> anyhow::Result<()> {
         additional_phrases: resolved.injection_additional_phrases.clone(),
     });
     backend.set_navigation_allow_private_network(resolved.navigation_allow_private_network);
+    for skill in skills {
+        backend.register_skill(skill);
+    }
     let mut server = McpServer::new(backend);
     eprintln!("dragon-head-mcp: ready, listening on stdio");
 

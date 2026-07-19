@@ -220,7 +220,7 @@ Model Context Protocol (MCP) 準拠のツール定義。
 | `verify` | `target_id`: int, `expected`: {text: string} | ハルシネーション防止の事前検証。 |
 | `get_visual` | `mode`: "clean"\|"som", `viewport`: "full" | 視覚情報の取得。 |
 | `ask_human` | `reason`: string, `context`: bool, `outcome_projection`: object | HITL要求（2FA/判断不能/高額決済時）。承認要求に未来投影データを同梱。 |
-| `run_skill` | `skill_name`: string, `params`: object | 定義済みSkillの実行。 |
+| `run_skill` | `skill_name`: string, `params`: object | 起動時に `config.toml` の `[skills].files` から全件検証・登録されたSkillの実行。 |
 | `get_usage_report` | なし | 現在のplan tier、usage meters、audit-retention snapshotを返す。 |
 | `extract` | `rule_name`: string または `inline`: object | Deep Lens抽出を実行し、`result` と `security_flags` を返す。 |
 <!-- mcp-tool-list:end -->

@@ -7,8 +7,11 @@
 
 use core_runtime::PromptInjectionMode;
 use serde::Deserialize;
+use skills_engine::{parse_skill_definition, validate_skill_definition, SkillDefinition};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -38,6 +41,8 @@ pub const HONORED_CONFIG_ENV_VARS: &[&str] = &[
 pub const MAX_ADDITIONAL_PHRASES: usize = 64;
 pub const MAX_ADDITIONAL_PHRASE_BYTES: usize = 512;
 pub const MAX_ADDITIONAL_PHRASES_BYTES: usize = 8 * 1024;
+pub const MAX_SKILL_FILES: usize = 64;
+pub const MAX_SKILL_FILE_BYTES: usize = 1024 * 1024;
 
 /// Raw `config.toml` contents.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -51,6 +56,8 @@ pub struct FileConfig {
     pub navigation: NavigationFileConfig,
     #[serde(default)]
     pub audit: AuditFileConfig,
+    #[serde(default)]
+    pub skills: SkillsFileConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -85,6 +92,13 @@ pub struct AuditFileConfig {
     pub durability: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct SkillsFileConfig {
+    /// JSON files containing one `SkillDefinition` each.
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("failed to read config file {path}: {source}")]
@@ -116,6 +130,68 @@ pub enum ConfigError {
     AdditionalPhrasesTooLarge { max_bytes: usize },
     #[error("environment variable {name} is not valid UTF-8")]
     NonUnicodeEnvVar { name: &'static str },
+    #[error("too many configured skill files (maximum {max})")]
+    TooManySkillFiles { max: usize },
+    #[error("failed to read skill file {path}: {source}")]
+    SkillFileIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("skill file {path} exceeds {max_bytes} bytes")]
+    SkillFileTooLarge { path: PathBuf, max_bytes: usize },
+    #[error("skill file {path} is not a regular file")]
+    SkillFileNotRegular { path: PathBuf },
+    #[error("failed to parse skill file {path} as JSON: {source}")]
+    SkillFileJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("invalid skill definition in {path}: {reason}")]
+    InvalidSkillDefinition { path: PathBuf, reason: String },
+    #[error("duplicate skill name in {path}; first defined in {first_path}")]
+    DuplicateSkillName { path: PathBuf, first_path: PathBuf },
+}
+
+#[cfg(unix)]
+fn open_regular_skill_file(path: &Path) -> Result<(File, std::fs::Metadata), ConfigError> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|source| ConfigError::SkillFileIo {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    regular_skill_file_metadata(path, file)
+}
+
+#[cfg(not(unix))]
+fn open_regular_skill_file(path: &Path) -> Result<(File, std::fs::Metadata), ConfigError> {
+    let file = File::open(path).map_err(|source| ConfigError::SkillFileIo {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    regular_skill_file_metadata(path, file)
+}
+
+fn regular_skill_file_metadata(
+    path: &Path,
+    file: File,
+) -> Result<(File, std::fs::Metadata), ConfigError> {
+    let metadata = file.metadata().map_err(|source| ConfigError::SkillFileIo {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(ConfigError::SkillFileNotRegular {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok((file, metadata))
 }
 
 pub fn validate_unicode_additional_phrases_env() -> Result<(), ConfigError> {
@@ -178,6 +254,83 @@ pub fn load_config_file(path: &Path) -> Result<Option<FileConfig>, ConfigError> 
             path: path.to_path_buf(),
             details: err,
         })
+}
+
+/// Loads every configured JSON skill definition with bounded I/O and validates the complete
+/// set before returning it. Relative paths are resolved from the actual `config.toml` parent.
+/// Callers can therefore register the returned definitions atomically after this function
+/// succeeds; no backend is mutated on a partial failure.
+pub fn load_configured_skills(
+    config_path: Option<&Path>,
+    file_config: Option<&FileConfig>,
+) -> Result<Vec<SkillDefinition>, ConfigError> {
+    let files = file_config
+        .map(|config| config.skills.files.as_slice())
+        .unwrap_or_default();
+    if files.len() > MAX_SKILL_FILES {
+        return Err(ConfigError::TooManySkillFiles {
+            max: MAX_SKILL_FILES,
+        });
+    }
+
+    let config_dir = config_path
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new("."));
+    let mut skills = Vec::with_capacity(files.len());
+    let mut names = HashMap::<String, PathBuf>::new();
+
+    for configured_path in files {
+        let configured_path = Path::new(configured_path);
+        let path = if configured_path.is_absolute() {
+            configured_path.to_path_buf()
+        } else {
+            config_dir.join(configured_path)
+        };
+
+        let (file, metadata) = open_regular_skill_file(&path)?;
+        if metadata.len() > MAX_SKILL_FILE_BYTES as u64 {
+            return Err(ConfigError::SkillFileTooLarge {
+                path,
+                max_bytes: MAX_SKILL_FILE_BYTES,
+            });
+        }
+
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        file.take((MAX_SKILL_FILE_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|source| ConfigError::SkillFileIo {
+                path: path.clone(),
+                source,
+            })?;
+        if bytes.len() > MAX_SKILL_FILE_BYTES {
+            return Err(ConfigError::SkillFileTooLarge {
+                path,
+                max_bytes: MAX_SKILL_FILE_BYTES,
+            });
+        }
+
+        let value =
+            serde_json::from_slice(&bytes).map_err(|source| ConfigError::SkillFileJson {
+                path: path.clone(),
+                source,
+            })?;
+        let skill =
+            parse_skill_definition(&value).map_err(|_| ConfigError::InvalidSkillDefinition {
+                path: path.clone(),
+                reason: "schema validation failed".to_string(),
+            })?;
+        validate_skill_definition(&skill).map_err(|_| ConfigError::InvalidSkillDefinition {
+            path: path.clone(),
+            reason: "semantic validation failed".to_string(),
+        })?;
+
+        if let Some(first_path) = names.insert(skill.name.clone(), path.clone()) {
+            return Err(ConfigError::DuplicateSkillName { path, first_path });
+        }
+        skills.push(skill);
+    }
+
+    Ok(skills)
 }
 
 /// Effective configuration after merging `file_config` with environment-variable overrides.
@@ -419,6 +572,7 @@ durability = "sync"
                     max_bytes: Some(1_048_576),
                     durability: Some("sync".to_string()),
                 },
+                skills: SkillsFileConfig::default(),
             }
         );
     }
@@ -436,6 +590,7 @@ durability = "sync"
         assert_eq!(config.policy, PolicyFileConfig::default());
         assert_eq!(config.navigation, NavigationFileConfig::default());
         assert_eq!(config.audit, AuditFileConfig::default());
+        assert_eq!(config.skills, SkillsFileConfig::default());
     }
 
     #[test]
@@ -474,6 +629,226 @@ durability = "sync"
         let config = load_config_file(&path).unwrap().unwrap();
 
         assert!(config.navigation.allow_private_network);
+    }
+
+    #[test]
+    fn load_config_file_parses_skill_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            &dir,
+            "[skills]\nfiles = [\"skills/checkout.json\", \"/opt/skills/search.json\"]",
+        );
+
+        let config = load_config_file(&path).unwrap().unwrap();
+
+        assert_eq!(
+            config.skills.files,
+            vec!["skills/checkout.json", "/opt/skills/search.json"]
+        );
+    }
+
+    fn write_skill(path: &Path, name: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            serde_json::json!({
+                "schema_version": 1,
+                "name": name,
+                "steps": [{"type": "locate", "query": "id:1"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn configured_skills_resolve_relative_to_config_and_keep_absolute_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config/dragon-head/config.toml");
+        let relative = config_path.parent().unwrap().join("skills/relative.json");
+        let absolute = dir.path().join("absolute.json");
+        write_skill(&relative, "relative");
+        write_skill(&absolute, "absolute");
+        let config = FileConfig {
+            skills: SkillsFileConfig {
+                files: vec![
+                    "skills/relative.json".to_string(),
+                    absolute.display().to_string(),
+                ],
+            },
+            ..Default::default()
+        };
+
+        let skills = load_configured_skills(Some(&config_path), Some(&config)).unwrap();
+
+        assert_eq!(
+            skills
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["relative", "absolute"]
+        );
+    }
+
+    #[test]
+    fn configured_skills_reject_too_many_files_before_opening_them() {
+        let config = FileConfig {
+            skills: SkillsFileConfig {
+                files: (0..=MAX_SKILL_FILES)
+                    .map(|index| format!("missing-{index}.json"))
+                    .collect(),
+            },
+            ..Default::default()
+        };
+
+        let error = load_configured_skills(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::TooManySkillFiles { .. }));
+    }
+
+    #[test]
+    fn configured_skills_reject_oversized_file_without_parsing_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill_path = dir.path().join("oversized.json");
+        std::fs::write(&skill_path, vec![b'x'; MAX_SKILL_FILE_BYTES + 1]).unwrap();
+        let config = FileConfig {
+            skills: SkillsFileConfig {
+                files: vec![skill_path.display().to_string()],
+            },
+            ..Default::default()
+        };
+
+        let error = load_configured_skills(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::SkillFileTooLarge { .. }));
+        assert!(error.to_string().contains("oversized.json"));
+        assert!(!error.to_string().contains(&"x".repeat(32)));
+    }
+
+    #[test]
+    fn configured_skills_validate_semantics_before_returning_any_definition() {
+        let dir = tempfile::tempdir().unwrap();
+        let valid = dir.path().join("valid.json");
+        let invalid = dir.path().join("invalid.json");
+        write_skill(&valid, "valid");
+        std::fs::write(
+            &invalid,
+            serde_json::json!({
+                "schema_version": 1,
+                "name": "invalid",
+                "steps": [{
+                    "type": "locate",
+                    "query": "id:1",
+                    "control": {"on_success": "missing-step"}
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let config = FileConfig {
+            skills: SkillsFileConfig {
+                files: vec![valid.display().to_string(), invalid.display().to_string()],
+            },
+            ..Default::default()
+        };
+
+        let error = load_configured_skills(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::InvalidSkillDefinition { .. }));
+        assert!(error.to_string().contains("invalid.json"));
+        assert!(!error.to_string().contains("\"steps\""));
+        assert!(!error.to_string().contains("missing-step"));
+    }
+
+    #[test]
+    fn configured_skills_reject_schema_errors_without_disclosing_definition_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let invalid = dir.path().join("invalid-schema.json");
+        let secret = "definition-secret-token";
+        std::fs::write(
+            &invalid,
+            serde_json::json!({
+                "schema_version": 1,
+                "name": "invalid",
+                "steps": [{"type": secret, "query": "id:1"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let config = FileConfig {
+            skills: SkillsFileConfig {
+                files: vec![invalid.display().to_string()],
+            },
+            ..Default::default()
+        };
+
+        let error = load_configured_skills(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::InvalidSkillDefinition { .. }));
+        assert!(error.to_string().contains("invalid-schema.json"));
+        assert!(!error.to_string().contains(secret));
+        assert!(!error.to_string().contains("id:1"));
+    }
+
+    #[test]
+    fn configured_skills_reject_duplicate_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.json");
+        let second = dir.path().join("second.json");
+        let secret = "duplicate-definition-secret";
+        write_skill(&first, secret);
+        write_skill(&second, secret);
+        let config = FileConfig {
+            skills: SkillsFileConfig {
+                files: vec![first.display().to_string(), second.display().to_string()],
+            },
+            ..Default::default()
+        };
+
+        let error = load_configured_skills(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::DuplicateSkillName { .. }));
+        assert!(error.to_string().contains("first.json"));
+        assert!(error.to_string().contains("second.json"));
+        assert!(!error.to_string().contains(secret));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_skills_reject_fifo_without_blocking() {
+        use std::{os::unix::ffi::OsStrExt, sync::mpsc, time::Duration};
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("skill.fifo");
+        let path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `path` is a live, NUL-terminated CString and the mode is valid.
+        let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+        assert_eq!(
+            result,
+            0,
+            "mkfifo failed: {}",
+            std::io::Error::last_os_error()
+        );
+        let config = FileConfig {
+            skills: SkillsFileConfig {
+                files: vec![fifo.display().to_string()],
+            },
+            ..Default::default()
+        };
+        let (sender, receiver) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            sender
+                .send(load_configured_skills(None, Some(&config)))
+                .ok();
+        });
+
+        let result = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("FIFO validation blocked");
+        let error = result.unwrap_err();
+        assert!(matches!(error, ConfigError::SkillFileNotRegular { .. }));
+        assert!(error.to_string().contains("skill.fifo"));
     }
 
     // --- resolve_config ---
@@ -559,6 +934,7 @@ durability = "sync"
                 max_bytes: Some(2048),
                 durability: Some("sync".to_string()),
             },
+            skills: SkillsFileConfig::default(),
         };
         let resolved = resolve_config(Some(&fc), no_env).unwrap();
         assert_eq!(resolved.chrome_path, Some("/usr/bin/chromium".to_string()));
@@ -593,6 +969,7 @@ durability = "sync"
                 max_bytes: Some(2048),
                 durability: Some("sync".to_string()),
             },
+            skills: SkillsFileConfig::default(),
         };
         let resolved = resolve_config(Some(&fc), |key| match key {
             "CHROME_PATH" => Some("/opt/chrome".to_string()),
