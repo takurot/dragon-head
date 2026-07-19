@@ -472,6 +472,116 @@ cargo fmt --all -- --check
 cargo clippy --workspace -- -D warnings
 ```
 
+## Codex-Assisted Development
+
+Dragon Head uses Codex as an engineering execution environment, with GPT models
+providing reasoning inside that environment. The acceleration comes from keeping
+issue triage, repository research, implementation, review, CI follow-through,
+and operational learning in one evidence-backed loop. It does not replace the
+project's specification, tests, or merge gates.
+
+### Recorded Usage Snapshot
+
+The following snapshot uses a token-event cutoff of
+`2026-07-19T10:50:00.650Z`, before this README update, and was captured from the
+local Codex session history. It includes the main checkout, its earlier location,
+and worktrees whose Git metadata identifies `github:takurot/dragon-head.git`.
+
+| Metric | Recorded value |
+| --- | ---: |
+| Unique repository sessions | 99 |
+| Sessions with token records | 88 |
+| Sessions without token records | 11 |
+| Total tokens | 1,848,585,477 |
+| Input tokens | 1,845,514,739 |
+| Cached input tokens | 1,805,426,432 |
+| Uncached input tokens | 40,088,307 |
+| Output tokens | 3,070,738 |
+| Reasoning output tokens | 1,177,568 |
+| Current-path-only total (`/Volumes/SSD2TB_DATA/src/dragon-head`) | 1,258,529,496 |
+| Recorded period | 2026-02-14 to 2026-07-19 |
+
+The aggregation scans `~/.codex/sessions/**/*.jsonl` and
+`~/.codex/archived_sessions/**/*.jsonl`, filters `session_meta` by Git repository
+URL and the cutoff, takes each session's final cumulative `token_count` at or
+before the cutoff, and deduplicates by session ID. Cached input is part of input,
+and reasoning output is part of output, so those rows must not be added to the
+total again. Because 11 sessions have no token record and the active session
+continued after the snapshot, the result is a lower bound. It is an
+engineering-activity measure, not a billing or rate-limit figure.
+
+### How Codex Accelerated the Workflow
+
+The repository's execution contract in [`docs/PROMPT.md`](docs/PROMPT.md) turns
+development into a closed loop:
+
+```text
+live Issues + SPEC/PLAN
+        -> plan and boundary review
+        -> isolated worktree
+        -> test-first implementation
+        -> format, lint, test, security, and QA gates
+        -> PR and Codex review
+        -> CI monitoring and merge
+        -> reusable learning
+```
+
+- **Fewer handoffs:** the same session can inspect live Issues and `origin/main`,
+  trace the relevant contract into code and tests, implement the change, prepare
+  the PR, and monitor CI. PRs [#231](https://github.com/takurot/dragon-head/pull/231)
+  and [#232](https://github.com/takurot/dragon-head/pull/232) were taken through
+  that complete loop with 27 green CI checks each.
+- **Safe parallelism:** dedicated worktrees isolate issue branches and preserve
+  unrelated local changes. This lets independent fixes progress without using a
+  dirty main checkout as shared mutable state.
+- **Shorter correction loops:** tests are written at the public contract or trust
+  boundary, then review findings feed directly back into implementation. For
+  example, [#228](https://github.com/takurot/dragon-head/pull/228) expanded a
+  verify-before-act check from serialized step order to the actual executable
+  control-flow edges exposed by branches, fallthrough, and retries.
+- **Shipping is part of the task:** local verification, Codex review, GitHub CI,
+  merge criteria, and cleanup remain in the same workflow. Progress is measured
+  by a merged, verified change rather than by generated code volume.
+- **Learning persists:** recurring lessons, such as validating a protocol before
+  side effects or checking safety invariants over control flow, are saved as
+  reusable procedures for later issues.
+
+### Where Important Decisions Were Made
+
+| Gate | Decision | Example and evidence |
+| --- | --- | --- |
+| Scope gate | Select work only after comparing live Issues with the latest `origin/main` and the approved SPEC/PLAN. | Prevents work on stale reports and ties every change to explicit exit criteria. |
+| Data boundary | Decide which values remain raw for internal control flow and which values may cross the agent-facing boundary. | [#231](https://github.com/takurot/dragon-head/pull/231) kept raw DOM attributes for filtering and geometry, while labels, aliases, stable keys, and exposed attributes use redacted values. |
+| Protocol boundary | Reject malformed input before plan gates, backend calls, or usage metering. | [#232](https://github.com/takurot/dragon-head/pull/232) made `tools/list` and `tools/call` share schemas and added strict bounds and negative tests. |
+| Control-flow boundary | Evaluate safety over executable edges, not source-array adjacency. | [#228](https://github.com/takurot/dragon-head/pull/228) covered success, failure, fallthrough, retry, loop, and backward edges before authorizing `act`. |
+| Landing gate | Merge only after required tests, formatting, linting, security checks, review, QA, and GitHub CI are green. | The checklist and escalation rules live in [`docs/PROMPT.md`](docs/PROMPT.md); PR evidence records the commands and results. |
+
+These decisions were not delegated to model preference alone. The durable
+authority is the repository contract (`SPEC`, `PLAN`, `PROMPT`), public API and
+trust boundaries, executable tests, review findings, and the merge gate.
+
+### GPT-5.6 and Codex Responsibilities
+
+GPT-5.6 and Codex play different roles:
+
+- **GPT-5.6 is the reasoning layer.** It is used to connect requirements to code,
+  compare implementation choices, identify trust boundaries, propose tests, and
+  interpret review or CI failures. The session records contain 30 unique GPT-5.6
+  sessions from 2026-07-11 through 2026-07-19: 27 tagged `gpt-5.6-sol` and 3
+  tagged `gpt-5.6-terra`.
+- **Codex is the execution layer.** It supplies repository context, instruction
+  loading, worktree and file operations, terminal commands, test execution,
+  GitHub interaction, CI monitoring, and persistent JSONL session records. It
+  turns a model recommendation into a reviewable diff and verified repository
+  state.
+- **The repository remains the decision system.** GPT-5.6 can propose and Codex
+  can execute, but contract files, tests, reviewers, and CI determine whether a
+  change is acceptable.
+
+The total-token snapshot covers all recorded Codex sessions for this repository,
+including sessions that used earlier GPT model versions. It must not be read as
+a GPT-5.6-only token total.
+
 ## Operations and Runbooks
 
 - [Operations Guide](docs/operations.md) — day-to-day startup, Chrome
