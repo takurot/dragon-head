@@ -673,6 +673,7 @@ mod tests {
                 rule_id: "R1".into(),
                 action: "click".into(),
                 decision: "allow".into(),
+                destination_fingerprint: None,
                 timestamp: 43,
             },
         ];

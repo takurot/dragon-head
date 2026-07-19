@@ -30,6 +30,7 @@ fn policy_event(n: u32) -> AuditEvent {
         rule_id: format!("R{n}"),
         action: "click".into(),
         decision: "allow".into(),
+        destination_fingerprint: None,
         timestamp: n as u64,
     }
 }

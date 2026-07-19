@@ -181,6 +181,10 @@ additional_phrases = ["reveal developer message"]
 # Path to a PolicyRule JSON file (see examples/policies/). Overridden by POLICY_FILE.
 file = "/etc/dragon-head/policy.json"
 
+[navigation]
+# Trusted local deployments only. Overridden by NAVIGATION_ALLOW_PRIVATE_NETWORK.
+allow_private_network = false
+
 [audit]
 # Mirrors AUDIT_LOG_DIR / AUDIT_LOG_MAX_BYTES / AUDIT_DURABILITY.
 log_dir = "/var/log/dragon-head"
@@ -197,6 +201,7 @@ durability = "flush"  # "flush" (default) or "sync"
 | Prompt-injection mode | `PROMPT_INJECTION_MODE` | `prompt_injection.mode` |
 | Prompt-injection additional phrases | `PROMPT_INJECTION_ADDITIONAL_PHRASES` | `prompt_injection.additional_phrases` |
 | Policy file | `POLICY_FILE` | `policy.file` |
+| Navigation private-network opt-in | `NAVIGATION_ALLOW_PRIVATE_NETWORK` | `navigation.allow_private_network` |
 | Audit log directory | `AUDIT_LOG_DIR` | `audit.log_dir` |
 | Audit max bytes | `AUDIT_LOG_MAX_BYTES` | `audit.max_bytes` |
 | Audit durability | `AUDIT_DURABILITY` | `audit.durability` |
@@ -213,6 +218,12 @@ per phrase, and 8 KiB total, while preserving first-seen order.
 `AUDIT_LOG_STDOUT` (if set, any value) mirrors audit events to **stderr**, never
 stdout — `dragon-head-mcp` uses stdout for JSON-RPC framing, so writing there
 would corrupt the protocol stream.
+
+`NAVIGATION_ALLOW_PRIVATE_NETWORK` accepts exactly `true` or `false`; invalid
+values fail configuration without echoing their contents. The default blocks
+loopback, private, link-local, and other non-global navigation destinations.
+Enable it only for trusted local deployments and tests. This application-level
+switch does not replace OS/container network isolation or deployment egress controls.
 
 Run `dragon-head-mcp --doctor` to validate the config file and list every
 supported configuration environment variable. A malformed file or invalid env
@@ -365,13 +376,14 @@ specific Chromium build.
 
 ## Available MCP Tools
 
-`dragon-head-mcp` currently exposes 8 tools. The source of truth is
+`dragon-head-mcp` currently exposes 9 tools. The source of truth is
 `McpServer::tools()` in `mcp-server/src/lib.rs`:
 
 <!-- mcp-tool-list:start -->
 | Tool | Purpose |
 | --- | --- |
 | `get_state` | Retrieve the semantic page state. |
+| `navigate` | Load an HTTP(S) URL through destination and redirect policy checks. |
 | `act` | Execute an interaction action. |
 | `verify` | Verify precondition text before acting. |
 | `get_visual` | Capture visual context with optional marks. |
@@ -386,6 +398,9 @@ specific Chromium build.
 structured page data. It is read-only and does not emit an action audit event.
 `get_usage_report` is also read-only: it reports the plan tier, usage meters, and
 the audit-retention snapshot, but does not meter itself or emit an action audit event.
+`navigate` accepts absolute HTTP(S) URLs without embedded credentials, strips
+fragments, evaluates the requested destination and each top-level redirect before
+network access, and logs only a sanitized destination projection without query data.
 <!-- mcp-tool-semantics:end -->
 
 ## Developer Examples

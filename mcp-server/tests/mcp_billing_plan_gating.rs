@@ -6,6 +6,8 @@ struct MockBackend {
     audit_snapshot: Option<AuditRetentionSnapshot>,
     act_responses: Vec<Value>,
     act_call_count: usize,
+    navigate_responses: Vec<Value>,
+    navigate_call_count: usize,
 }
 
 impl Default for MockBackend {
@@ -14,11 +16,28 @@ impl Default for MockBackend {
             audit_snapshot: None,
             act_responses: vec![json!({"status": "ok"})],
             act_call_count: 0,
+            navigate_responses: vec![json!({
+                "status": "ok",
+                "requested_url": "https://example.com/start",
+                "final_url": "https://example.com/home"
+            })],
+            navigate_call_count: 0,
         }
     }
 }
 
 impl McpBackend for MockBackend {
+    fn navigate(&mut self, _arguments: Value) -> Result<Value> {
+        let response = self
+            .navigate_responses
+            .get(self.navigate_call_count)
+            .cloned()
+            .or_else(|| self.navigate_responses.last().cloned())
+            .unwrap_or_else(|| json!({"status": "blocked", "rule_id": "test"}));
+        self.navigate_call_count += 1;
+        Ok(response)
+    }
+
     fn get_state(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({
             "metadata": {
@@ -80,6 +99,7 @@ fn test_usage_report_tracks_metered_calls() -> Result<()> {
             json!({"status": "ok"}),
         ],
         act_call_count: 0,
+        ..Default::default()
     };
     let mut server = McpServer::new_with_plan(backend, PlanTier::Enterprise);
 
@@ -105,6 +125,29 @@ fn test_usage_report_tracks_metered_calls() -> Result<()> {
     // cost: state(280) + visual(850) + action(60) + hitl(2*1200=2400) + audit(300) = 3890
     assert_eq!(report["cost_microusd"]["total"], json!(3890));
 
+    Ok(())
+}
+
+#[test]
+fn test_navigate_metering_matches_action_and_hitl_contract() -> Result<()> {
+    let backend = MockBackend {
+        navigate_responses: vec![
+            json!({"status": "requires_human_approval", "rule_id": "review", "scope": "action_only"}),
+            json!({"status": "blocked", "rule_id": "blocked"}),
+            json!({"status": "ok", "requested_url": "https://example.com/start", "final_url": "https://example.com/home"}),
+        ],
+        ..Default::default()
+    };
+    let mut server = McpServer::new_with_plan(backend, PlanTier::Enterprise);
+
+    server.call_tool("navigate", json!({"url": "https://example.com/start"}))?;
+    server.call_tool("ask_human", json!({"reason": "review"}))?;
+    server.call_tool("navigate", json!({"url": "https://example.com/blocked"}))?;
+    server.call_tool("navigate", json!({"url": "https://example.com/start"}))?;
+
+    let report = server.call_tool("get_usage_report", json!({}))?;
+    assert_eq!(report["actions_executed"], 1);
+    assert_eq!(report["hitl_events"], 2);
     Ok(())
 }
 

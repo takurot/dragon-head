@@ -212,6 +212,7 @@ Model Context Protocol (MCP) 準拠のツール定義。
 | Tool Name | Arguments | Description |
 | :--- | :--- | :--- |
 | `get_state` | `format`: "json"\|"markdown", `force_refresh`: bool | ページ状態と、検出した既知リスクを要素単位の `security_flags` で返す。 |
+| `navigate` | `url`: absolute HTTP(S) string | Policy/HITL とredirect検証を経てページを読み込み、requested URLとlive final URLを返す。 |
 | `act` | `target_id`: int, `target_stable_key`: string, `action`: "click"\|"type", `value`: string | アクション実行。 |
 | `verify` | `target_id`: int, `expected`: {text: string} | ハルシネーション防止の事前検証。 |
 | `get_visual` | `mode`: "clean"\|"som", `viewport`: "full" | 視覚情報の取得。 |
@@ -228,6 +229,31 @@ Model Context Protocol (MCP) 準拠のツール定義。
 plan tier、audit-retention snapshotを読み取る。自身の呼び出しはmeterへ加算せず
 (does not meter itself)、action audit eventも生成しない
 (does not emit an action audit event)。
+
+`navigate` は1〜8192 UTF-8 bytesのabsolute `http:` / `https:` URLのみ受理し、
+hostを必須とする。relative URL、malformed URL、username/passwordを含むURL、
+その他schemeはbrowser I/O・policy副作用・meteringより前に拒否する。fragmentは
+policy/approval identityと実リクエストから除去し、path/queryはリクエスト用URLに保持する。
+
+既定ではloopback、private、link-local、multicast、unspecifiedなどnon-globalな
+IPv4/IPv6 address、およびそのいずれかへ解決されるhostnameを拒否する。信頼済みlocal
+deployment/testのみ `[navigation] allow_private_network = true` または厳格boolean環境変数
+`NAVIGATION_ALLOW_PRIVATE_NETWORK=true` で許可できる。この設定はDNS rebindingを閉じる
+network sandboxではなく、untrusted deploymentにはOS/container egress制御も必須である。
+
+requested destinationはnetwork access前にaction `navigate` としてbuilt-in Policy Engineと
+plugin policy hookを各1回評価する。top-level main-frame redirectは各hopの送信前に同じURL・
+network・policy/plugin検証を繰り返すが、initial requestを二重評価せず、iframe/subresourceは
+継続する。block/HITL/plugin vetoは対象destinationへのrequestをzeroに保つ。承認はcanonical
+full destinationのdigestへ束縛し、redirect承認はoriginal requested URLとredirect destination
+の組へ束縛する。
+
+成功responseは `status="ok"`, fragment-free `requested_url`, live `final_url` を返す。
+成功のみ `actions_executed` を1増加し、redirect数は加算しない。HITL requestと後続の
+`ask_human` approvalは既存`act`同様に各1 eventを加算する。navigation I/O開始後は成功・失敗
+ともpage/MCP delta/speculative stateを保守的に無効化し、次のdeltaはfull baselineを返す。
+TOOL_CALL/POLICY_DECISION audit evidenceはscheme/host/explicit port/pathまたは非可逆fingerprint
+のみを含み、username/password/query/fragmentをrecent/persistent/webhook/stderr/errorへ出さない。
 <!-- mcp-tool-semantics:end -->
 
 **ACT-05: HITL Concurrency & Safety**

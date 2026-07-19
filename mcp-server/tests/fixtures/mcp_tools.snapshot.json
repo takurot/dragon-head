@@ -296,6 +296,24 @@
     "name": "get_visual"
   },
   {
+    "description": "Navigate the current page to an HTTP(S) URL",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "navigate"
+  },
+  {
     "description": "Execute a declarative skill workflow",
     "inputSchema": {
       "additionalProperties": false,

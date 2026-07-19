@@ -94,7 +94,7 @@ fn main() -> anyhow::Result<()> {
             .with_context(|| format!("failed to load config file {}", path.display()))?,
         None => None,
     };
-    config::validate_unicode_additional_phrases_env()
+    config::validate_unicode_config_env()
         .context("failed to resolve dragon-head-mcp configuration")?;
     let resolved = config::resolve_config(file_config.as_ref(), env_lookup)
         .context("failed to resolve dragon-head-mcp configuration")?;
@@ -138,6 +138,7 @@ fn main() -> anyhow::Result<()> {
         mode: resolved.injection_mode,
         additional_phrases: resolved.injection_additional_phrases.clone(),
     });
+    backend.set_navigation_allow_private_network(resolved.navigation_allow_private_network);
     let mut server = McpServer::new(backend);
     eprintln!("dragon-head-mcp: ready, listening on stdio");
 

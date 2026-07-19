@@ -366,6 +366,7 @@ fn replay_report_includes_timestamps_state_hashes_and_decisions() -> anyhow::Res
             rule_id: "R-42".to_string(),
             action: "block".to_string(),
             decision: "deny".to_string(),
+            destination_fingerprint: None,
             timestamp: 2_000,
         },
         AuditEvent::StatePatch {

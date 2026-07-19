@@ -8,10 +8,10 @@ use anyhow::{Context, Result};
 use core_runtime::{
     speculative::{ActionSignature, SpeculativeEngine, SpeculativePrediction, StateDelta},
     sre::{LoadProfile, SemanticNode},
-    ActionError, ApprovalScope, BrowserClient, DeltaPolicy, PageSession, PolicyRule,
-    PromptInjectionMode, PromptInjectionSanitizer, PromptInjectionSanitizerConfig, SemanticState,
-    SemanticTarget, SemanticWaitState, SessionError, StateUpdate, VerifyError,
-    STABLE_KEY_SHORT_LEN,
+    validate_public_navigation_url, ActionError, ApprovalScope, BrowserClient, DeltaPolicy,
+    NavigationNetworkPolicy, PageSession, PolicyRule, PromptInjectionMode,
+    PromptInjectionSanitizer, PromptInjectionSanitizerConfig, SemanticState, SemanticTarget,
+    SemanticWaitState, SessionError, StateUpdate, VerifyError, STABLE_KEY_SHORT_LEN,
 };
 // Internal-only metering types (pub(crate) in metering.rs)
 use metering::{PlanFeature, UsageMeters};
@@ -57,7 +57,8 @@ struct InvalidToolArguments {
 fn is_known_tool(name: &str) -> bool {
     matches!(
         name,
-        "get_state"
+        "navigate"
+            | "get_state"
             | "act"
             | "verify"
             | "get_visual"
@@ -72,6 +73,7 @@ fn validate_tool_arguments(name: &str, arguments: &Value) -> Result<()> {
     static VALIDATORS: OnceLock<HashMap<&'static str, jsonschema::Validator>> = OnceLock::new();
     let validators = VALIDATORS.get_or_init(|| {
         [
+            ("navigate", navigate_input_schema()),
             ("get_state", get_state_input_schema()),
             ("act", act_input_schema()),
             ("verify", verify_input_schema()),
@@ -104,6 +106,7 @@ fn validate_tool_arguments(name: &str, arguments: &Value) -> Result<()> {
 }
 
 pub trait McpBackend {
+    fn navigate(&mut self, arguments: Value) -> Result<Value>;
     fn get_state(&mut self, arguments: Value) -> Result<Value>;
     fn act(&mut self, arguments: Value) -> Result<Value>;
     fn verify(&mut self, arguments: Value) -> Result<Value>;
@@ -172,6 +175,11 @@ impl<B: McpBackend> McpServer<B> {
     pub fn tools(&self) -> Vec<ToolDefinition> {
         vec![
             ToolDefinition {
+                name: "navigate".to_string(),
+                description: "Navigate the current page to an HTTP(S) URL".to_string(),
+                input_schema: navigate_input_schema(),
+            },
+            ToolDefinition {
                 name: "get_state".to_string(),
                 description: "Retrieve the semantic page state".to_string(),
                 input_schema: get_state_input_schema(),
@@ -231,6 +239,7 @@ impl<B: McpBackend> McpServer<B> {
         let speculative_hits_before = self.backend.speculative_usage().0;
 
         let result = match name {
+            "navigate" => self.backend.navigate(arguments.clone()),
             "get_state" => self.backend.get_state(arguments.clone()),
             "act" => self.backend.act(arguments.clone()),
             "verify" => self.backend.verify(arguments.clone()),
@@ -485,7 +494,7 @@ impl<B: McpBackend> McpServer<B> {
                     self.usage_meters.visual_captures += 1;
                 }
             }
-            "act" => match payload.get("status").and_then(Value::as_str) {
+            "act" | "navigate" => match payload.get("status").and_then(Value::as_str) {
                 Some("ok") => {
                     self.usage_meters.actions_executed += 1;
                 }
@@ -511,6 +520,12 @@ impl<B: McpBackend> McpServer<B> {
             _ => {}
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NavigateArguments {
+    url: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
@@ -809,6 +824,9 @@ pub struct CoreRuntimeBackend {
     client: Option<BrowserClient>,
     /// Policy rules to reapply to the page created by a browser restart.
     policy_rules: Vec<PolicyRule>,
+    /// Whether public navigation may target private and otherwise non-global networks.
+    /// Defaults to false and is set from the resolved startup configuration.
+    navigation_allow_private_network: bool,
     /// Total number of successful automatic browser restarts.
     browser_restarts: u64,
     /// Timestamps of recent restart attempts, used for rate limiting.
@@ -877,6 +895,7 @@ impl CoreRuntimeBackend {
             }),
             client: None,
             policy_rules: Vec::new(),
+            navigation_allow_private_network: false,
             browser_restarts: 0,
             restart_history: VecDeque::new(),
             speculative: SpeculativeEngine::new(Vec::new()),
@@ -925,6 +944,25 @@ impl CoreRuntimeBackend {
         self.page.set_policy_rules(rules.clone())?;
         self.policy_rules = rules;
         Ok(())
+    }
+
+    pub fn set_navigation_allow_private_network(&mut self, allow: bool) {
+        self.navigation_allow_private_network = allow;
+    }
+
+    /// Invalidates every page-local MCP and speculative cursor after browser I/O begins.
+    /// Learned speculative transitions, cumulative hit/miss counters, skills, and policy rules
+    /// intentionally survive navigation.
+    fn reset_navigation_state(&mut self) {
+        self.state_cache = None;
+        self.previous_semantic_state = None;
+        self.pending_action = None;
+        self.last_action = None;
+        self.last_served_prediction = None;
+        self.last_served_prediction_source_hash = None;
+        self.action_chain_broken = false;
+        self.previous_state_verified = true;
+        self.speculative.clear_action_cursor();
     }
 
     pub fn register_extraction_rule(&mut self, name: &str, value: &Value) -> Result<()> {
@@ -1226,6 +1264,45 @@ impl CoreRuntimeBackend {
 }
 
 impl McpBackend for CoreRuntimeBackend {
+    fn navigate(&mut self, arguments: Value) -> Result<Value> {
+        let args: NavigateArguments =
+            serde_json::from_value(arguments).context("invalid navigate arguments")?;
+        // Produce the fragment-free public response identity without performing a duplicate DNS
+        // lookup. `navigate_public` applies the configured network policy before browser I/O and
+        // repeats it for redirects.
+        let requested =
+            validate_public_navigation_url(&args.url, NavigationNetworkPolicy::AllowPrivate)?;
+        let requested_url = requested.canonical_url().to_string();
+        let attempts_before = self.page.public_navigation_attempt_count();
+
+        let result = self
+            .page
+            .navigate_public(&requested_url, self.navigation_allow_private_network);
+        let browser_io_started = self.page.public_navigation_attempt_count() > attempts_before;
+        if browser_io_started {
+            self.reset_navigation_state();
+        }
+
+        match result {
+            Ok(final_url) => {
+                if !browser_io_started {
+                    self.reset_navigation_state();
+                }
+                Ok(json!({
+                    "status": "ok",
+                    "requested_url": requested_url,
+                    "final_url": final_url
+                }))
+            }
+            Err(err) => {
+                if let Some(action_err) = err.downcast_ref::<ActionError>() {
+                    return Ok(action_error_payload(action_err));
+                }
+                Err(err.context("navigate tool failed"))
+            }
+        }
+    }
+
     fn get_state(&mut self, arguments: Value) -> Result<Value> {
         let args = parse_get_state_arguments(&arguments)?;
 
@@ -1398,44 +1475,7 @@ impl McpBackend for CoreRuntimeBackend {
             }
             Err(err) => {
                 if let Some(action_err) = err.downcast_ref::<ActionError>() {
-                    let payload = match action_err {
-                        ActionError::VerifyRequired => json!({ "status": "verify_required" }),
-                        ActionError::Blocked { rule_id } => {
-                            json!({ "status": "blocked", "rule_id": rule_id })
-                        }
-                        ActionError::HumanApprovalRequired {
-                            rule_id,
-                            scope,
-                            outcome,
-                        } => {
-                            let mut payload = json!({
-                                "status": "requires_human_approval",
-                                "rule_id": rule_id,
-                                "scope": approval_scope_name(*scope)
-                            });
-                            if let Some(projection) = outcome {
-                                match serde_json::to_value(projection) {
-                                    Ok(v) => {
-                                        payload["outcome_projection"] = v;
-                                    }
-                                    Err(e) => {
-                                        // Serialization failure is unexpected (f64 is always
-                                        // finite from regex parse); log and omit the field.
-                                        eprintln!(
-                                            "[mcp-server] failed to serialize \
-                                             outcome_projection: {e}"
-                                        );
-                                    }
-                                }
-                            }
-                            payload
-                        }
-                        ActionError::AskHumanRequired { reason } => json!({
-                            "status": "ask_human_required",
-                            "reason": reason
-                        }),
-                    };
-                    return Ok(payload);
+                    return Ok(action_error_payload(action_err));
                 }
                 Err(err.context("act tool failed"))
             }
@@ -2043,6 +2083,39 @@ fn approval_scope_name(scope: ApprovalScope) -> &'static str {
     }
 }
 
+fn action_error_payload(error: &ActionError) -> Value {
+    match error {
+        ActionError::VerifyRequired => json!({ "status": "verify_required" }),
+        ActionError::Blocked { rule_id } => {
+            json!({ "status": "blocked", "rule_id": rule_id })
+        }
+        ActionError::HumanApprovalRequired {
+            rule_id,
+            scope,
+            outcome,
+        } => {
+            let mut payload = json!({
+                "status": "requires_human_approval",
+                "rule_id": rule_id,
+                "scope": approval_scope_name(*scope)
+            });
+            if let Some(projection) = outcome {
+                match serde_json::to_value(projection) {
+                    Ok(value) => payload["outcome_projection"] = value,
+                    Err(error) => {
+                        eprintln!("[mcp-server] failed to serialize outcome_projection: {error}");
+                    }
+                }
+            }
+            payload
+        }
+        ActionError::AskHumanRequired { reason } => json!({
+            "status": "ask_human_required",
+            "reason": reason
+        }),
+    }
+}
+
 fn skill_run_status_name(status: SkillRunStatus) -> &'static str {
     match status {
         SkillRunStatus::Completed => "completed",
@@ -2194,6 +2267,21 @@ fn get_state_input_schema() -> Value {
             "delivery": {
                 "type": "string",
                 "enum": ["full", "delta"]
+            }
+        }
+    })
+}
+
+fn navigate_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url"],
+        "properties": {
+            "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
             }
         }
     })
@@ -2419,6 +2507,174 @@ mod tests {
             },
             LoadProfile::Interactive,
         )
+    }
+
+    fn seed_navigation_backend_state(backend: &mut CoreRuntimeBackend) -> ActionSignature {
+        let state = state_with_label("before navigation");
+        backend.state_cache = Some(ExternalSemanticState {
+            metadata: StateMetadata {
+                url: "https://example.com/before".to_string(),
+                page_instance_id: state.page_instance_id().to_string(),
+                state_hash: state.state_hash().to_string(),
+                load_profile: "interactive".to_string(),
+                timestamp: state.timestamp(),
+                speculative: false,
+            },
+            interactive_elements: vec![],
+        });
+        backend.previous_semantic_state = Some(state);
+        backend.pending_action = Some(action("click:pending"));
+        backend.last_action = Some(action("click:last"));
+        backend.last_served_prediction = Some(SpeculativePrediction {
+            predicted_action: action("click:predicted"),
+            predicted_state_hash: Some("predicted-state".to_string()),
+            confidence: 1.0,
+        });
+        backend.last_served_prediction_source_hash = Some("source-state".to_string());
+        backend.action_chain_broken = true;
+        backend.previous_state_verified = false;
+        backend.speculative_hits = 7;
+        backend.speculative_misses = 11;
+        backend.skills.insert(
+            "kept-skill".to_string(),
+            SkillDefinition {
+                schema_version: 1,
+                name: "kept-skill".to_string(),
+                steps: vec![],
+            },
+        );
+        backend.policy_rules.push(PolicyRule {
+            id: "kept-rule".to_string(),
+            domain: None,
+            path_prefix: None,
+            role: None,
+            text_regex: None,
+            context_regex: None,
+            action: core_runtime::PolicyAction::Allow,
+            scope: None,
+            outcome_projector: None,
+        });
+        backend.navigation_allow_private_network = true;
+
+        let stale_cursor = action("click:stale-cursor");
+        backend.speculative.advance_action_cursor(&stale_cursor);
+        stale_cursor
+    }
+
+    fn assert_navigation_state_was_reset(backend: &CoreRuntimeBackend) {
+        assert!(backend.state_cache.is_none());
+        assert!(backend.previous_semantic_state.is_none());
+        assert!(backend.pending_action.is_none());
+        assert!(backend.last_action.is_none());
+        assert!(backend.last_served_prediction.is_none());
+        assert!(backend.last_served_prediction_source_hash.is_none());
+        assert!(!backend.action_chain_broken);
+        assert!(backend.previous_state_verified);
+        assert_eq!(backend.speculative_hits, 7);
+        assert_eq!(backend.speculative_misses, 11);
+        assert!(backend.skills.contains_key("kept-skill"));
+        assert_eq!(backend.policy_rules.len(), 1);
+        assert_eq!(backend.policy_rules[0].id, "kept-rule");
+        assert!(backend.navigation_allow_private_network);
+    }
+
+    #[test]
+    fn reset_navigation_state_clears_page_state_and_cursor_but_preserves_configuration() {
+        if test_bench_support::should_skip_browser_tests() {
+            return;
+        }
+        let client = BrowserClient::new().expect("browser client");
+        let page = client.new_page().expect("new page");
+        let mut backend = CoreRuntimeBackend::new(page);
+        let stale_cursor = seed_navigation_backend_state(&mut backend);
+
+        backend.reset_navigation_state();
+
+        assert_navigation_state_was_reset(&backend);
+        let next = action("type:after-navigation");
+        backend
+            .speculative
+            .record_transition("after-navigation", &next, "after-type");
+        assert_eq!(
+            backend
+                .speculative
+                .predict("after-navigation", Some(&stale_cursor)),
+            None,
+            "reset must clear the speculative action cursor instead of learning a stale sequence"
+        );
+    }
+
+    #[test]
+    fn navigate_preflight_rejection_preserves_backend_state() {
+        if test_bench_support::should_skip_browser_tests() {
+            return;
+        }
+        let client = BrowserClient::new().expect("browser client");
+        let page = client.new_page().expect("new page");
+        let mut backend = CoreRuntimeBackend::new(page);
+        seed_navigation_backend_state(&mut backend);
+        let attempts_before = backend.page.public_navigation_attempt_count();
+
+        backend
+            .navigate(json!({"url": "data:text/html,not-public"}))
+            .expect_err("public MCP navigation must reject data URLs");
+
+        assert_eq!(
+            backend.page.public_navigation_attempt_count(),
+            attempts_before
+        );
+        assert!(backend.state_cache.is_some());
+        assert!(backend.previous_semantic_state.is_some());
+        assert!(backend.pending_action.is_some());
+        assert!(backend.last_action.is_some());
+        assert!(backend.last_served_prediction.is_some());
+        assert!(backend.last_served_prediction_source_hash.is_some());
+        assert!(backend.action_chain_broken);
+        assert!(!backend.previous_state_verified);
+        assert_eq!(backend.speculative_hits, 7);
+        assert_eq!(backend.speculative_misses, 11);
+        assert!(backend.skills.contains_key("kept-skill"));
+        assert_eq!(backend.policy_rules[0].id, "kept-rule");
+    }
+
+    #[test]
+    fn navigate_post_io_error_resets_backend_state() {
+        if test_bench_support::should_skip_browser_tests() {
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind closed port");
+        let address = listener.local_addr().expect("local address");
+        drop(listener);
+
+        let client = BrowserClient::new().expect("browser client");
+        let page = client.new_page().expect("new page");
+        let mut backend = CoreRuntimeBackend::new(page);
+        seed_navigation_backend_state(&mut backend);
+        let attempts_before = backend.page.public_navigation_attempt_count();
+
+        backend
+            .navigate(json!({"url": format!("http://{address}/unreachable")}))
+            .expect_err("closed local port must fail after browser I/O starts");
+
+        assert!(backend.page.public_navigation_attempt_count() > attempts_before);
+        assert_navigation_state_was_reset(&backend);
+    }
+
+    #[test]
+    fn navigation_network_configuration_survives_browser_relaunch() {
+        if test_bench_support::should_skip_browser_tests() {
+            return;
+        }
+        let client = BrowserClient::new().expect("browser client");
+        let page = client.new_page().expect("new page");
+        let mut backend = CoreRuntimeBackend::new_with_client(client, page);
+        backend.set_navigation_allow_private_network(true);
+
+        backend
+            .handle_browser_disconnect()
+            .expect("managed browser relaunch");
+
+        assert!(backend.navigation_allow_private_network);
     }
 
     #[test]
@@ -2807,6 +3063,12 @@ mod tests {
     }
 
     impl McpBackend for MockBackend {
+        fn navigate(&mut self, arguments: Value) -> anyhow::Result<Value> {
+            Ok(
+                json!({"status": "ok", "requested_url": arguments["url"], "final_url": arguments["url"]}),
+            )
+        }
+
         fn get_state(&mut self, _: Value) -> anyhow::Result<Value> {
             Ok(self.get_state_result.clone().unwrap_or_else(|| json!({})))
         }
@@ -3029,6 +3291,12 @@ mod tests {
     }
 
     impl McpBackend for RestartMockBackend {
+        fn navigate(&mut self, arguments: Value) -> anyhow::Result<Value> {
+            Ok(
+                json!({"status": "ok", "requested_url": arguments["url"], "final_url": arguments["url"]}),
+            )
+        }
+
         fn get_state(&mut self, _: Value) -> anyhow::Result<Value> {
             if self.fail_get_state_with_disconnect {
                 self.fail_get_state_with_disconnect = false;
@@ -3112,6 +3380,12 @@ mod tests {
     fn call_tool_does_not_intercept_page_level_errors() {
         struct PageErrorBackend;
         impl McpBackend for PageErrorBackend {
+            fn navigate(&mut self, arguments: Value) -> anyhow::Result<Value> {
+                Ok(
+                    json!({"status": "ok", "requested_url": arguments["url"], "final_url": arguments["url"]}),
+                )
+            }
+
             fn get_state(&mut self, _: Value) -> anyhow::Result<Value> {
                 Err(anyhow::anyhow!("Could not find node with given id"))
             }

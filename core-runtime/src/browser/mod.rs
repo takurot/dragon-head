@@ -1,4 +1,5 @@
 mod helpers;
+mod navigation;
 use helpers::{
     build_semantic_path_index, collect_stable_key_entries, duration_to_millis, epoch_millis,
     epoch_millis_u64, error_chain_contains_any, find_node_by_id, find_node_by_key,
@@ -7,12 +8,16 @@ use helpers::{
     state_contains_intent, target_matches_state, transient_error_backoff, value_to_string_vec,
     value_to_u64,
 };
+pub use navigation::{
+    validate_public_navigation_url, validate_public_navigation_url_with, NavigationNetworkPolicy,
+    NavigationValidationError, ValidatedNavigationUrl, MAX_PUBLIC_NAVIGATION_URL_BYTES,
+};
 
 use anyhow::{Context, Result};
 use headless_chrome::{Browser, LaunchOptions};
 use std::{
     cmp::min,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -146,6 +151,59 @@ struct GrantedPolicyApproval {
 struct PolicyApprovalState {
     pending: Option<PolicyApprovalRequest>,
     granted: Vec<GrantedPolicyApproval>,
+}
+
+#[derive(Debug, Clone)]
+enum NavigationPolicyFailure {
+    Blocked {
+        rule_id: String,
+    },
+    HumanApprovalRequired {
+        rule_id: String,
+        scope: ApprovalScope,
+        outcome: Option<OutcomeProjection>,
+    },
+    Rejected {
+        message: String,
+    },
+}
+
+impl NavigationPolicyFailure {
+    fn into_error(self) -> anyhow::Error {
+        match self {
+            Self::Blocked { rule_id } => ActionError::Blocked { rule_id }.into(),
+            Self::HumanApprovalRequired {
+                rule_id,
+                scope,
+                outcome,
+            } => ActionError::HumanApprovalRequired {
+                rule_id,
+                scope,
+                outcome,
+            }
+            .into(),
+            Self::Rejected { message } => anyhow::anyhow!(message),
+        }
+    }
+}
+
+struct RedirectInterceptionState {
+    main_frame_id: String,
+    initial_url: String,
+    original_url: String,
+    network_policy: NavigationNetworkPolicy,
+    request_chain: HashSet<String>,
+    evaluated_destinations: HashSet<String>,
+    failure: Option<NavigationPolicyFailure>,
+}
+
+struct NavigationPolicyContext {
+    policy_engine: Arc<Mutex<PolicyEngine>>,
+    policy_approvals: Arc<Mutex<PolicyApprovalState>>,
+    navigation_epoch: Arc<AtomicU64>,
+    audit_logger: Arc<AuditLogger>,
+    plugin_hooks: Arc<PluginHookConfig>,
+    approval_context_url: String,
 }
 
 #[derive(Clone, Default)]
@@ -282,6 +340,8 @@ impl BrowserClient {
             policy_engine: Arc::new(Mutex::new(PolicyEngine::default())),
             policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
             navigation_epoch: Arc::new(AtomicU64::new(0)),
+            public_navigation_attempts: Arc::new(AtomicU64::new(0)),
+            public_navigation_lock: Arc::new(Mutex::new(())),
             audit_logger: Arc::new(audit_logger),
             semantic_capture_cache: Arc::new(Mutex::new(SemanticCaptureCache::default())),
             vault: Arc::clone(&self.vault),
@@ -390,6 +450,8 @@ pub struct PageSession {
     policy_engine: Arc<Mutex<PolicyEngine>>,
     policy_approvals: Arc<Mutex<PolicyApprovalState>>,
     navigation_epoch: Arc<AtomicU64>,
+    public_navigation_attempts: Arc<AtomicU64>,
+    public_navigation_lock: Arc<Mutex<()>>,
     pub(crate) audit_logger: Arc<AuditLogger>,
     semantic_capture_cache: Arc<Mutex<SemanticCaptureCache>>,
     vault: Arc<dyn SessionVault>,
@@ -435,6 +497,246 @@ impl PageSession {
         self.navigation_epoch.fetch_add(1, Ordering::Relaxed);
         self.clear_pending_policy_approval();
         Ok(())
+    }
+
+    /// Navigate an untrusted public MCP destination through URL/network validation,
+    /// destination-aware policy evaluation, and top-level redirect interception.
+    ///
+    /// Unlike [`navigate`](Self::navigate), this boundary accepts only HTTP(S).
+    /// The internal method intentionally retains support for `data:` fixtures.
+    pub fn navigate_public(&self, url: &str, allow_private_network: bool) -> Result<String> {
+        use headless_chrome::{
+            browser::{
+                tab::RequestPausedDecision,
+                transport::{SessionId, Transport},
+            },
+            protocol::cdp::{
+                Fetch::{self, FailRequest, RequestPattern, RequestStage},
+                Network::{ErrorReason, ResourceType},
+                Page,
+            },
+        };
+
+        let _serialized = self
+            .public_navigation_lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("public navigation lock is unavailable"))?;
+        let network_policy = if allow_private_network {
+            NavigationNetworkPolicy::AllowPrivate
+        } else {
+            NavigationNetworkPolicy::PublicOnly
+        };
+        let requested = validate_public_navigation_url(url, network_policy)?;
+        self.audit_logger.log(AuditEvent::ToolCall {
+            tool_name: "navigate".to_string(),
+            args: serde_json::json!({ "destination": requested.sanitized_projection() }),
+            timestamp: epoch_millis_u64(),
+        });
+
+        let approval_context_url = self.current_url().unwrap_or_default();
+        let policy_context = Arc::new(NavigationPolicyContext {
+            policy_engine: Arc::clone(&self.policy_engine),
+            policy_approvals: Arc::clone(&self.policy_approvals),
+            navigation_epoch: Arc::clone(&self.navigation_epoch),
+            audit_logger: Arc::clone(&self.audit_logger),
+            plugin_hooks: Arc::clone(&self.plugin_hooks),
+            approval_context_url,
+        });
+        evaluate_navigation_destination(
+            &policy_context,
+            &requested,
+            requested.destination_digest(),
+            false,
+        )
+        .map_err(NavigationPolicyFailure::into_error)?;
+
+        let frame_tree = self
+            .inner
+            .call_method(Page::GetFrameTree(None))
+            .context("failed to inspect the main frame before public navigation")?;
+        let main_frame_id = frame_tree.frame_tree.frame.id;
+        let interception_state = Arc::new(Mutex::new(RedirectInterceptionState {
+            main_frame_id,
+            initial_url: requested.canonical_url().to_string(),
+            original_url: requested.canonical_url().to_string(),
+            network_policy,
+            request_chain: HashSet::new(),
+            evaluated_destinations: HashSet::from([requested.destination_digest().to_string()]),
+            failure: None,
+        }));
+
+        let callback_state = Arc::clone(&interception_state);
+        let callback_policy = Arc::clone(&policy_context);
+        let interceptor = Arc::new(
+            move |_transport: Arc<Transport>,
+                  _session_id: SessionId,
+                  event: Fetch::events::RequestPausedEvent| {
+                let mut state = match callback_state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        return RequestPausedDecision::Fail(FailRequest {
+                            request_id: event.params.request_id,
+                            error_reason: ErrorReason::BlockedByClient,
+                        })
+                    }
+                };
+                if event.params.frame_id != state.main_frame_id
+                    || event.params.resource_Type != ResourceType::Document
+                {
+                    return RequestPausedDecision::Continue(None);
+                }
+                if state.failure.is_some() {
+                    return RequestPausedDecision::Fail(FailRequest {
+                        request_id: event.params.request_id,
+                        error_reason: ErrorReason::BlockedByClient,
+                    });
+                }
+
+                let request_id = event.params.request_id.clone();
+                let Some(parent_request_id) = event.params.redirected_request_id.as_ref() else {
+                    let canonical = validate_public_navigation_url_with(
+                        &event.params.request.url,
+                        NavigationNetworkPolicy::AllowPrivate,
+                        |_, _| Ok(Vec::new()),
+                    );
+                    if canonical
+                        .as_ref()
+                        .is_ok_and(|candidate| candidate.canonical_url() == state.initial_url)
+                    {
+                        state.request_chain.insert(request_id);
+                    }
+                    return RequestPausedDecision::Continue(None);
+                };
+                if !state.request_chain.contains(parent_request_id) {
+                    return RequestPausedDecision::Continue(None);
+                }
+
+                let destination = match validate_public_navigation_url(
+                    &event.params.request.url,
+                    state.network_policy,
+                ) {
+                    Ok(destination) => destination,
+                    Err(error) => {
+                        state.failure = Some(NavigationPolicyFailure::Rejected {
+                            message: error.to_string(),
+                        });
+                        return RequestPausedDecision::Fail(FailRequest {
+                            request_id,
+                            error_reason: ErrorReason::BlockedByClient,
+                        });
+                    }
+                };
+                let approval_digest = navigation::redirect_approval_digest(
+                    &state.original_url,
+                    destination.canonical_url(),
+                );
+                let first_evaluation = state
+                    .evaluated_destinations
+                    .insert(destination.destination_digest().to_string());
+                if first_evaluation {
+                    if let Err(failure) = evaluate_navigation_destination(
+                        &callback_policy,
+                        &destination,
+                        &approval_digest,
+                        true,
+                    ) {
+                        state.failure = Some(failure);
+                        return RequestPausedDecision::Fail(FailRequest {
+                            request_id,
+                            error_reason: ErrorReason::BlockedByClient,
+                        });
+                    }
+                }
+                state.request_chain.insert(request_id);
+                RequestPausedDecision::Continue(None)
+            },
+        );
+        let patterns = [RequestPattern {
+            url_pattern: None,
+            resource_Type: None,
+            request_stage: Some(RequestStage::Request),
+        }];
+        let mut interception =
+            NavigationInterceptionGuard::install(Arc::clone(&self.inner), interceptor, &patterns)?;
+
+        let previous_url = self.current_url().ok();
+        self.public_navigation_attempts
+            .fetch_add(1, Ordering::Relaxed);
+        let navigation_result =
+            self.inner
+                .navigate_to(requested.canonical_url())
+                .context("public navigation request failed")
+                .and_then(|_| {
+                    self.inner.wait_until_navigated().map(|_| ()).or_else(|_| {
+                        self.wait_for_public_navigation_fallback(previous_url.as_deref())
+                    })
+                });
+
+        self.clear_stable_key_index();
+        self.clear_semantic_capture_cache();
+        // Conservatively advance after every started navigation. In particular,
+        // this covers document commits followed by timeout/CDP failure. Delaying
+        // the bump until interception completes lets a grant created for a blocked
+        // redirect be consumed when the original URL is retried.
+        self.navigation_epoch.fetch_add(1, Ordering::Relaxed);
+
+        let interception_failure = interception_state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("public navigation outcome is unavailable"))?
+            .failure
+            .clone();
+        if let Ok(mut approvals) = self.policy_approvals.lock() {
+            approvals.granted.clear();
+            if !matches!(
+                &interception_failure,
+                Some(NavigationPolicyFailure::HumanApprovalRequired { .. })
+            ) {
+                approvals.pending = None;
+            }
+        }
+        let cleanup_result = interception.finish();
+        if let Some(failure) = interception_failure {
+            return Err(failure.into_error());
+        }
+        navigation_result.context("public navigation did not complete")?;
+        cleanup_result?;
+
+        let final_url = self
+            .current_url()
+            .context("failed to read final public navigation URL")?;
+        let final_url = validate_public_navigation_url_with(
+            &final_url,
+            NavigationNetworkPolicy::AllowPrivate,
+            |_, _| Ok(Vec::new()),
+        )?;
+        Ok(final_url.canonical_url().to_string())
+    }
+
+    pub fn public_navigation_attempt_count(&self) -> u64 {
+        self.public_navigation_attempts.load(Ordering::Relaxed)
+    }
+
+    fn wait_for_public_navigation_fallback(&self, previous_url: Option<&str>) -> Result<()> {
+        let started = Instant::now();
+        loop {
+            let current_url = self.current_url().ok();
+            let ready_state = self.document_ready_state().ok();
+            let dom_non_empty = self
+                .get_content()
+                .map(|content| !content.trim().is_empty())
+                .unwrap_or(false);
+            if current_url.as_deref() != previous_url
+                && matches!(ready_state.as_deref(), Some("interactive" | "complete"))
+                && dom_non_empty
+            {
+                return Ok(());
+            }
+            let remaining = remaining_timeout(started, NAVIGATION_FALLBACK_TIMEOUT);
+            if remaining.is_zero() {
+                anyhow::bail!("public navigation timed out");
+            }
+            thread::sleep(min(NAVIGATION_FALLBACK_POLL_INTERVAL, remaining));
+        }
     }
 
     pub fn get_content(&self) -> Result<String> {
@@ -1385,6 +1687,7 @@ impl PageSession {
                 PolicyAction::Block => "block".to_string(),
                 PolicyAction::RequireHumanApproval => "require_human_approval".to_string(),
             },
+            destination_fingerprint: None,
             timestamp: epoch_millis_u64(),
         });
 
@@ -2278,6 +2581,271 @@ fn push_policy_text_part(parts: &mut Vec<String>, value: Option<&str>) {
     parts.push(normalized.to_string());
 }
 
+type NavigationRequestInterceptor =
+    dyn headless_chrome::browser::tab::RequestInterceptor + Send + Sync;
+
+trait NavigationInterceptionControl: Send + Sync {
+    fn install_interceptor(&self, interceptor: Arc<NavigationRequestInterceptor>) -> Result<()>;
+    fn enable_fetch(
+        &self,
+        patterns: &[headless_chrome::protocol::cdp::Fetch::RequestPattern],
+    ) -> Result<()>;
+    fn restore_default_interceptor(&self) -> Result<()>;
+    fn disable_fetch(&self) -> Result<()>;
+}
+
+struct TabNavigationInterceptionControl {
+    tab: Arc<headless_chrome::Tab>,
+}
+
+impl NavigationInterceptionControl for TabNavigationInterceptionControl {
+    fn install_interceptor(&self, interceptor: Arc<NavigationRequestInterceptor>) -> Result<()> {
+        self.tab.enable_request_interception(interceptor)
+    }
+
+    fn enable_fetch(
+        &self,
+        patterns: &[headless_chrome::protocol::cdp::Fetch::RequestPattern],
+    ) -> Result<()> {
+        self.tab.enable_fetch(Some(patterns), None).map(|_| ())
+    }
+
+    fn restore_default_interceptor(&self) -> Result<()> {
+        self.tab.enable_request_interception(Arc::new(
+            |_: Arc<headless_chrome::browser::transport::Transport>,
+             _: headless_chrome::browser::transport::SessionId,
+             _: headless_chrome::protocol::cdp::Fetch::events::RequestPausedEvent| {
+                headless_chrome::browser::tab::RequestPausedDecision::Continue(None)
+            },
+        ))
+    }
+
+    fn disable_fetch(&self) -> Result<()> {
+        self.tab.disable_fetch().map(|_| ())
+    }
+}
+
+struct NavigationInterceptionGuard {
+    control: Arc<dyn NavigationInterceptionControl>,
+    active: bool,
+}
+
+impl NavigationInterceptionGuard {
+    fn install<F>(
+        tab: Arc<headless_chrome::Tab>,
+        interceptor: Arc<F>,
+        patterns: &[headless_chrome::protocol::cdp::Fetch::RequestPattern],
+    ) -> Result<Self>
+    where
+        F: headless_chrome::browser::tab::RequestInterceptor + Send + Sync + 'static,
+    {
+        Self::install_with_control(
+            Arc::new(TabNavigationInterceptionControl { tab }),
+            interceptor,
+            patterns,
+        )
+    }
+
+    fn install_with_control<F>(
+        control: Arc<dyn NavigationInterceptionControl>,
+        interceptor: Arc<F>,
+        patterns: &[headless_chrome::protocol::cdp::Fetch::RequestPattern],
+    ) -> Result<Self>
+    where
+        F: headless_chrome::browser::tab::RequestInterceptor + Send + Sync + 'static,
+    {
+        let guard = Self {
+            control,
+            active: true,
+        };
+        let interceptor: Arc<NavigationRequestInterceptor> = interceptor;
+        guard
+            .control
+            .install_interceptor(interceptor)
+            .context("failed to install public navigation interceptor")?;
+        guard
+            .control
+            .enable_fetch(patterns)
+            .context("failed to enable public navigation interception")?;
+        Ok(guard)
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        self.active = false;
+        let restore_result = self
+            .control
+            .restore_default_interceptor()
+            .context("failed to restore default request interceptor");
+        let disable_result = self
+            .control
+            .disable_fetch()
+            .context("failed to disable public navigation interception");
+        restore_result.and(disable_result)
+    }
+}
+
+impl Drop for NavigationInterceptionGuard {
+    fn drop(&mut self) {
+        let _ = self.finish();
+    }
+}
+
+fn evaluate_navigation_destination(
+    context: &NavigationPolicyContext,
+    destination: &ValidatedNavigationUrl,
+    approval_signature: &str,
+    clear_pending_on_block: bool,
+) -> std::result::Result<(), NavigationPolicyFailure> {
+    let decision = context
+        .policy_engine
+        .lock()
+        .map_err(|_| NavigationPolicyFailure::Rejected {
+            message: "navigation policy engine is unavailable".to_string(),
+        })?
+        .evaluate(&PolicyContext {
+            url: destination.canonical_url().to_string(),
+            action: "navigate".to_string(),
+            target_role: None,
+            target_text: None,
+            surrounding_text: None,
+        });
+    let rule_id = decision
+        .rule_id
+        .clone()
+        .unwrap_or_else(|| "unnamed-policy-rule".to_string());
+    context.audit_logger.log(AuditEvent::PolicyDecision {
+        rule_id: rule_id.clone(),
+        action: "navigate".to_string(),
+        decision: match decision.action {
+            PolicyAction::Allow => "allow",
+            PolicyAction::Block => "block",
+            PolicyAction::RequireHumanApproval => "require_human_approval",
+        }
+        .to_string(),
+        destination_fingerprint: Some(format!("sha256:{}", destination.destination_digest())),
+        timestamp: epoch_millis_u64(),
+    });
+
+    let run_plugins = || {
+        let intent = serde_json::json!({
+            "action": "navigate",
+            "url": destination.canonical_url(),
+        })
+        .to_string();
+        let (outcome, events) = run_policy_hooks(
+            &intent,
+            context
+                .plugin_hooks
+                .policy_plugins
+                .iter()
+                .map(|p| p.as_ref()),
+        );
+        // Plugin reasons are untrusted and may echo the full destination URL.
+        // Keep attribution and allow/block result, but never persist the reason.
+        for event in events {
+            if let AuditEvent::PluginPolicyDecision {
+                plugin_id,
+                allowed,
+                timestamp,
+                ..
+            } = event
+            {
+                context.audit_logger.log(AuditEvent::PluginPolicyDecision {
+                    plugin_id,
+                    allowed,
+                    reason: None,
+                    timestamp,
+                });
+            }
+        }
+        match outcome {
+            PolicyHookOutcome::Allow => Ok(()),
+            PolicyHookOutcome::Block { plugin_id, .. } => Err(NavigationPolicyFailure::Blocked {
+                rule_id: format!("plugin:{plugin_id}"),
+            }),
+        }
+    };
+
+    match decision.action {
+        PolicyAction::Allow => run_plugins(),
+        PolicyAction::Block => {
+            if clear_pending_on_block {
+                if let Ok(mut approvals) = context.policy_approvals.lock() {
+                    approvals.pending = None;
+                }
+            }
+            Err(NavigationPolicyFailure::Blocked { rule_id })
+        }
+        PolicyAction::RequireHumanApproval => {
+            let scope = decision.scope.unwrap_or(ApprovalScope::ActionOnly);
+            if consume_navigation_approval(context, &rule_id, scope, approval_signature) {
+                return run_plugins();
+            }
+            let request = PolicyApprovalRequest {
+                rule_id: rule_id.clone(),
+                scope,
+                action: "navigate".to_string(),
+                target_signature: approval_signature.to_string(),
+                outcome: decision.outcome.clone(),
+            };
+            context
+                .policy_approvals
+                .lock()
+                .map_err(|_| NavigationPolicyFailure::Rejected {
+                    message: "navigation approval state is unavailable".to_string(),
+                })?
+                .pending = Some(request);
+            context.audit_logger.log(AuditEvent::HitlEvent {
+                event_type: "request".to_string(),
+                reason: Some(format!("Requires human approval for rule {rule_id}")),
+                user_id: None,
+                timestamp: epoch_millis_u64(),
+            });
+            Err(NavigationPolicyFailure::HumanApprovalRequired {
+                rule_id,
+                scope,
+                outcome: decision.outcome,
+            })
+        }
+    }
+}
+
+fn consume_navigation_approval(
+    context: &NavigationPolicyContext,
+    rule_id: &str,
+    scope: ApprovalScope,
+    approval_signature: &str,
+) -> bool {
+    let now_ms = epoch_millis();
+    let navigation_epoch = context.navigation_epoch.load(Ordering::Relaxed);
+    let Ok(mut approvals) = context.policy_approvals.lock() else {
+        return false;
+    };
+    approvals.granted.retain(|grant| {
+        is_grant_valid(
+            grant,
+            navigation_epoch,
+            &context.approval_context_url,
+            now_ms,
+        )
+    });
+    let Some(index) = approvals.granted.iter().position(|grant| {
+        grant.request.rule_id == rule_id
+            && grant.request.scope == scope
+            && grant.request.action == "navigate"
+            && grant.request.target_signature == approval_signature
+    }) else {
+        return false;
+    };
+    if scope == ApprovalScope::ActionOnly {
+        approvals.granted.remove(index);
+    }
+    true
+}
+
 fn policy_target_signature(
     node: Option<&SemanticNode>,
     target_id: Option<i64>,
@@ -2332,6 +2900,138 @@ pub const STABLE_KEY_SHORT_LEN: usize = 16;
 mod tests {
     use super::*;
     use helpers::{node_is_enabled, normalized_poll_interval};
+
+    #[derive(Default)]
+    struct RecordingInterceptionControl {
+        operations: Mutex<Vec<&'static str>>,
+        fail_at: Option<&'static str>,
+    }
+
+    impl RecordingInterceptionControl {
+        fn failing_at(operation: &'static str) -> Self {
+            Self {
+                operations: Mutex::new(Vec::new()),
+                fail_at: Some(operation),
+            }
+        }
+
+        fn record(&self, operation: &'static str) -> Result<()> {
+            self.operations.lock().unwrap().push(operation);
+            if self.fail_at == Some(operation) {
+                anyhow::bail!("injected {operation} failure");
+            }
+            Ok(())
+        }
+
+        fn recorded(&self) -> Vec<&'static str> {
+            self.operations.lock().unwrap().clone()
+        }
+    }
+
+    impl NavigationInterceptionControl for RecordingInterceptionControl {
+        fn install_interceptor(
+            &self,
+            _interceptor: Arc<NavigationRequestInterceptor>,
+        ) -> Result<()> {
+            self.record("install_interceptor")
+        }
+
+        fn enable_fetch(
+            &self,
+            _patterns: &[headless_chrome::protocol::cdp::Fetch::RequestPattern],
+        ) -> Result<()> {
+            self.record("enable_fetch")
+        }
+
+        fn restore_default_interceptor(&self) -> Result<()> {
+            self.record("restore_default_interceptor")
+        }
+
+        fn disable_fetch(&self) -> Result<()> {
+            self.record("disable_fetch")
+        }
+    }
+
+    fn recording_interceptor() -> Arc<impl headless_chrome::browser::tab::RequestInterceptor> {
+        Arc::new(
+            |_: Arc<headless_chrome::browser::transport::Transport>,
+             _: headless_chrome::browser::transport::SessionId,
+             _: headless_chrome::protocol::cdp::Fetch::events::RequestPausedEvent| {
+                headless_chrome::browser::tab::RequestPausedDecision::Continue(None)
+            },
+        )
+    }
+
+    #[test]
+    fn navigation_interception_partial_enable_failure_restores_and_disables() {
+        let control = Arc::new(RecordingInterceptionControl::failing_at("enable_fetch"));
+        let result = NavigationInterceptionGuard::install_with_control(
+            control.clone(),
+            recording_interceptor(),
+            &[],
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            control.recorded(),
+            vec![
+                "install_interceptor",
+                "enable_fetch",
+                "restore_default_interceptor",
+                "disable_fetch"
+            ]
+        );
+    }
+
+    #[test]
+    fn navigation_interception_success_finishes_restore_before_disable_once() {
+        let control = Arc::new(RecordingInterceptionControl::default());
+        let mut guard = NavigationInterceptionGuard::install_with_control(
+            control.clone(),
+            recording_interceptor(),
+            &[],
+        )
+        .expect("install interception");
+
+        guard.finish().expect("finish interception");
+        guard.finish().expect("second finish is idempotent");
+        drop(guard);
+
+        assert_eq!(
+            control.recorded(),
+            vec![
+                "install_interceptor",
+                "enable_fetch",
+                "restore_default_interceptor",
+                "disable_fetch"
+            ]
+        );
+    }
+
+    #[test]
+    fn navigation_interception_finish_attempts_disable_after_cleanup_errors() {
+        for failure in ["restore_default_interceptor", "disable_fetch"] {
+            let control = Arc::new(RecordingInterceptionControl::failing_at(failure));
+            let mut guard = NavigationInterceptionGuard::install_with_control(
+                control.clone(),
+                recording_interceptor(),
+                &[],
+            )
+            .expect("install interception");
+
+            assert!(guard.finish().is_err(), "failure point: {failure}");
+            assert_eq!(
+                control.recorded(),
+                vec![
+                    "install_interceptor",
+                    "enable_fetch",
+                    "restore_default_interceptor",
+                    "disable_fetch"
+                ],
+                "failure point: {failure}"
+            );
+        }
+    }
 
     #[test]
     fn test_state_contains_intent_exact_match() {

@@ -24,6 +24,12 @@ impl Default for MockBackend {
 }
 
 impl McpBackend for MockBackend {
+    fn navigate(&mut self, arguments: Value) -> Result<Value> {
+        Ok(
+            json!({"status": "ok", "requested_url": arguments["url"], "final_url": arguments["url"]}),
+        )
+    }
+
     fn get_state(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({
             "metadata": {

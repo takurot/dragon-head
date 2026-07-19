@@ -1,6 +1,7 @@
 use mcp_server::{McpBackend, McpServer};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{mpsc, OnceLock};
 use std::thread;
@@ -11,6 +12,7 @@ use test_bench_support::should_skip_browser_tests;
 use std::os::unix::process::CommandExt;
 
 const REQUIRED_TOOL_NAMES: &[&str] = &[
+    "navigate",
     "get_state",
     "act",
     "verify",
@@ -42,6 +44,14 @@ fn assert_required_tools(tools: &[Value]) {
 struct NullBackend;
 
 impl McpBackend for NullBackend {
+    fn navigate(&mut self, arguments: Value) -> anyhow::Result<Value> {
+        Ok(json!({
+            "status": "ok",
+            "requested_url": arguments["url"],
+            "final_url": arguments["url"]
+        }))
+    }
+
     fn get_state(&mut self, _: Value) -> anyhow::Result<Value> {
         Ok(json!({}))
     }
@@ -705,6 +715,97 @@ fn test_mcp_binary_stdio_smoke() -> anyhow::Result<()> {
     );
     assert!(stdout_lines.iter().all(|line| !line.trim().is_empty()));
     eprintln!("[timing] total: {:?}", t0.elapsed());
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Chrome; starts a real browser process"]
+fn test_mcp_binary_fresh_session_navigate_returns_full_delta_baseline() -> anyhow::Result<()> {
+    if should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let fixture = thread::spawn(move || -> anyhow::Result<()> {
+        let (mut stream, _) = listener.accept()?;
+        let mut request = [0_u8; 2048];
+        let _ = stream.read(&mut request)?;
+        let body = "<html><body><h1>Fresh navigation</h1><button>Ready</button></body></html>";
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )?;
+        stream.flush()?;
+        Ok(())
+    });
+
+    let bin_path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_dragon-head-mcp"));
+    let config_home = tempfile::tempdir()?;
+    let mut child = Command::new(&bin_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .env("NAVIGATION_ALLOW_PRIVATE_NETWORK", "true")
+        .env_remove("POLICY_FILE")
+        .spawn()?;
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut stderr = child.stderr.take().expect("stderr");
+    let stderr_reader = thread::spawn(move || {
+        let mut output = String::new();
+        let _ = stderr.read_to_string(&mut output);
+        output
+    });
+    let mut reader = BufReader::new(stdout);
+    mcp_handshake(&mut stdin, &mut reader)?;
+
+    let requested_url = format!("http://{address}/start#ignored");
+    writeln!(
+        stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "navigate", "arguments": {"url": requested_url}}
+        })
+    )?;
+    stdin.flush()?;
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let navigate: Value = serde_json::from_str(&line)?;
+    assert_eq!(navigate["result"]["structuredContent"]["status"], "ok");
+    assert_eq!(
+        navigate["result"]["structuredContent"]["requested_url"],
+        format!("http://{address}/start")
+    );
+
+    writeln!(
+        stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "get_state", "arguments": {"delivery": "delta"}}
+        })
+    )?;
+    stdin.flush()?;
+    line.clear();
+    reader.read_line(&mut line)?;
+    let state: Value = serde_json::from_str(&line)?;
+    assert_eq!(state["result"]["structuredContent"]["type"], "full");
+
+    drop(stdin);
+    let status = child.wait()?;
+    assert!(status.success(), "dragon-head-mcp exited with {status}");
+    let stderr = stderr_reader.join().expect("stderr reader panicked");
+    assert!(!stderr.contains("#ignored"));
+    fixture.join().expect("fixture thread panicked")?;
     Ok(())
 }
 

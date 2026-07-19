@@ -1,6 +1,6 @@
 # AI_CONTEXT.md
 
-**Last updated:** 2026-07-06
+**Last updated:** 2026-07-19
 
 Read this first. It is a map for deciding which files to open next; it is not a
 full manual.
@@ -14,11 +14,12 @@ the MCP tools to inspect pages, act on stable targets, verify outcomes, request
 human approval, run declarative skills, extract structured data, and inspect
 usage meters.
 
-The current MCP tool contract has 8 tools, defined in `McpServer::tools()` in
+The current MCP tool contract has 9 tools, defined in `McpServer::tools()` in
 `mcp-server/src/lib.rs`:
 
 <!-- mcp-tool-list:start -->
 - `get_state`
+- `navigate`
 - `act`
 - `verify`
 - `get_visual`
@@ -27,6 +28,13 @@ The current MCP tool contract has 8 tools, defined in `McpServer::tools()` in
 - `get_usage_report`
 - `extract`
 <!-- mcp-tool-list:end -->
+
+`navigate` bootstraps a fresh empty MCP tab with an absolute HTTP(S) URL. It
+rejects credentials and non-global destinations by default, evaluates policy and
+plugin hooks for the requested URL and top-level redirects, and returns the live
+final URL. Trusted local deployments may opt in to private-network destinations
+with `[navigation] allow_private_network = true`; external egress controls remain
+required for untrusted deployments.
 
 The required `mcp_client_contract` CI suite snapshots the full tool definitions
 and checks these canonical documentation lists for exact name-set equality.

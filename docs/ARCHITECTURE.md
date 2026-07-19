@@ -34,7 +34,7 @@ flowchart TD
 
 | Component | Responsibility |
 |---|---|
-| `mcp-server` | stdio JSON-RPC server; tool contract (8 tools: `get_state`, `act`, `verify`, `get_visual`, `ask_human`, `run_skill`, `get_usage_report`, `extract`); config loading; `--doctor`/`--init`; usage metering and plan-tier gating |
+| `mcp-server` | stdio JSON-RPC server; tool contract (9 tools: `get_state`, `navigate`, `act`, `verify`, `get_visual`, `ask_human`, `run_skill`, `get_usage_report`, `extract`); config loading; `--doctor`/`--init`; usage metering and plan-tier gating |
 | `core-runtime::browser` | Owns the Chrome process and per-tab `PageSession`; executes actions; crash/disconnect detection and relaunch |
 | `core-runtime::sre` | DOM → `SemanticState`/`SemanticNode` capture and normalization; `stable_key` identity; delta computation |
 | `core-runtime::policy` | `PolicyEngine` — rule-based action gating (Allow/Block/RequireHumanApproval) and Guardian Angel outcome projection |
@@ -56,6 +56,7 @@ The canonical MCP tool names are:
 
 <!-- mcp-tool-list:start -->
 - `get_state`
+- `navigate`
 - `act`
 - `verify`
 - `get_visual`
@@ -87,8 +88,29 @@ is no cyclic dependency between workspace crates.
 5. For delta requests: `current.select_update(previous, DeltaPolicy)` produces
    `StateUpdate::{Noop, Full, Delta}` (an RFC 6902 JSON Patch for `Delta`).
 
-`PolicyEngine` is **not** consulted on `get_state` — only `act` goes through
-policy.
+`PolicyEngine` is **not** consulted on `get_state`; mutating `act` and `navigate`
+operations go through policy.
+
+## Data flow: `navigate`
+
+1. Parse and canonicalize the destination before side effects. Accept only
+   absolute HTTP(S) URLs without credentials; strip fragments and reject
+   non-global addresses unless the trusted-deployment opt-in is enabled.
+2. Evaluate built-in and plugin policy against the requested destination before
+   browser I/O. Blocked and approval-required requests send no destination request.
+3. Temporarily intercept top-level document redirects. Each new redirect
+   destination repeats URL, network, policy, and plugin validation before Chrome
+   may continue it; iframe and subresource traffic is not re-evaluated here.
+4. Restore the default request interceptor and disable Fetch on every exit path.
+   After I/O begins, invalidate page-local, full/delta, and speculative state;
+   the next delta capture establishes a full verified baseline.
+5. Return the fragment-free requested URL and the live final URL. Audit records
+   contain a sanitized scheme/host/port/path projection or fingerprint, never
+   credentials, query values, or fragments.
+
+Private-network checks reduce accidental server-side request forgery exposure,
+but cannot eliminate DNS-rebinding races. Untrusted deployments must also enforce
+OS/container-level egress policy.
 
 ## Data flow: `act`
 
