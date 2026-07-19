@@ -469,10 +469,10 @@ project's specification, tests, or merge gates.
 
 ### Recorded Usage Snapshot
 
-The following snapshot was captured on 2026-07-19, before this README update,
-from the local Codex session history. It includes the main checkout, its earlier
-location, and worktrees whose Git metadata identifies
-`github:takurot/dragon-head.git`.
+The following snapshot uses a token-event cutoff of
+`2026-07-19T10:50:00.650Z`, before this README update, and was captured from the
+local Codex session history. It includes the main checkout, its earlier location,
+and worktrees whose Git metadata identifies `github:takurot/dragon-head.git`.
 
 | Metric | Recorded value |
 | --- | ---: |
@@ -490,12 +490,12 @@ location, and worktrees whose Git metadata identifies
 
 The aggregation scans `~/.codex/sessions/**/*.jsonl` and
 `~/.codex/archived_sessions/**/*.jsonl`, filters `session_meta` by Git repository
-URL, takes the final cumulative `token_count` for each session, and deduplicates
-by session ID. Cached input is part of input, and reasoning output is part of
-output, so those rows must not be added to the total again. Because 11 sessions
-have no token record and the active session continued after the snapshot, the
-result is a lower bound. It is an engineering-activity measure, not a billing or
-rate-limit figure.
+URL and the cutoff, takes each session's final cumulative `token_count` at or
+before the cutoff, and deduplicates by session ID. Cached input is part of input,
+and reasoning output is part of output, so those rows must not be added to the
+total again. Because 11 sessions have no token record and the active session
+continued after the snapshot, the result is a lower bound. It is an
+engineering-activity measure, not a billing or rate-limit figure.
 
 ### How Codex Accelerated the Workflow
 
