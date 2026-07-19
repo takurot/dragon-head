@@ -9,6 +9,7 @@ anyhow = { workspace = true }
 base64 = "0.22"
 core-runtime = { path = "../core-runtime" }
 json-patch = "4.2"
+libc = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 skills-engine = { path = "../skills-engine" }
@@ -26,7 +27,6 @@ path = "src/main.rs"
 [dev-dependencies]
 escargot = "0.5"
 json-patch = "4.2"
-libc = "0.2"
 tempfile = "3.10"
 tokio = { workspace = true }
 urlencoding = "2.1"

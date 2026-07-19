@@ -132,10 +132,15 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
         return (false, format!("{label} — {err}"), false);
     }
 
+    let skills = match config::load_configured_skills(path.as_deref(), file_config.as_ref()) {
+        Ok(skills) => skills,
+        Err(err) => return (false, format!("{label} — {err}"), false),
+    };
+
     let summary = format!(
         "chrome_path={}, prompt_injection.mode={:?}, \
          prompt_injection.additional_phrases={}, policy.file={}, \
-         navigation.allow_private_network={}, supported_env=[{}]",
+         navigation.allow_private_network={}, skills.loaded={}, supported_env=[{}]",
         resolved.chrome_path.as_deref().unwrap_or("<unset>"),
         resolved.injection_mode,
         resolved.injection_additional_phrases.len(),
@@ -145,6 +150,7 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<unset>".to_string()),
         resolved.navigation_allow_private_network,
+        skills.len(),
         config::HONORED_CONFIG_ENV_VARS.join(","),
     );
 
@@ -353,6 +359,63 @@ mod tests {
             detail.contains("prompt_injection.mode=Redact"),
             "detail: {detail}"
         );
+    }
+
+    #[test]
+    fn config_check_loads_relative_skill_files_with_shared_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let dragon_head_dir = dir.path().join("dragon-head");
+        let skill_dir = dragon_head_dir.join("skills");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("doctor.json"),
+            r#"{"schema_version":1,"name":"doctor-skill","steps":[{"type":"locate","query":"id:1"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dragon_head_dir.join("config.toml"),
+            "[skills]\nfiles = [\"skills/doctor.json\"]",
+        )
+        .unwrap();
+        let xdg = dir.path().to_string_lossy().to_string();
+
+        let (passed, detail, informational) = config_file_detail_with(|key| match key {
+            "XDG_CONFIG_HOME" => Some(xdg.clone()),
+            _ => None,
+        });
+
+        assert!(passed, "detail: {detail}");
+        assert!(informational);
+        assert!(detail.contains("skills.loaded=1"), "detail: {detail}");
+    }
+
+    #[test]
+    fn config_check_rejects_invalid_skill_without_disclosing_definition() {
+        let dir = tempfile::tempdir().unwrap();
+        let dragon_head_dir = dir.path().join("dragon-head");
+        std::fs::create_dir_all(&dragon_head_dir).unwrap();
+        let secret = "doctor-skill-definition-secret";
+        std::fs::write(
+            dragon_head_dir.join("invalid.json"),
+            format!(r#"{{"schema_version":1,"name":"{secret}","steps":[]}}"#),
+        )
+        .unwrap();
+        std::fs::write(
+            dragon_head_dir.join("config.toml"),
+            "[skills]\nfiles = [\"invalid.json\"]",
+        )
+        .unwrap();
+        let xdg = dir.path().to_string_lossy().to_string();
+
+        let (passed, detail, informational) = config_file_detail_with(|key| match key {
+            "XDG_CONFIG_HOME" => Some(xdg.clone()),
+            _ => None,
+        });
+
+        assert!(!passed);
+        assert!(!informational);
+        assert!(detail.contains("invalid.json"), "detail: {detail}");
+        assert!(!detail.contains(secret), "detail: {detail}");
     }
 
     #[test]

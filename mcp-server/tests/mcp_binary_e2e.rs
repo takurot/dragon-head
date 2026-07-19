@@ -449,6 +449,194 @@ fn binary_rejects_malformed_config_without_disclosing_phrase_contents() -> anyho
 }
 
 #[test]
+fn binary_doctor_and_startup_reject_invalid_skill_without_disclosure() -> anyhow::Result<()> {
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        "[skills]\nfiles = [\"invalid.json\"]",
+    )?;
+
+    let cases = [
+        (
+            "standalone-skill-definition-secret",
+            json!({"schema_version": 1, "name": "invalid", "steps": []}),
+        ),
+        (
+            "schema-definition-secret-token",
+            json!({
+                "schema_version": 1,
+                "name": "invalid",
+                "steps": [{"type": "schema-definition-secret-token", "query": "id:1"}]
+            }),
+        ),
+        (
+            "branch-definition-secret-token",
+            json!({
+                "schema_version": 1,
+                "name": "invalid",
+                "steps": [{
+                    "type": "locate",
+                    "id": "branch-source-secret-token",
+                    "query": "id:1",
+                    "control": {"on_success": "branch-definition-secret-token"}
+                }]
+            }),
+        ),
+        (
+            "duplicate-step-secret-token",
+            json!({
+                "schema_version": 1,
+                "name": "invalid",
+                "steps": [
+                    {"type": "locate", "id": "duplicate-step-secret-token", "query": "id:1"},
+                    {"type": "locate", "id": "duplicate-step-secret-token", "query": "id:2"}
+                ]
+            }),
+        ),
+    ];
+
+    for (secret, definition) in cases {
+        std::fs::write(
+            dragon_head_dir.join("invalid.json"),
+            serde_json::to_vec(&definition)?,
+        )?;
+        for args in [&["--doctor"][..], &[][..]] {
+            let out = Command::new(&bin)
+                .args(args)
+                .env("XDG_CONFIG_HOME", dir.path())
+                .output()?;
+
+            assert!(!out.status.success());
+            if args.is_empty() {
+                assert!(out.stdout.is_empty(), "stdout must remain JSON-RPC clean");
+            } else {
+                assert!(String::from_utf8_lossy(&out.stdout).contains("✗ Config file"));
+            }
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(combined.contains("invalid.json"), "combined: {combined}");
+            assert!(!combined.contains(secret), "combined: {combined}");
+            assert!(!combined.contains("\"steps\""), "combined: {combined}");
+            assert!(
+                !combined.contains("ready, listening"),
+                "combined: {combined}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn binary_doctor_and_startup_reject_duplicate_skill_names_without_disclosure() -> anyhow::Result<()>
+{
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+    let secret = "duplicate-skill-name-secret-token";
+    let definition = json!({
+        "schema_version": 1,
+        "name": secret,
+        "steps": [{"type": "locate", "query": "id:1"}]
+    });
+    std::fs::write(
+        dragon_head_dir.join("first.json"),
+        serde_json::to_vec(&definition)?,
+    )?;
+    std::fs::write(
+        dragon_head_dir.join("second.json"),
+        serde_json::to_vec(&definition)?,
+    )?;
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        "[skills]\nfiles = [\"first.json\", \"second.json\"]",
+    )?;
+
+    for args in [&["--doctor"][..], &[][..]] {
+        let out = Command::new(&bin)
+            .args(args)
+            .env("XDG_CONFIG_HOME", dir.path())
+            .output()?;
+        assert!(!out.status.success());
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(combined.contains("first.json"), "combined: {combined}");
+        assert!(combined.contains("second.json"), "combined: {combined}");
+        assert!(!combined.contains(secret), "combined: {combined}");
+        assert!(
+            !combined.contains("ready, listening"),
+            "combined: {combined}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn binary_doctor_and_startup_reject_fifo_without_blocking() -> anyhow::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+    let fifo = dragon_head_dir.join("skill.fifo");
+    let fifo_c = std::ffi::CString::new(fifo.as_os_str().as_bytes())?;
+    // SAFETY: `fifo_c` is a live, NUL-terminated CString and the mode is valid.
+    let result = unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) };
+    assert_eq!(
+        result,
+        0,
+        "mkfifo failed: {}",
+        std::io::Error::last_os_error()
+    );
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        "[skills]\nfiles = [\"skill.fifo\"]",
+    )?;
+
+    for args in [&["--doctor"][..], &[][..]] {
+        let mut child = Command::new(&bin)
+            .args(args)
+            .env("XDG_CONFIG_HOME", dir.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                child.kill()?;
+                child.wait()?;
+                anyhow::bail!("configured FIFO blocked startup/doctor");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(!status.success());
+        let mut combined = String::new();
+        child.stdout.take().unwrap().read_to_string(&mut combined)?;
+        child.stderr.take().unwrap().read_to_string(&mut combined)?;
+        assert!(combined.contains("skill.fifo"), "combined: {combined}");
+        assert!(
+            !combined.contains("ready, listening"),
+            "combined: {combined}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn binary_doctor_rejects_invalid_additional_phrase_env_without_disclosure() -> anyhow::Result<()> {
     let bin = build_binary_once()?;
     let dir = tempfile::tempdir()?;
@@ -918,6 +1106,71 @@ fn test_mcp_binary_get_visual_returns_png_for_clean_and_som() -> anyhow::Result<
     let stderr = stderr_reader.join().expect("stderr reader panicked");
     assert!(!stderr.contains("iVBOR"), "base64 image leaked to stderr");
     fixture.join().expect("fixture thread panicked")?;
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Chrome; starts a real browser process"]
+fn test_mcp_binary_loads_relative_skill_and_completes_run_skill() -> anyhow::Result<()> {
+    if should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let bin_path = build_binary_once()?;
+    let config_home = tempfile::tempdir()?;
+    let dragon_head_dir = config_home.path().join("dragon-head");
+    let skills_dir = dragon_head_dir.join("skills");
+    std::fs::create_dir_all(&skills_dir)?;
+    std::fs::write(
+        skills_dir.join("relative.json"),
+        r#"{"schema_version":1,"name":"relative-extract","steps":[{"type":"extract","id":"read-body","key":"body","selector":"body"}]}"#,
+    )?;
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        "[skills]\nfiles = [\"skills/relative.json\"]",
+    )?;
+
+    let mut child = Command::new(&bin_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .spawn()?;
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = BufReader::new(stdout);
+    mcp_handshake(&mut stdin, &mut reader)?;
+
+    writeln!(
+        stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "run_skill",
+                "arguments": {"skill_name": "relative-extract", "params": {}}
+            }
+        })
+    )?;
+    stdin.flush()?;
+
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let response: Value = serde_json::from_str(&line)?;
+    assert_eq!(
+        response["result"]["structuredContent"]["status"],
+        "completed"
+    );
+    assert_eq!(
+        response["result"]["structuredContent"]["trace"][0]["step_id"],
+        "read-body"
+    );
+
+    drop(stdin);
+    let status = child.wait()?;
+    assert!(status.success(), "dragon-head-mcp exited with {status}");
     Ok(())
 }
 

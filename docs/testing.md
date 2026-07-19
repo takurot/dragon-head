@@ -56,7 +56,7 @@ The CI pipeline is defined in `.github/workflows/`.
 
 - **Goal**: Provide a single dashboard that verifies the main Dragon Head feature areas across `core-runtime`, `mcp-server`, `skills-engine`, `plugin-host`, and `marketplace`.
 - **Modes**:
-- `smoke`: Required on PRs. Covers representative scenarios for state capture, action recovery, wait semantics, policy/HITL, audit/session, MCP flow (including visual image content delivery), skill execution, plugin validation, and marketplace accounting.
+- `smoke`: Required on PRs. Covers representative scenarios for state capture, action recovery, wait semantics, policy/HITL, audit/session, MCP flow (including visual image content delivery and standalone configured-skill loading), skill execution, plugin validation, and marketplace accounting.
   - `full`: Runs on nightly/manual workflows. Uses the same report format and is reserved for expanded scenario sets and longer-running variants.
 - **Artifacts**:
   - JSON reports: `target/evaluation-bench/*.json`

@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use core_runtime::{ApprovalScope, BrowserClient, PolicyAction, PolicyRule};
-use mcp_server::{AuditRetentionSnapshot, CoreRuntimeBackend, McpBackend, McpServer, PlanTier};
+use mcp_server::{
+    config, AuditRetentionSnapshot, CoreRuntimeBackend, McpBackend, McpServer, PlanTier,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use test_bench_support::{EvaluationBench, EvaluationMode};
@@ -45,6 +47,11 @@ fn test_mcp_server_comprehensive_evaluation_suite() -> Result<()> {
         "visual",
         scenario_visual_image_content_contract,
     );
+    bench.run_scenario(
+        "configured_skill_loading_contract",
+        "skills",
+        scenario_configured_skill_loading_contract,
+    );
 
     bench.write_if_configured()?;
     bench.assert_required_scenarios(&[
@@ -54,10 +61,33 @@ fn test_mcp_server_comprehensive_evaluation_suite() -> Result<()> {
         "delta_delivery_full_seeds_baseline",
         "navigate_contract_and_metering",
         "visual_image_content_contract",
+        "configured_skill_loading_contract",
     ])?;
     bench.assert_all_passed()?;
 
     Ok(())
+}
+
+fn scenario_configured_skill_loading_contract() -> Result<Value> {
+    let dir = tempfile::tempdir()?;
+    let config_path = dir.path().join("config.toml");
+    let skills_dir = dir.path().join("skills");
+    std::fs::create_dir_all(&skills_dir)?;
+    std::fs::write(
+        skills_dir.join("relative.json"),
+        r#"{"schema_version":1,"name":"evaluation-skill","steps":[{"type":"extract","key":"body","selector":"body"}]}"#,
+    )?;
+    std::fs::write(&config_path, "[skills]\nfiles = [\"skills/relative.json\"]")?;
+
+    let file_config = config::load_config_file(&config_path)?.context("config file")?;
+    let skills = config::load_configured_skills(Some(&config_path), Some(&file_config))?;
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].name, "evaluation-skill");
+
+    Ok(json!({
+        "loaded": skills.len(),
+        "name": skills[0].name
+    }))
 }
 
 fn scenario_visual_image_content_contract() -> Result<Value> {

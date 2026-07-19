@@ -190,6 +190,11 @@ allow_private_network = false
 log_dir = "/var/log/dragon-head"
 max_bytes = 10485760
 durability = "flush"  # "flush" (default) or "sync"
+
+[skills]
+# JSON files containing one SkillDefinition each. Relative paths resolve from
+# the directory containing this config.toml; absolute paths remain absolute.
+files = ["skills/checkout.json", "/opt/dragon-head/skills/search.json"]
 ```
 
 ### Precedence
@@ -228,7 +233,15 @@ switch does not replace OS/container network isolation or deployment egress cont
 Run `dragon-head-mcp --doctor` to validate the config file and list every
 supported configuration environment variable. A malformed file or invalid env
 override makes the "Config file" check fail. The summary reports only the
-effective additional-phrase count, never the phrase contents.
+effective additional-phrase and loaded-skill counts, never their contents.
+
+Configured skills are loaded before the server reports readiness. At most 64
+regular files are accepted, each limited to 1 MiB. Every file must contain
+exactly one JSON `SkillDefinition`; schema and semantic validation, including
+duplicate-name rejection, completes for the full set before any definition is
+registered.
+Startup and `--doctor` fail with the affected path and reason when validation
+fails, without printing the definition body.
 
 Setting `prompt_injection.mode` to `redact` or `off` changes the default
 security posture — see [Security: Prompt Injection

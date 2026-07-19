@@ -43,7 +43,7 @@ pub fn print_init(client: Option<&str>) -> bool {
 
 fn print_config_note() {
     println!("# Optional: ~/.config/dragon-head/config.toml can set chrome_path,");
-    println!("# prompt_injection.mode/additional_phrases, policy.file, and [audit]");
+    println!("# prompt_injection.mode/additional_phrases, policy.file, [audit], and skills.files");
     println!("# (log_dir/max_bytes/durability). See README.md#configuration-configtoml.");
 }
 
