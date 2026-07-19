@@ -39,6 +39,8 @@ pub enum AuditEvent {
         rule_id: String,
         action: String,
         decision: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        destination_fingerprint: Option<String>,
         timestamp: u64,
     },
     #[serde(rename = "HITL_EVENT")]
@@ -358,6 +360,25 @@ fn sanitize_audit_event(event: AuditEvent) -> AuditEvent {
             timestamp,
             patch: r.redact_json(&patch),
         },
+        AuditEvent::PolicyDecision {
+            rule_id,
+            action,
+            decision,
+            destination_fingerprint,
+            timestamp,
+        } => AuditEvent::PolicyDecision {
+            rule_id,
+            action,
+            decision,
+            destination_fingerprint: destination_fingerprint.filter(|fingerprint| {
+                fingerprint.len() == 71
+                    && fingerprint.starts_with("sha256:")
+                    && fingerprint[7..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+            }),
+            timestamp,
+        },
         // Plugin-supplied strings (error_message, reason) may contain PII from
         // page content (URLs with tokens, emails, etc.).  Truncate them to a safe
         // maximum length and redact any recognised sensitive patterns.
@@ -618,5 +639,41 @@ mod tests {
         {
             assert!(reason.is_none());
         }
+    }
+
+    #[test]
+    fn sanitize_policy_destination_accepts_only_sha256_fingerprints() {
+        let raw = AuditEvent::PolicyDecision {
+            rule_id: "r".to_string(),
+            action: "navigate".to_string(),
+            decision: "allow".to_string(),
+            destination_fingerprint: Some(
+                "https://example.com/path?query-secret#fragment-secret".to_string(),
+            ),
+            timestamp: 0,
+        };
+        assert!(matches!(
+            sanitize_audit_event(raw),
+            AuditEvent::PolicyDecision {
+                destination_fingerprint: None,
+                ..
+            }
+        ));
+
+        let fingerprint = format!("sha256:{}", "01".repeat(32));
+        let safe = AuditEvent::PolicyDecision {
+            rule_id: "r".to_string(),
+            action: "navigate".to_string(),
+            decision: "allow".to_string(),
+            destination_fingerprint: Some(fingerprint.clone()),
+            timestamp: 0,
+        };
+        assert!(matches!(
+            sanitize_audit_event(safe),
+            AuditEvent::PolicyDecision {
+                destination_fingerprint: Some(value),
+                ..
+            } if value == fingerprint
+        ));
     }
 }

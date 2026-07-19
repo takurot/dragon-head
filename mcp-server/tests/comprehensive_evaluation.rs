@@ -33,6 +33,11 @@ fn test_mcp_server_comprehensive_evaluation_suite() -> Result<()> {
         "delta",
         scenario_delta_delivery_full_seeds_baseline,
     );
+    bench.run_scenario(
+        "navigate_contract_and_metering",
+        "navigation",
+        scenario_navigate_contract_and_metering,
+    );
 
     bench.write_if_configured()?;
     bench.assert_required_scenarios(&[
@@ -40,10 +45,25 @@ fn test_mcp_server_comprehensive_evaluation_suite() -> Result<()> {
         "hitl_flow",
         "usage_report_plan_gating",
         "delta_delivery_full_seeds_baseline",
+        "navigate_contract_and_metering",
     ])?;
     bench.assert_all_passed()?;
 
     Ok(())
+}
+
+fn scenario_navigate_contract_and_metering() -> Result<Value> {
+    let mut server = McpServer::new(MockBackend::default());
+    let response = server.call_tool("navigate", json!({"url": "https://example.com/start"}))?;
+    assert_eq!(response["status"], "ok");
+    assert_eq!(response["requested_url"], "https://example.com/start");
+    let usage = server.call_tool("get_usage_report", json!({}))?;
+    assert_eq!(usage["actions_executed"], 1);
+
+    Ok(json!({
+        "status": response["status"],
+        "actions_executed": usage["actions_executed"]
+    }))
 }
 
 fn scenario_tool_flow_state_and_act() -> Result<Value> {
@@ -266,6 +286,12 @@ impl Default for MockBackend {
 }
 
 impl McpBackend for MockBackend {
+    fn navigate(&mut self, arguments: Value) -> Result<Value> {
+        Ok(
+            json!({"status": "ok", "requested_url": arguments["url"], "final_url": arguments["url"]}),
+        )
+    }
+
     fn get_state(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({
             "metadata": {

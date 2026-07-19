@@ -44,6 +44,8 @@ pub struct PolicyDecisionEntry {
     pub rule_id: String,
     pub action: String,
     pub decision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_fingerprint: Option<String>,
     pub timestamp: u64,
 }
 
@@ -159,12 +161,14 @@ pub fn replay_events(events: &[AuditEvent]) -> Result<ReplayReport, ReplayError>
                 rule_id,
                 action,
                 decision,
+                destination_fingerprint,
                 timestamp,
             } => {
                 policy_decisions.push(PolicyDecisionEntry {
                     rule_id: rule_id.clone(),
                     action: action.clone(),
                     decision: decision.clone(),
+                    destination_fingerprint: destination_fingerprint.clone(),
                     timestamp: *timestamp,
                 });
             }
@@ -252,14 +256,19 @@ pub fn report_to_markdown(report: &ReplayReport) -> String {
     if report.policy_decisions.is_empty() {
         out.push_str("_(no policy decisions)_\n");
     } else {
-        out.push_str("| Rule | Action | Decision | Timestamp (ms) |\n");
-        out.push_str("|------|--------|----------|----------------|\n");
+        out.push_str("| Rule | Action | Decision | Destination | Timestamp (ms) |\n");
+        out.push_str("|------|--------|----------|-------------|----------------|\n");
         for pd in &report.policy_decisions {
             out.push_str(&format!(
-                "| `{}` | {} | **{}** | {} |\n",
+                "| `{}` | {} | **{}** | {} | {} |\n",
                 escape_md(&pd.rule_id),
                 escape_md(&pd.action),
                 escape_md(&pd.decision),
+                pd.destination_fingerprint
+                    .as_deref()
+                    .map(escape_md)
+                    .map(|fingerprint| format!("`{fingerprint}`"))
+                    .unwrap_or_else(|| "—".to_string()),
                 pd.timestamp
             ));
         }
@@ -389,6 +398,7 @@ mod tests {
                 rule_id: "R-1".to_string(),
                 action: "redact".to_string(),
                 decision: "allow".to_string(),
+                destination_fingerprint: None,
                 timestamp: 3000,
             }],
             hitl_events: vec![],
@@ -400,5 +410,40 @@ mod tests {
         assert!(md.contains("SNAPSHOT"));
         assert!(md.contains("sha256:abc"));
         assert!(md.contains("R-1"));
+    }
+
+    #[test]
+    fn replay_carries_navigation_fingerprint_into_json_and_markdown_only() {
+        let fingerprint = format!("sha256:{}", "ab".repeat(32));
+        let events = [AuditEvent::PolicyDecision {
+            rule_id: "NAV-1".to_string(),
+            action: "navigate".to_string(),
+            decision: "allow".to_string(),
+            destination_fingerprint: Some(fingerprint.clone()),
+            timestamp: 4000,
+        }];
+        let report = replay_events(&events).unwrap();
+        assert_eq!(
+            report.policy_decisions[0]
+                .destination_fingerprint
+                .as_deref(),
+            Some(fingerprint.as_str())
+        );
+
+        let json = serde_json::to_string(&report).unwrap();
+        let markdown = report_to_markdown(&report);
+        for rendered in [&json, &markdown] {
+            assert!(rendered.contains(&fingerprint));
+            assert!(!rendered.contains("query-secret"));
+            assert!(!rendered.contains("fragment-secret"));
+            assert!(!rendered.contains("https://"));
+        }
+    }
+
+    #[test]
+    fn policy_decision_entry_deserializes_legacy_json_without_fingerprint() {
+        let legacy = r#"{"rule_id":"R-1","action":"click","decision":"allow","timestamp":1}"#;
+        let entry: PolicyDecisionEntry = serde_json::from_str(legacy).unwrap();
+        assert!(entry.destination_fingerprint.is_none());
     }
 }

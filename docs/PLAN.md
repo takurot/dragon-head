@@ -608,6 +608,13 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `core-runtime -> plugin-host` 依存を明記した。tool定義snapshotとdocs name-setの
 > 完全一致テストにより、tool追加・削除・改名時のdriftを必須CIで検出する。
 
+> **Follow-up (ISSUE-244, done)**: fresh MCP sessionをbootstrapするpolicy-aware `navigate`
+> toolを追加し、absolute HTTP(S) URL validation、default-deny private-network境界、requested URLと
+> top-level redirect hopのPolicy/HITL/plugin評価、audit URL sanitization、navigation後の
+> full/delta/speculative state resetを実装した。runtime、snapshot、README、AI context、
+> Architecture、SPECの9-tool contractを一致させ、fresh-process stdio E2Eとnegative contract
+> testsで固定した。
+
 > **Follow-up (ISSUE-211, done)**: `prompt_injection.additional_phrases` にJSON配列形式の
 > env overrideを追加し、件数・個別長・総量を制限した。runtimeが認識するconfig env名を
 > READMEと`--doctor`へ同期し、完全一致contract testと値非開示binary testでdriftを防ぐ。

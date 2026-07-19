@@ -51,12 +51,39 @@ fn test_policy_decision_serialization() {
         rule_id: "rule-123".to_string(),
         action: "click".to_string(),
         decision: "block".to_string(),
+        destination_fingerprint: None,
         timestamp: 12345,
     };
 
     let serialized = serde_json::to_string(&event).unwrap();
     assert!(serialized.contains(r#""type":"POLICY_DECISION""#));
     assert!(serialized.contains(r#""decision":"block""#));
+}
+
+#[test]
+fn navigation_policy_evidence_is_non_reversible_and_legacy_json_remains_compatible() {
+    let fingerprint = format!("sha256:{}", "ab".repeat(32));
+    let event = AuditEvent::PolicyDecision {
+        rule_id: "navigation-rule".to_string(),
+        action: "navigate".to_string(),
+        decision: "allow".to_string(),
+        destination_fingerprint: Some(fingerprint.clone()),
+        timestamp: 12346,
+    };
+    let serialized = serde_json::to_string(&event).unwrap();
+    assert!(serialized.contains(&fingerprint));
+    assert!(!serialized.contains("query-secret"));
+    assert!(!serialized.contains("fragment-secret"));
+
+    let legacy = r#"{"type":"POLICY_DECISION","rule_id":"r","action":"click","decision":"allow","timestamp":1}"#;
+    let decoded: AuditEvent = serde_json::from_str(legacy).unwrap();
+    assert!(matches!(
+        decoded,
+        AuditEvent::PolicyDecision {
+            destination_fingerprint: None,
+            ..
+        }
+    ));
 }
 
 #[test]

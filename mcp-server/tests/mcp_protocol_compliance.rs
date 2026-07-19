@@ -7,6 +7,15 @@ use std::{fs, path::Path};
 struct MockBackend;
 
 impl McpBackend for MockBackend {
+    fn navigate(&mut self, arguments: Value) -> Result<Value> {
+        let requested_url = arguments["url"].clone();
+        Ok(json!({
+            "status": "ok",
+            "requested_url": requested_url,
+            "final_url": "https://example.com/home"
+        }))
+    }
+
     fn get_state(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({"metadata": {"url": "https://example.com"}, "interactive_elements": []}))
     }
@@ -144,11 +153,35 @@ fn test_jsonrpc_tools_call_compliance() {
     assert_eq!(&fallback, structured);
 }
 
+#[test]
+fn navigate_jsonrpc_returns_structured_urls() {
+    let mut server = McpServer::new(MockBackend);
+    let response = call_tool_jsonrpc(
+        &mut server,
+        "navigate",
+        json!({"url": "https://example.com/start"}),
+    );
+
+    assert_eq!(response["result"]["structuredContent"]["status"], "ok");
+    assert_eq!(
+        response["result"]["structuredContent"]["requested_url"],
+        "https://example.com/start"
+    );
+    assert_eq!(
+        response["result"]["structuredContent"]["final_url"],
+        "https://example.com/home"
+    );
+}
+
 struct ErrorBackend {
     error_msg: &'static str,
 }
 
 impl McpBackend for ErrorBackend {
+    fn navigate(&mut self, _arguments: Value) -> Result<Value> {
+        Err(anyhow!("{}", self.error_msg))
+    }
+
     fn get_state(&mut self, _arguments: Value) -> Result<Value> {
         Err(anyhow!("{}", self.error_msg))
     }
@@ -247,6 +280,13 @@ struct CountingBackend {
 }
 
 impl McpBackend for CountingBackend {
+    fn navigate(&mut self, arguments: Value) -> Result<Value> {
+        self.calls += 1;
+        Ok(
+            json!({"status": "ok", "requested_url": arguments["url"], "final_url": arguments["url"]}),
+        )
+    }
+
     fn get_state(&mut self, _arguments: Value) -> Result<Value> {
         self.calls += 1;
         Ok(json!({"metadata": {}, "interactive_elements": []}))
@@ -299,6 +339,10 @@ fn call_tool_jsonrpc<B: McpBackend>(
 #[test]
 fn every_tool_rejects_unknown_fields_without_side_effects() {
     let cases = [
+        (
+            "navigate",
+            json!({"url": "https://example.com", "unexpected": true}),
+        ),
         ("get_state", json!({"unexpected": true})),
         ("act", json!({"action": "click", "unexpected": true})),
         (
@@ -334,6 +378,9 @@ fn every_tool_rejects_unknown_fields_without_side_effects() {
 #[test]
 fn malformed_enums_types_and_nested_fields_return_invalid_params() {
     let cases = [
+        ("navigate", json!({})),
+        ("navigate", json!({"url": ""})),
+        ("navigate", json!({"url": false})),
         ("get_state", json!({"format": "xml"})),
         ("get_state", json!({"delivery": "detla"})),
         ("get_state", json!({"force_refresh": "true"})),

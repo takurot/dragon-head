@@ -134,7 +134,8 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
 
     let summary = format!(
         "chrome_path={}, prompt_injection.mode={:?}, \
-         prompt_injection.additional_phrases={}, policy.file={}, supported_env=[{}]",
+         prompt_injection.additional_phrases={}, policy.file={}, \
+         navigation.allow_private_network={}, supported_env=[{}]",
         resolved.chrome_path.as_deref().unwrap_or("<unset>"),
         resolved.injection_mode,
         resolved.injection_additional_phrases.len(),
@@ -143,6 +144,7 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<unset>".to_string()),
+        resolved.navigation_allow_private_network,
         config::HONORED_CONFIG_ENV_VARS.join(","),
     );
 
@@ -161,7 +163,7 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
 }
 
 fn config_file_detail() -> (bool, String, bool) {
-    if let Err(err) = config::validate_unicode_additional_phrases_env() {
+    if let Err(err) = config::validate_unicode_config_env() {
         return (false, format!("environment — {err}"), false);
     }
     config_file_detail_with(|key| std::env::var(key).ok())
@@ -500,5 +502,25 @@ mod tests {
         assert!(passed, "detail: {detail}");
         assert!(detail.contains("prompt_injection.additional_phrases=1"));
         assert!(!detail.contains(secret));
+    }
+
+    #[test]
+    fn config_summary_reports_only_resolved_navigation_boolean() {
+        let secret = "true-with-secret-suffix";
+        let (passed, detail, informational) = config_file_detail_with(|key| {
+            (key == config::ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK).then(|| secret.to_string())
+        });
+
+        assert!(!passed);
+        assert!(!informational);
+        assert!(detail.contains(config::ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK));
+        assert!(!detail.contains(secret));
+
+        let (passed, detail, informational) = config_file_detail_with(|key| {
+            (key == config::ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK).then(|| "true".to_string())
+        });
+        assert!(passed, "detail: {detail}");
+        assert!(informational);
+        assert!(detail.contains("navigation.allow_private_network=true"));
     }
 }

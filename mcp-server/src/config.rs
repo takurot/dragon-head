@@ -16,6 +16,7 @@ pub const ENV_CHROME_PATH: &str = "CHROME_PATH";
 pub const ENV_PROMPT_INJECTION_MODE: &str = "PROMPT_INJECTION_MODE";
 pub const ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES: &str = "PROMPT_INJECTION_ADDITIONAL_PHRASES";
 pub const ENV_POLICY_FILE: &str = "POLICY_FILE";
+pub const ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK: &str = "NAVIGATION_ALLOW_PRIVATE_NETWORK";
 pub const ENV_AUDIT_LOG_DIR: &str = "AUDIT_LOG_DIR";
 pub const ENV_AUDIT_LOG_MAX_BYTES: &str = "AUDIT_LOG_MAX_BYTES";
 pub const ENV_AUDIT_DURABILITY: &str = "AUDIT_DURABILITY";
@@ -27,6 +28,7 @@ pub const HONORED_CONFIG_ENV_VARS: &[&str] = &[
     ENV_PROMPT_INJECTION_MODE,
     ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES,
     ENV_POLICY_FILE,
+    ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK,
     ENV_AUDIT_LOG_DIR,
     ENV_AUDIT_LOG_MAX_BYTES,
     ENV_AUDIT_DURABILITY,
@@ -46,6 +48,8 @@ pub struct FileConfig {
     #[serde(default)]
     pub policy: PolicyFileConfig,
     #[serde(default)]
+    pub navigation: NavigationFileConfig,
+    #[serde(default)]
     pub audit: AuditFileConfig,
 }
 
@@ -62,6 +66,13 @@ pub struct PromptInjectionFileConfig {
 pub struct PolicyFileConfig {
     /// Path to a JSON file of `PolicyRule`s, loaded via `PolicyEngine::try_from_file`.
     pub file: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct NavigationFileConfig {
+    /// Allows HTTP(S) navigation to non-global destinations for trusted local deployments.
+    #[serde(default)]
+    pub allow_private_network: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -95,6 +106,8 @@ pub enum ConfigError {
         "invalid {ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES} (expected a JSON array of strings)"
     )]
     InvalidAdditionalPhrasesFormat,
+    #[error("invalid {ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK} (expected exactly 'true' or 'false')")]
+    InvalidNavigationAllowPrivateNetwork,
     #[error("too many prompt-injection additional phrases (maximum {max})")]
     TooManyAdditionalPhrases { max: usize },
     #[error("prompt-injection additional phrase exceeds {max_bytes} UTF-8 bytes")]
@@ -110,6 +123,18 @@ pub fn validate_unicode_additional_phrases_env() -> Result<(), ConfigError> {
         Ok(_) | Err(std::env::VarError::NotPresent) => Ok(()),
         Err(std::env::VarError::NotUnicode(_)) => Err(ConfigError::NonUnicodeEnvVar {
             name: ENV_PROMPT_INJECTION_ADDITIONAL_PHRASES,
+        }),
+    }
+}
+
+/// Rejects non-Unicode values for configuration variables whose absence would
+/// otherwise silently select a less explicit value.
+pub fn validate_unicode_config_env() -> Result<(), ConfigError> {
+    validate_unicode_additional_phrases_env()?;
+    match std::env::var(ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK) {
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(ConfigError::NonUnicodeEnvVar {
+            name: ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK,
         }),
     }
 }
@@ -166,6 +191,7 @@ pub struct ResolvedConfig {
     pub audit_log_dir: Option<String>,
     pub audit_max_bytes: Option<u64>,
     pub audit_durability: Option<String>,
+    pub navigation_allow_private_network: bool,
 }
 
 /// Merges `file_config` (`None` means "no config file present, use defaults") with
@@ -175,6 +201,7 @@ pub struct ResolvedConfig {
 /// `prompt_injection.mode` (default `report_only`);
 /// `PROMPT_INJECTION_ADDITIONAL_PHRASES` > `prompt_injection.additional_phrases`;
 /// `POLICY_FILE` > `policy.file`;
+/// `NAVIGATION_ALLOW_PRIVATE_NETWORK` > `navigation.allow_private_network` (default `false`);
 /// `AUDIT_LOG_DIR`/`AUDIT_LOG_MAX_BYTES`/`AUDIT_DURABILITY` > `audit.*`.
 pub fn resolve_config(
     file_config: Option<&FileConfig>,
@@ -201,6 +228,11 @@ pub fn resolve_config(
     let policy_file = lookup(ENV_POLICY_FILE)
         .or_else(|| fc.policy.file.clone())
         .map(PathBuf::from);
+
+    let navigation_allow_private_network = match lookup(ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK) {
+        Some(raw) => parse_strict_bool(&raw)?,
+        None => fc.navigation.allow_private_network,
+    };
 
     let audit_log_dir = lookup(ENV_AUDIT_LOG_DIR).or_else(|| fc.audit.log_dir.clone());
 
@@ -233,7 +265,16 @@ pub fn resolve_config(
         audit_log_dir,
         audit_max_bytes,
         audit_durability,
+        navigation_allow_private_network,
     })
+}
+
+fn parse_strict_bool(value: &str) -> Result<bool, ConfigError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(ConfigError::InvalidNavigationAllowPrivateNetwork),
+    }
 }
 
 fn normalize_additional_phrases(phrases: Vec<String>) -> Result<Vec<String>, ConfigError> {
@@ -372,6 +413,7 @@ durability = "sync"
                 policy: PolicyFileConfig {
                     file: Some("/etc/dragon-head/policy.json".to_string()),
                 },
+                navigation: NavigationFileConfig::default(),
                 audit: AuditFileConfig {
                     log_dir: Some("/var/log/dragon-head".to_string()),
                     max_bytes: Some(1_048_576),
@@ -392,6 +434,7 @@ durability = "sync"
             PromptInjectionFileConfig::default()
         );
         assert_eq!(config.policy, PolicyFileConfig::default());
+        assert_eq!(config.navigation, NavigationFileConfig::default());
         assert_eq!(config.audit, AuditFileConfig::default());
     }
 
@@ -424,6 +467,15 @@ durability = "sync"
         assert!(matches!(err, ConfigError::Parse { .. }), "got: {err:?}");
     }
 
+    #[test]
+    fn load_config_file_parses_navigation_private_network_opt_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(&dir, "[navigation]\nallow_private_network = true");
+        let config = load_config_file(&path).unwrap().unwrap();
+
+        assert!(config.navigation.allow_private_network);
+    }
+
     // --- resolve_config ---
 
     #[test]
@@ -439,8 +491,55 @@ durability = "sync"
                 audit_log_dir: None,
                 audit_max_bytes: None,
                 audit_durability: None,
+                navigation_allow_private_network: false,
             }
         );
+    }
+
+    #[test]
+    fn resolve_config_uses_navigation_file_value() {
+        let fc = FileConfig {
+            navigation: NavigationFileConfig {
+                allow_private_network: true,
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolve_config(Some(&fc), no_env).unwrap();
+
+        assert!(resolved.navigation_allow_private_network);
+    }
+
+    #[test]
+    fn resolve_config_navigation_env_overrides_file_value() {
+        let fc = FileConfig {
+            navigation: NavigationFileConfig {
+                allow_private_network: true,
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolve_config(Some(&fc), |key| {
+            (key == ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK).then(|| "false".to_string())
+        })
+        .unwrap();
+
+        assert!(!resolved.navigation_allow_private_network);
+    }
+
+    #[test]
+    fn resolve_config_rejects_invalid_navigation_boolean_without_echoing_value() {
+        let secret = "true-secret-navigation-value";
+        let err = resolve_config(None, |key| {
+            (key == ENV_NAVIGATION_ALLOW_PRIVATE_NETWORK).then(|| secret.to_string())
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ConfigError::InvalidNavigationAllowPrivateNetwork
+        ));
+        assert!(!err.to_string().contains(secret));
     }
 
     #[test]
@@ -454,6 +553,7 @@ durability = "sync"
             policy: PolicyFileConfig {
                 file: Some("/etc/policy.json".to_string()),
             },
+            navigation: NavigationFileConfig::default(),
             audit: AuditFileConfig {
                 log_dir: Some("/var/log/dh".to_string()),
                 max_bytes: Some(2048),
@@ -487,6 +587,7 @@ durability = "sync"
             policy: PolicyFileConfig {
                 file: Some("/etc/policy.json".to_string()),
             },
+            navigation: NavigationFileConfig::default(),
             audit: AuditFileConfig {
                 log_dir: Some("/var/log/dh".to_string()),
                 max_bytes: Some(2048),

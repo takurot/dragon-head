@@ -15,6 +15,16 @@ const TOOL_SEMANTICS_END: &str = "<!-- mcp-tool-semantics:end -->";
 struct MockBackend;
 
 impl McpBackend for MockBackend {
+    fn navigate(&mut self, _arguments: Value) -> Result<Value> {
+        Ok(json!({
+            "ok": true,
+            "tool": "navigate",
+            "status": "ok",
+            "requested_url": "https://example.com/start",
+            "final_url": "https://example.com/home"
+        }))
+    }
+
     fn get_state(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({"ok": true, "tool": "get_state"}))
     }
@@ -227,6 +237,15 @@ impl SemanticMockBackend {
 }
 
 impl McpBackend for SemanticMockBackend {
+    fn navigate(&mut self, _arguments: Value) -> Result<Value> {
+        self.previous_state = None;
+        Ok(json!({
+            "status": "ok",
+            "requested_url": "https://example.com/start",
+            "final_url": "https://example.com/home"
+        }))
+    }
+
     fn get_state(&mut self, arguments: Value) -> Result<Value> {
         let is_delta = arguments.get("delivery").and_then(|v| v.as_str()) == Some("delta");
 
@@ -318,6 +337,26 @@ fn test_mcp_contract_exposes_required_tools() {
     assert!(names.contains(&"ask_human"));
     assert!(names.contains(&"run_skill"));
     assert!(names.contains(&"get_usage_report"));
+    assert!(names.contains(&"navigate"));
+    assert_eq!(
+        names.len(),
+        9,
+        "the public MCP contract must expose exactly nine tools"
+    );
+    let navigate = tools
+        .iter()
+        .find(|tool| tool.name == "navigate")
+        .expect("navigate tool must exist");
+    assert_eq!(navigate.input_schema["additionalProperties"], json!(false));
+    assert_eq!(navigate.input_schema["required"], json!(["url"]));
+    assert_eq!(
+        navigate.input_schema["properties"]["url"]["minLength"],
+        json!(1)
+    );
+    assert_eq!(
+        navigate.input_schema["properties"]["url"]["maxLength"],
+        json!(8192)
+    );
     assert_eq!(
         get_state.input_schema["properties"]["delivery"]["enum"],
         json!(["full", "delta"])
@@ -329,6 +368,7 @@ fn test_mcp_contract_all_tools_are_callable() {
     let mut server = McpServer::new(MockBackend);
 
     for (name, arguments) in [
+        ("navigate", json!({"url": "https://example.com/start"})),
         ("get_state", json!({})),
         ("act", json!({"action": "click"})),
         (
@@ -462,6 +502,26 @@ fn test_delta_first_call_returns_full_state_with_hint() -> Result<()> {
         "first delta call must include state object"
     );
 
+    Ok(())
+}
+
+#[test]
+fn successful_navigation_forces_next_delta_to_full_baseline() -> Result<()> {
+    let backend = SemanticMockBackend::with_states(vec![
+        make_full_state("https://example.com/before"),
+        make_full_state("https://example.com/after"),
+    ]);
+    let mut server = McpServer::new(backend);
+
+    server.call_tool("get_state", json!({"delivery": "delta"}))?;
+    server.call_tool("navigate", json!({"url": "https://example.com/start"}))?;
+    let after = server.call_tool("get_state", json!({"delivery": "delta"}))?;
+
+    assert_eq!(after["type"], "full");
+    assert_eq!(
+        after["state"]["metadata"]["url"],
+        "https://example.com/after"
+    );
     Ok(())
 }
 
@@ -657,6 +717,12 @@ struct SecurityFlagsMockBackend {
 }
 
 impl McpBackend for SecurityFlagsMockBackend {
+    fn navigate(&mut self, arguments: Value) -> Result<Value> {
+        Ok(
+            json!({"status": "ok", "requested_url": arguments["url"], "final_url": arguments["url"]}),
+        )
+    }
+
     fn get_state(&mut self, _arguments: Value) -> Result<Value> {
         let mut element = json!({
             "id": 1,
