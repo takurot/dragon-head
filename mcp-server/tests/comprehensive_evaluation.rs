@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use core_runtime::{ApprovalScope, BrowserClient, PolicyAction, PolicyRule};
 use mcp_server::{AuditRetentionSnapshot, CoreRuntimeBackend, McpBackend, McpServer, PlanTier};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use test_bench_support::{EvaluationBench, EvaluationMode};
 
 #[test]
@@ -38,6 +40,11 @@ fn test_mcp_server_comprehensive_evaluation_suite() -> Result<()> {
         "navigation",
         scenario_navigate_contract_and_metering,
     );
+    bench.run_scenario(
+        "visual_image_content_contract",
+        "visual",
+        scenario_visual_image_content_contract,
+    );
 
     bench.write_if_configured()?;
     bench.assert_required_scenarios(&[
@@ -46,10 +53,45 @@ fn test_mcp_server_comprehensive_evaluation_suite() -> Result<()> {
         "usage_report_plan_gating",
         "delta_delivery_full_seeds_baseline",
         "navigate_contract_and_metering",
+        "visual_image_content_contract",
     ])?;
     bench.assert_all_passed()?;
 
     Ok(())
+}
+
+fn scenario_visual_image_content_contract() -> Result<Value> {
+    let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5dM2QAAAAASUVORK5CYII=")?;
+    let mut server = McpServer::new(MockBackend {
+        visual_image: Some(png.clone()),
+        ..Default::default()
+    });
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "get_visual", "arguments": {"mode": "som"}}
+    });
+    let response: Value = serde_json::from_str(
+        &server
+            .handle_jsonrpc(&request.to_string())
+            .context("get_visual response")?,
+    )?;
+    let content = response["result"]["content"]
+        .as_array()
+        .context("content array")?;
+    let decoded = STANDARD.decode(content[1]["data"].as_str().context("image data")?)?;
+    assert_eq!(decoded, png);
+    assert_eq!(content[1]["mimeType"], "image/png");
+    assert_eq!(
+        response["result"]["structuredContent"]["image_sha256"],
+        hex::encode(Sha256::digest(&decoded))
+    );
+
+    Ok(json!({
+        "content_blocks": content.len(),
+        "mime_type": content[1]["mimeType"]
+    }))
 }
 
 fn scenario_navigate_contract_and_metering() -> Result<Value> {
@@ -243,6 +285,7 @@ fn scenario_usage_report_plan_gating() -> Result<Value> {
                 json!({"status": "ok"}),
             ],
             act_call_count: 0,
+            visual_image: None,
         },
         PlanTier::Enterprise,
     );
@@ -273,6 +316,7 @@ struct MockBackend {
     audit_snapshot: Option<AuditRetentionSnapshot>,
     act_responses: Vec<Value>,
     act_call_count: usize,
+    visual_image: Option<Vec<u8>>,
 }
 
 impl Default for MockBackend {
@@ -281,6 +325,7 @@ impl Default for MockBackend {
             audit_snapshot: None,
             act_responses: vec![json!({"status": "ok"})],
             act_call_count: 0,
+            visual_image: None,
         }
     }
 }
@@ -321,7 +366,12 @@ impl McpBackend for MockBackend {
     }
 
     fn get_visual(&mut self, _arguments: Value) -> Result<Value> {
-        Ok(json!({"image_sha256": "abc"}))
+        let image_sha256 = self
+            .visual_image
+            .as_deref()
+            .map(|image| hex::encode(Sha256::digest(image)))
+            .unwrap_or_else(|| "abc".to_string());
+        Ok(json!({"image_sha256": image_sha256}))
     }
 
     fn ask_human(&mut self, _arguments: Value) -> Result<Value> {
@@ -334,6 +384,10 @@ impl McpBackend for MockBackend {
 
     fn extract(&mut self, _arguments: Value) -> Result<Value> {
         Ok(json!({"rule": "mock", "result": null}))
+    }
+
+    fn take_visual_image(&mut self) -> Option<Vec<u8>> {
+        self.visual_image.take()
     }
 
     fn audit_retention_snapshot(&self) -> Option<AuditRetentionSnapshot> {

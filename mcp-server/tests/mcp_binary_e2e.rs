@@ -1,5 +1,7 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use mcp_server::{McpBackend, McpServer};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
@@ -795,6 +797,126 @@ fn test_mcp_binary_fresh_session_navigate_returns_full_delta_baseline() -> anyho
     assert!(status.success(), "dragon-head-mcp exited with {status}");
     let stderr = stderr_reader.join().expect("stderr reader panicked");
     assert!(!stderr.contains("#ignored"));
+    fixture.join().expect("fixture thread panicked")?;
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Chrome; starts a real browser process"]
+fn test_mcp_binary_get_visual_returns_png_for_clean_and_som() -> anyhow::Result<()> {
+    if should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let fixture = thread::spawn(move || -> anyhow::Result<()> {
+        let (mut stream, _) = listener.accept()?;
+        let mut request = [0_u8; 2048];
+        let _ = stream.read(&mut request)?;
+        let body = "<html><body><button id='ready'>Ready</button></body></html>";
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )?;
+        stream.flush()?;
+        Ok(())
+    });
+
+    let bin_path = build_binary_once()?;
+    let config_home = tempfile::tempdir()?;
+    let mut child = Command::new(&bin_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .env("NAVIGATION_ALLOW_PRIVATE_NETWORK", "true")
+        .env_remove("POLICY_FILE")
+        .spawn()?;
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut stderr = child.stderr.take().expect("stderr");
+    let stderr_reader = thread::spawn(move || {
+        let mut output = String::new();
+        let _ = stderr.read_to_string(&mut output);
+        output
+    });
+    let mut reader = BufReader::new(stdout);
+    mcp_handshake(&mut stdin, &mut reader)?;
+
+    writeln!(
+        stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "navigate",
+                "arguments": {"url": format!("http://{address}/visual")}
+            }
+        })
+    )?;
+    stdin.flush()?;
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let navigate: Value = serde_json::from_str(&line)?;
+    assert_eq!(navigate["result"]["structuredContent"]["status"], "ok");
+
+    for (id, mode) in [(3, "clean"), (4, "som")] {
+        writeln!(
+            stdin,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": "get_visual", "arguments": {"mode": mode}}
+            })
+        )?;
+        stdin.flush()?;
+
+        line.clear();
+        reader.read_line(&mut line)?;
+        let response: Value = serde_json::from_str(&line)?;
+        let result = &response["result"];
+        let content = result["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["mimeType"], "image/png");
+
+        let encoded = content[1]["data"].as_str().expect("base64 PNG");
+        let png = STANDARD.decode(encoded)?;
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(
+            result["structuredContent"]["image_sha256"],
+            hex::encode(Sha256::digest(&png))
+        );
+        let fallback: Value = serde_json::from_str(content[0]["text"].as_str().unwrap())?;
+        assert_eq!(fallback, result["structuredContent"]);
+        assert!(!content[0]["text"].as_str().unwrap().contains(encoded));
+
+        let marks = result["structuredContent"]["marks"]
+            .as_array()
+            .expect("marks array");
+        if mode == "clean" {
+            assert!(marks.is_empty());
+        } else {
+            assert!(
+                !marks.is_empty(),
+                "SoM capture should mark the fixture button"
+            );
+        }
+    }
+
+    drop(stdin);
+    let status = child.wait()?;
+    assert!(status.success(), "dragon-head-mcp exited with {status}");
+    let stderr = stderr_reader.join().expect("stderr reader panicked");
+    assert!(!stderr.contains("iVBOR"), "base64 image leaked to stderr");
     fixture.join().expect("fixture thread panicked")?;
     Ok(())
 }
