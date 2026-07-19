@@ -76,7 +76,10 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
   - AIが `get_visual()` を明示的に要求した時。
   - `act()` が ambiguous エラーを返した時。
   - `verify()` が失敗した時。
-- **Output**: 画像データに加え、`marks` メタデータ（ID, BBox, Stable Keyの対応表）を返す。
+- **Output**: MCP `content` に `image/png` の image block として画像データを返し、
+  `structuredContent` と text fallback には `image_sha256`、mode、viewport、
+  `marks` メタデータ（ID, BBox, Stable Keyの対応表）を返す。画像データは metadata
+  へ重複させず、`image_sha256` は image block を base64 decode した元の PNG bytes と一致する。
 
 ### 3.3 Interaction & Latency Optimization
 

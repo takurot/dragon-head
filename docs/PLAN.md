@@ -499,6 +499,12 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > PR 必須 CI に追加する。stdout が JSON-RPC 応答だけで構成されることと、stdin 終了後の
 > 正常 shutdown を検証し、起動・framing・stdio loop の回帰を merge 前に検出する。
 
+> **Follow-up (ISSUE-246, done)**: `get_visual` の PNG を MCP 標準の
+> `image` content block (`mimeType: image/png`) で返し、text fallback と
+> `structuredContent` には hash/marks metadata のみを保持する。raw PNG のサイズ上限、
+> SHA-256 整合、clean/SoM 両 mode、stdio framing を protocol test・実バイナリ E2E・
+> comprehensive evaluation で固定する。
+
 ### PR-15: NFR Benchmark & Capacity Validation
 - Status: `DONE` (Local)
 - Spec Ref: Section 6

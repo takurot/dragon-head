@@ -5,6 +5,7 @@ pub mod metering;
 pub(crate) mod protocol;
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use core_runtime::{
     speculative::{ActionSignature, SpeculativeEngine, SpeculativePrediction, StateDelta},
     sre::{LoadProfile, SemanticNode},
@@ -32,6 +33,9 @@ use std::{
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
+
+const MAX_VISUAL_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 
 // Re-export public types at the crate level to preserve the existing public API.
 pub use dto::{ExternalInteractiveElement, ExternalSemanticState, StateMetadata};
@@ -114,6 +118,11 @@ pub trait McpBackend {
     fn ask_human(&mut self, arguments: Value) -> Result<Value>;
     fn run_skill(&mut self, arguments: Value) -> Result<Value>;
     fn extract(&mut self, arguments: Value) -> Result<Value>;
+    /// Consume image bytes produced by the most recent successful `get_visual` call.
+    /// Backends without binary visual output retain the metadata-only behavior.
+    fn take_visual_image(&mut self) -> Option<Vec<u8>> {
+        None
+    }
     fn audit_retention_snapshot(&self) -> Option<AuditRetentionSnapshot> {
         None
     }
@@ -157,6 +166,41 @@ pub struct McpServer<B> {
     backend: B,
     plan_tier: PlanTier,
     usage_meters: UsageMeters,
+}
+
+struct ToolCallOutput {
+    structured_content: Value,
+    visual_image: Option<Vec<u8>>,
+}
+
+fn validate_visual_image(image: &[u8], max_bytes: usize) -> Result<()> {
+    if image.len() > max_bytes {
+        anyhow::bail!(
+            "get_visual image exceeds maximum size of {max_bytes} bytes (received {} bytes)",
+            image.len()
+        );
+    }
+    if !image.starts_with(PNG_SIGNATURE) {
+        anyhow::bail!("get_visual capture is not a valid PNG image");
+    }
+    Ok(())
+}
+
+fn image_content_block(image: &[u8], structured_content: &Value) -> Result<Value> {
+    validate_visual_image(image, MAX_VISUAL_IMAGE_BYTES)?;
+    let reported_hash = structured_content
+        .get("image_sha256")
+        .and_then(Value::as_str)
+        .context("get_visual metadata is missing image_sha256")?;
+    let actual_hash = hex::encode(Sha256::digest(image));
+    if reported_hash != actual_hash {
+        anyhow::bail!("get_visual image_sha256 does not match captured image bytes");
+    }
+    Ok(json!({
+        "type": "image",
+        "data": BASE64_STANDARD.encode(image),
+        "mimeType": "image/png"
+    }))
 }
 
 impl<B: McpBackend> McpServer<B> {
@@ -223,17 +267,27 @@ impl<B: McpBackend> McpServer<B> {
     }
 
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
+        Ok(self.call_tool_output(name, arguments)?.structured_content)
+    }
+
+    fn call_tool_output(&mut self, name: &str, arguments: Value) -> Result<ToolCallOutput> {
         if !is_known_tool(name) {
             anyhow::bail!("unknown MCP tool: {name}");
         }
         validate_tool_arguments(name, &arguments)?;
 
         if name == "get_usage_report" {
-            return self.get_usage_report_payload();
+            return Ok(ToolCallOutput {
+                structured_content: self.get_usage_report_payload()?,
+                visual_image: None,
+            });
         }
 
         if let Some(payload) = self.check_plan_gate(name, &arguments) {
-            return Ok(payload);
+            return Ok(ToolCallOutput {
+                structured_content: payload,
+                visual_image: None,
+            });
         }
 
         let speculative_hits_before = self.backend.speculative_usage().0;
@@ -266,10 +320,18 @@ impl<B: McpBackend> McpServer<B> {
         if !payload.is_object() {
             anyhow::bail!("MCP structuredContent must be a JSON object");
         }
+        let visual_image = if name == "get_visual" {
+            self.backend.take_visual_image()
+        } else {
+            None
+        };
         let speculative_hit = self.backend.speculative_usage().0 > speculative_hits_before;
         self.record_usage(name, &arguments, &payload, speculative_hit);
 
-        Ok(payload)
+        Ok(ToolCallOutput {
+            structured_content: payload,
+            visual_image,
+        })
     }
 
     pub fn handle_jsonrpc(&mut self, request: &str) -> Option<String> {
@@ -338,17 +400,24 @@ impl<B: McpBackend> McpServer<B> {
                             .cloned()
                             .unwrap_or_else(|| json!({}));
 
-                        self.call_tool(name, arguments)
-                            .map(|payload| {
-                                let text = serde_json::to_string(&payload)
+                        self.call_tool_output(name, arguments)
+                            .and_then(|output| {
+                                let text = serde_json::to_string(&output.structured_content)
                                     .expect("serializing a serde_json::Value cannot fail");
-                                json!({
-                                    "content": [{
-                                        "type": "text",
-                                        "text": text
-                                    }],
-                                    "structuredContent": payload
-                                })
+                                let mut content = vec![json!({
+                                    "type": "text",
+                                    "text": text
+                                })];
+                                if let Some(image) = output.visual_image {
+                                    content.push(image_content_block(
+                                        &image,
+                                        &output.structured_content,
+                                    )?);
+                                }
+                                Ok(json!({
+                                    "content": content,
+                                    "structuredContent": output.structured_content
+                                }))
                             })
                             .map_err(|err| {
                                 if err.downcast_ref::<InvalidToolArguments>().is_some() {
@@ -815,6 +884,7 @@ pub struct CoreRuntimeBackend {
     skill_engine: SkillEngine,
     skills: HashMap<String, SkillDefinition>,
     last_skill_delta: SkillUsageDelta,
+    pending_visual_image: Option<Vec<u8>>,
     schema_registry: SchemaRegistry,
     /// Prompt-injection sanitizer applied before any SemanticState is exposed to the LLM.
     injection_sanitizer: PromptInjectionSanitizer,
@@ -888,6 +958,7 @@ impl CoreRuntimeBackend {
             skill_engine: SkillEngine::new(),
             skills: HashMap::new(),
             last_skill_delta: SkillUsageDelta::default(),
+            pending_visual_image: None,
             schema_registry: SchemaRegistry::new(),
             injection_sanitizer: PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
                 mode: PromptInjectionMode::ReportOnly,
@@ -1513,6 +1584,7 @@ impl McpBackend for CoreRuntimeBackend {
     }
 
     fn get_visual(&mut self, arguments: Value) -> Result<Value> {
+        self.pending_visual_image = None;
         let args: GetVisualArguments =
             serde_json::from_value(arguments).context("invalid get_visual arguments")?;
         let capture = self.page.get_visual()?;
@@ -1536,6 +1608,8 @@ impl McpBackend for CoreRuntimeBackend {
                 })
                 .collect::<Vec<_>>()
         };
+
+        self.pending_visual_image = Some(capture.image_png);
 
         Ok(json!({
             "mode": args.mode,
@@ -1684,6 +1758,10 @@ impl McpBackend for CoreRuntimeBackend {
 
     fn take_skill_usage_delta(&mut self) -> SkillUsageDelta {
         std::mem::take(&mut self.last_skill_delta)
+    }
+
+    fn take_visual_image(&mut self) -> Option<Vec<u8>> {
+        self.pending_visual_image.take()
     }
 
     fn handle_browser_disconnect(&mut self) -> std::result::Result<u64, String> {
@@ -2477,6 +2555,27 @@ mod tests {
     use crate::protocol::LATEST_PROTOCOL_VERSION;
     use core_runtime::sre::SemanticNode;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn visual_image_size_limit_accepts_exact_boundary_and_rejects_next_byte() {
+        let exact = PNG_SIGNATURE.to_vec();
+        assert!(validate_visual_image(&exact, exact.len()).is_ok());
+
+        let mut over = exact.clone();
+        over.push(0);
+        let err = validate_visual_image(&over, exact.len()).unwrap_err();
+        assert!(err.to_string().contains("exceeds maximum size"));
+        assert!(!err.to_string().contains("PNG"));
+    }
+
+    #[test]
+    fn visual_image_validation_rejects_non_png_bytes() {
+        let err = validate_visual_image(b"not a png", 1024).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "get_visual capture is not a valid PNG image"
+        );
+    }
 
     fn make_node(id: i64, children: Vec<SemanticNode>) -> SemanticNode {
         SemanticNode {

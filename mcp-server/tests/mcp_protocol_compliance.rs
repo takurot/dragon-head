@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use mcp_server::{McpBackend, McpServer, PlanTier};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
 #[derive(Default)]
@@ -151,6 +153,136 @@ fn test_jsonrpc_tools_call_compliance() {
     )
     .expect("text fallback must contain serialized JSON");
     assert_eq!(&fallback, structured);
+}
+
+struct VisualImageBackend {
+    image: Option<Vec<u8>>,
+    reported_hash: Option<String>,
+}
+
+impl McpBackend for VisualImageBackend {
+    fn navigate(&mut self, _arguments: Value) -> Result<Value> {
+        unreachable!()
+    }
+    fn get_state(&mut self, _arguments: Value) -> Result<Value> {
+        unreachable!()
+    }
+    fn act(&mut self, _arguments: Value) -> Result<Value> {
+        unreachable!()
+    }
+    fn verify(&mut self, _arguments: Value) -> Result<Value> {
+        unreachable!()
+    }
+    fn get_visual(&mut self, arguments: Value) -> Result<Value> {
+        let image = self.image.as_ref().expect("fixture image");
+        let image_sha256 = self
+            .reported_hash
+            .clone()
+            .unwrap_or_else(|| hex::encode(Sha256::digest(image)));
+        Ok(json!({
+            "mode": arguments.get("mode").and_then(Value::as_str).unwrap_or("som"),
+            "viewport": "full",
+            "image_sha256": image_sha256,
+            "marks": [{"id": 7, "stable_key": "abc123", "bbox": [1, 2, 3, 4]}]
+        }))
+    }
+    fn ask_human(&mut self, _arguments: Value) -> Result<Value> {
+        unreachable!()
+    }
+    fn run_skill(&mut self, _arguments: Value) -> Result<Value> {
+        unreachable!()
+    }
+    fn extract(&mut self, _arguments: Value) -> Result<Value> {
+        unreachable!()
+    }
+    fn take_visual_image(&mut self) -> Option<Vec<u8>> {
+        self.image.take()
+    }
+}
+
+#[test]
+fn get_visual_returns_png_image_content_without_copying_it_into_metadata() {
+    let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5dM2QAAAAASUVORK5CYII=").unwrap();
+    let mut server = McpServer::new(VisualImageBackend {
+        image: Some(png.clone()),
+        reported_hash: None,
+    });
+
+    let response = call_tool_jsonrpc(&mut server, "get_visual", json!({"mode": "som"}));
+    let result = &response["result"];
+    let content = result["content"].as_array().expect("content array");
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["mimeType"], "image/png");
+
+    let encoded = content[1]["data"].as_str().expect("base64 image data");
+    assert!(!encoded.contains(['\r', '\n', ' ', '\t']));
+    assert_eq!(STANDARD.decode(encoded).expect("valid base64"), png);
+
+    let structured = &result["structuredContent"];
+    let fallback: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(&fallback, structured);
+    assert_eq!(
+        structured["image_sha256"],
+        hex::encode(Sha256::digest(&png))
+    );
+    assert!(!structured.to_string().contains(encoded));
+    assert!(!content[0]["text"].as_str().unwrap().contains(encoded));
+}
+
+#[test]
+fn get_visual_rejects_oversized_png_without_emitting_partial_content() {
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.resize(8 * 1024 * 1024 + 1, 0);
+    let mut server = McpServer::new(VisualImageBackend {
+        image: Some(png),
+        reported_hash: None,
+    });
+
+    let response = call_tool_jsonrpc(&mut server, "get_visual", json!({"mode": "som"}));
+    assert_eq!(response["error"]["code"], -32000);
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("exceeds maximum size"));
+    assert!(response.get("result").is_none());
+    assert!(response.to_string().len() < 1024);
+
+    let usage = server.call_tool("get_usage_report", json!({})).unwrap();
+    assert_eq!(usage["visual_captures"], 1);
+}
+
+#[test]
+fn direct_call_tool_keeps_oversized_visual_metadata_compatible() {
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.resize(8 * 1024 * 1024 + 1, 0);
+    let expected_hash = hex::encode(Sha256::digest(&png));
+    let mut server = McpServer::new(VisualImageBackend {
+        image: Some(png),
+        reported_hash: None,
+    });
+
+    let payload = server
+        .call_tool("get_visual", json!({"mode": "som"}))
+        .unwrap();
+    assert_eq!(payload["image_sha256"], expected_hash);
+}
+
+#[test]
+fn get_visual_rejects_image_bytes_that_do_not_match_reported_hash() {
+    let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5dM2QAAAAASUVORK5CYII=").unwrap();
+    let mut server = McpServer::new(VisualImageBackend {
+        image: Some(png),
+        reported_hash: Some("0".repeat(64)),
+    });
+
+    let response = call_tool_jsonrpc(&mut server, "get_visual", json!({"mode": "clean"}));
+    assert_eq!(response["error"]["code"], -32000);
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("image_sha256 does not match"));
 }
 
 #[test]

@@ -386,7 +386,7 @@ specific Chromium build.
 | `navigate` | Load an HTTP(S) URL through destination and redirect policy checks. |
 | `act` | Execute an interaction action. |
 | `verify` | Verify precondition text before acting. |
-| `get_visual` | Capture visual context with optional marks. |
+| `get_visual` | Capture PNG visual context as an MCP image block with hash and optional marks metadata. |
 | `ask_human` | Resolve a pending human-in-the-loop request. |
 | `run_skill` | Execute a declarative skill workflow. |
 | `get_usage_report` | Retrieve usage meters and plan tier summary. |
