@@ -22,6 +22,7 @@ enum Route {
     Html(&'static str),
     Redirect(&'static str),
     RedirectLocalhost(&'static str),
+    Refresh(&'static str),
 }
 
 struct TestHttpServer {
@@ -125,6 +126,10 @@ fn serve_request(
         Some(Route::RedirectLocalhost(path)) => write!(
             stream,
             "HTTP/1.1 302 Found\r\nLocation: http://localhost:{port}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )?,
+        Some(Route::Refresh(location)) => write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nRefresh: 0; url={location}\r\nContent-Type: text/html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         )?,
         None => write!(
             stream,
@@ -311,6 +316,40 @@ fn public_navigation_blocks_redirect_before_destination_request() -> anyhow::Res
     let error = page
         .navigate_public(&server.url("/start"), true)
         .expect_err("redirect policy must block destination");
+    assert!(matches!(
+        error.downcast_ref::<ActionError>(),
+        Some(ActionError::Blocked { .. })
+    ));
+    assert_eq!(server.request_count("/start"), 1);
+    assert_eq!(server.request_count("/blocked"), 0);
+    Ok(())
+}
+
+#[test]
+fn public_navigation_blocks_unchained_top_level_refresh_before_destination_request(
+) -> anyhow::Result<()> {
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let server = TestHttpServer::start(HashMap::from([
+        ("/start", Route::Refresh("/blocked")),
+        (
+            "/blocked",
+            Route::Html("<html><body>must not load</body></html>"),
+        ),
+    ]))?;
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+    page.set_policy_rules(vec![navigation_rule(
+        "block-unchained-refresh",
+        Some("/blocked"),
+        PolicyAction::Block,
+    )])?;
+
+    let error = page
+        .navigate_public(&server.url("/start"), true)
+        .expect_err("unchained top-level refresh must be policy checked");
     assert!(matches!(
         error.downcast_ref::<ActionError>(),
         Some(ActionError::Blocked { .. })

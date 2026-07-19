@@ -190,6 +190,7 @@ impl NavigationPolicyFailure {
 struct RedirectInterceptionState {
     main_frame_id: String,
     initial_url: String,
+    initial_request_seen: bool,
     original_url: String,
     network_policy: NavigationNetworkPolicy,
     request_chain: HashSet<String>,
@@ -558,6 +559,7 @@ impl PageSession {
         let interception_state = Arc::new(Mutex::new(RedirectInterceptionState {
             main_frame_id,
             initial_url: requested.canonical_url().to_string(),
+            initial_request_seen: false,
             original_url: requested.canonical_url().to_string(),
             network_policy,
             request_chain: HashSet::new(),
@@ -593,22 +595,25 @@ impl PageSession {
                 }
 
                 let request_id = event.params.request_id.clone();
-                let Some(parent_request_id) = event.params.redirected_request_id.as_ref() else {
+                if let Some(parent_request_id) = event.params.redirected_request_id.as_ref() {
+                    if !state.request_chain.contains(parent_request_id) {
+                        return RequestPausedDecision::Continue(None);
+                    }
+                } else {
                     let canonical = validate_public_navigation_url_with(
                         &event.params.request.url,
                         NavigationNetworkPolicy::AllowPrivate,
                         |_, _| Ok(Vec::new()),
                     );
-                    if canonical
-                        .as_ref()
-                        .is_ok_and(|candidate| candidate.canonical_url() == state.initial_url)
+                    if !state.initial_request_seen
+                        && canonical
+                            .as_ref()
+                            .is_ok_and(|candidate| candidate.canonical_url() == state.initial_url)
                     {
+                        state.initial_request_seen = true;
                         state.request_chain.insert(request_id);
+                        return RequestPausedDecision::Continue(None);
                     }
-                    return RequestPausedDecision::Continue(None);
-                };
-                if !state.request_chain.contains(parent_request_id) {
-                    return RequestPausedDecision::Continue(None);
                 }
 
                 let destination = match validate_public_navigation_url(

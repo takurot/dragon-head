@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::{mpsc, OnceLock};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use test_bench_support::should_skip_browser_tests;
@@ -196,20 +196,10 @@ fn mcp_handshake(
     Ok(())
 }
 
-/// Build the binary once per test-binary invocation to avoid redundant recompiles.
 fn build_binary_once() -> anyhow::Result<std::path::PathBuf> {
-    static BIN: OnceLock<std::path::PathBuf> = OnceLock::new();
-    if let Some(path) = BIN.get() {
-        return Ok(path.clone());
-    }
-    let build = escargot::CargoBuild::new()
-        .bin("dragon-head-mcp")
-        .package("mcp-server")
-        .current_release()
-        .run()?;
-    let path = build.path().to_owned();
-    let _ = BIN.set(path.clone());
-    Ok(path)
+    Ok(std::path::PathBuf::from(env!(
+        "CARGO_BIN_EXE_dragon-head-mcp"
+    )))
 }
 
 struct ChildGuard {
