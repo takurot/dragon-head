@@ -20,3 +20,9 @@
 **/tests/fixtures/**/*.webp filter=lfs diff=lfs merge=lfs -text
 **/tests/fixtures/**/*.gif filter=lfs diff=lfs merge=lfs -text
 **/tests/fixtures/**/*.bin filter=lfs diff=lfs merge=lfs -text
+
+# Exceptions: files matched by the LFS globs above but below the ~500 KB threshold.
+# Keeping these as plain git blobs avoids a permanent false-dirty `git status`/`git diff`
+# (the LFS clean filter would otherwise compare a smudged pointer against the raw blob).
+# See docs/testing.md 3.3 and ISSUE-251.
+core-runtime/tests/fixtures/som/som_visual_baseline.png -filter -diff -merge -text
