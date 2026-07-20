@@ -160,6 +160,6 @@
 | `target/**` | Build output | Do not commit |
 | `core-runtime/target/nfr-dashboard*.md` | Benchmark output | Do not commit |
 | `nfr-baseline/*.json` | Baseline data | Update only via script |
-| `core-runtime/tests/fixtures/som/som_visual_baseline.png` | Git LFS fixture | Do not mix into docs-only PRs |
+| `core-runtime/tests/fixtures/som/som_visual_baseline.png` | Binary fixture (plain git blob, below the ~500 KB LFS threshold — see `.gitattributes` exception) | Do not mix into docs-only PRs |
 | `.config/nextest.toml` | nextest profiles | `ci` does not inherit from `default` |
 | `deny.toml` | cargo-deny config | Add rationale for advisory exceptions |

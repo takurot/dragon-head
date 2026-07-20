@@ -19,6 +19,8 @@ jobs:
       run: cargo fmt --all -- --check
     - name: Run clippy
       run: cargo clippy --workspace -- -D warnings
+    - name: Verify LFS-tracked fixtures are real LFS pointers
+      run: scripts/check_lfs_fixtures.sh
 
   security-audit:
     runs-on: ubuntu-latest
