@@ -109,6 +109,10 @@ impl ExtractionRule {
                         "(() => {{ const el = document.querySelector({sel_json}); \
                          return el ? (el.innerText || el.textContent || '').trim() : null; }})()"
                     ),
+                    Some(attr) if is_dom_property(attr) => format!(
+                        "(() => {{ const el = document.querySelector({sel_json}); \
+                         return el ? el.{attr} : null; }})()"
+                    ),
                     Some(attr) => {
                         let attr_json =
                             serde_json::to_string(attr).unwrap_or_else(|_| "\"\"".to_string());
@@ -148,6 +152,13 @@ impl ExtractionRule {
             }
         }
     }
+}
+
+/// DOM properties that must be accessed via `.propName`, not `.getAttribute("propName")` —
+/// `getAttribute` only reads the HTML attribute string and returns null/stale values for
+/// these, since they reflect live JS-side element state.
+fn is_dom_property(attr: &str) -> bool {
+    matches!(attr, "textContent" | "innerText" | "value")
 }
 
 fn parse_fields_map(value: &Value) -> Result<HashMap<String, String>, ExtractionRuleError> {
@@ -410,6 +421,61 @@ mod tests {
         assert!(js.contains("querySelector(\".amt\")"));
         assert!(js.contains("\"price\""));
         assert!(js.contains("items.map"));
+    }
+
+    #[test]
+    fn single_rule_with_text_content_attribute_generates_property_access() {
+        let rule = ExtractionRule {
+            name: "heading".into(),
+            mode: ExtractionMode::Single {
+                selector: "h1".into(),
+                attribute: Some("textContent".into()),
+            },
+        };
+        let js = rule.to_js_script();
+        assert!(js.contains(".textContent"));
+        assert!(!js.contains("getAttribute"));
+    }
+
+    #[test]
+    fn single_rule_with_inner_text_attribute_generates_property_access() {
+        let rule = ExtractionRule {
+            name: "heading".into(),
+            mode: ExtractionMode::Single {
+                selector: "h1".into(),
+                attribute: Some("innerText".into()),
+            },
+        };
+        let js = rule.to_js_script();
+        assert!(js.contains(".innerText"));
+        assert!(!js.contains("getAttribute"));
+    }
+
+    #[test]
+    fn single_rule_with_value_attribute_generates_property_access() {
+        let rule = ExtractionRule {
+            name: "input_value".into(),
+            mode: ExtractionMode::Single {
+                selector: "input".into(),
+                attribute: Some("value".into()),
+            },
+        };
+        let js = rule.to_js_script();
+        assert!(js.contains(".value"));
+        assert!(!js.contains("getAttribute"));
+    }
+
+    #[test]
+    fn single_rule_with_href_attribute_still_uses_get_attribute() {
+        let rule = ExtractionRule {
+            name: "link".into(),
+            mode: ExtractionMode::Single {
+                selector: "a".into(),
+                attribute: Some("href".into()),
+            },
+        };
+        let js = rule.to_js_script();
+        assert!(js.contains("getAttribute(\"href\")"));
     }
 
     #[test]
