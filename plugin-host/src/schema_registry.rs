@@ -111,7 +111,7 @@ impl ExtractionRule {
                     ),
                     Some(attr) if is_dom_property(attr) => format!(
                         "(() => {{ const el = document.querySelector({sel_json}); \
-                         return el ? el.{attr} : null; }})()"
+                         return el ? (el.{attr} ?? null) : null; }})()"
                     ),
                     Some(attr) => {
                         let attr_json =
@@ -463,6 +463,21 @@ mod tests {
         let js = rule.to_js_script();
         assert!(js.contains(".value"));
         assert!(!js.contains("getAttribute"));
+    }
+
+    #[test]
+    fn single_rule_with_dom_property_coalesces_undefined_to_null() {
+        let rule = ExtractionRule {
+            name: "heading".into(),
+            mode: ExtractionMode::Single {
+                selector: "h1".into(),
+                attribute: Some("value".into()),
+            },
+        };
+        let js = rule.to_js_script();
+        // Elements without the requested property (e.g. `value` on a <div>) yield
+        // `undefined`, which is not valid JSON and breaks evaluate_script_json.
+        assert!(js.contains("el.value ?? null"));
     }
 
     #[test]
