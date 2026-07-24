@@ -3,7 +3,7 @@
 [![CI](https://github.com/takurot/dragon-head/actions/workflows/ci.yml/badge.svg)](https://github.com/takurot/dragon-head/actions/workflows/ci.yml)
 [![Nightly E2E](https://github.com/takurot/dragon-head/actions/workflows/e2e.yml/badge.svg)](https://github.com/takurot/dragon-head/actions/workflows/e2e.yml)
 
-**Last updated:** 2026-07-06
+**Last updated:** 2026-07-23
 
 Dragon Head is an AI-native headless browser runtime for LLM and VLM agents.
 It exposes a browser session as a structured **Semantic State** and provides an
