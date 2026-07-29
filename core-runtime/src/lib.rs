@@ -19,10 +19,11 @@ pub use sre::{
 };
 
 pub use browser::{
-    is_browser_disconnected, validate_public_navigation_url, validate_public_navigation_url_with,
-    ActionLogEntry, BrowserClient, NavigationNetworkPolicy, NavigationValidationError, PageSession,
-    SemanticTarget, SemanticWaitOptions, SemanticWaitState, SomMark, SomTrigger,
-    ValidatedNavigationUrl, VisualCapture, MAX_PUBLIC_NAVIGATION_URL_BYTES, STABLE_KEY_SHORT_LEN,
+    is_browser_disconnected, is_transport_error, validate_public_navigation_url,
+    validate_public_navigation_url_with, ActionLogEntry, BrowserClient, NavigationNetworkPolicy,
+    NavigationValidationError, PageSession, SemanticTarget, SemanticWaitOptions, SemanticWaitState,
+    SomMark, SomTrigger, ValidatedNavigationUrl, VisualCapture, MAX_PUBLIC_NAVIGATION_URL_BYTES,
+    STABLE_KEY_SHORT_LEN,
 };
 pub mod error;
 pub use audit_sink::DurabilityMode;

@@ -73,6 +73,15 @@ fn is_known_tool(name: &str) -> bool {
     )
 }
 
+/// Tools whose CDP call is safe to retry once on a transport-level error
+/// (ISSUE-260) because they are read-only / idempotent: re-issuing them
+/// cannot double-fire a state-changing action. `navigate`, `act`,
+/// `run_skill`, and `ask_human` are deliberately excluded -- a lost response
+/// after Chrome already executed the command must not be retried blindly.
+fn is_retry_safe_tool(name: &str) -> bool {
+    matches!(name, "get_state" | "verify" | "get_visual" | "extract")
+}
+
 fn validate_tool_arguments(name: &str, arguments: &Value) -> Result<()> {
     static VALIDATORS: OnceLock<HashMap<&'static str, jsonschema::Validator>> = OnceLock::new();
     let validators = VALIDATORS.get_or_init(|| {
@@ -148,6 +157,22 @@ pub trait McpBackend {
         0
     }
 
+    /// Best-effort probe of whether the underlying Chrome process is still
+    /// running (ISSUE-260). Returns `Some(true)`/`Some(false)` when the
+    /// backend can determine liveness (e.g. a managed `BrowserClient` with a
+    /// known PID); `None` when it cannot (e.g. no managed process, or the
+    /// platform lacks a liveness probe).
+    ///
+    /// [`McpServer::call_tool_output`] uses this to avoid tearing down the
+    /// whole session when a disconnect-shaped error turns out to be a
+    /// single-tab CDP hiccup rather than an actual Chrome crash. The default
+    /// implementation reports unknown, preserving the pre-existing
+    /// restart-on-any-disconnect-marker behavior for backends that don't
+    /// manage a browser process (e.g. tests).
+    fn is_chrome_process_alive(&self) -> Option<bool> {
+        None
+    }
+
     /// Cumulative `(hits, misses)` of the speculative state generation
     /// pipeline (Spec §3.5 / ISSUE-147). A hit is a `get_state` call served
     /// from a verified pre-generated snapshot; a miss is a `get_state` call
@@ -162,10 +187,22 @@ pub trait McpBackend {
     }
 }
 
+/// Maximum number of consecutive disconnect-shaped errors that will be
+/// swallowed (error propagated, no restart) while the Chrome process is
+/// confirmed alive (ISSUE-260), before escalating to a full restart anyway.
+/// Bounds the risk of a permanently wedged single-tab CDP session (e.g. a
+/// stale PID reused by an unrelated process, or a tab whose CDP session is
+/// truly and irrecoverably dead) never triggering recovery.
+const MAX_ALIVE_SKIPS_BEFORE_RESTART: u32 = 2;
+
 pub struct McpServer<B> {
     backend: B,
     plan_tier: PlanTier,
     usage_meters: UsageMeters,
+    /// Consecutive disconnect-shaped errors skipped (not restarted) because
+    /// the backend confirmed Chrome was still alive (ISSUE-260). Reset to 0
+    /// on any successful tool call.
+    consecutive_alive_skips: u32,
 }
 
 struct ToolCallOutput {
@@ -213,6 +250,7 @@ impl<B: McpBackend> McpServer<B> {
             backend,
             plan_tier,
             usage_meters: UsageMeters::default(),
+            consecutive_alive_skips: 0,
         }
     }
 
@@ -270,6 +308,23 @@ impl<B: McpBackend> McpServer<B> {
         Ok(self.call_tool_output(name, arguments)?.structured_content)
     }
 
+    /// Dispatches a single tool call to the backend. Extracted from
+    /// [`call_tool_output`](Self::call_tool_output) so the ISSUE-260
+    /// transport-error retry can invoke the same call twice.
+    fn dispatch_tool(&mut self, name: &str, arguments: &Value) -> Result<Value> {
+        match name {
+            "navigate" => self.backend.navigate(arguments.clone()),
+            "get_state" => self.backend.get_state(arguments.clone()),
+            "act" => self.backend.act(arguments.clone()),
+            "verify" => self.backend.verify(arguments.clone()),
+            "get_visual" => self.backend.get_visual(arguments.clone()),
+            "ask_human" => self.backend.ask_human(arguments.clone()),
+            "run_skill" => self.backend.run_skill(arguments.clone()),
+            "extract" => self.backend.extract(arguments.clone()),
+            _ => anyhow::bail!("unknown MCP tool: {name}"),
+        }
+    }
+
     fn call_tool_output(&mut self, name: &str, arguments: Value) -> Result<ToolCallOutput> {
         if !is_known_tool(name) {
             anyhow::bail!("unknown MCP tool: {name}");
@@ -292,28 +347,55 @@ impl<B: McpBackend> McpServer<B> {
 
         let speculative_hits_before = self.backend.speculative_usage().0;
 
-        let result = match name {
-            "navigate" => self.backend.navigate(arguments.clone()),
-            "get_state" => self.backend.get_state(arguments.clone()),
-            "act" => self.backend.act(arguments.clone()),
-            "verify" => self.backend.verify(arguments.clone()),
-            "get_visual" => self.backend.get_visual(arguments.clone()),
-            "ask_human" => self.backend.ask_human(arguments.clone()),
-            "run_skill" => self.backend.run_skill(arguments.clone()),
-            "extract" => self.backend.extract(arguments.clone()),
-            _ => anyhow::bail!("unknown MCP tool: {name}"),
-        };
+        let mut result = self.dispatch_tool(name, &arguments);
+
+        // ISSUE-260: transport-level errors (broken pipe / connection reset)
+        // can be a transient CDP websocket blip rather than an actual Chrome
+        // crash. Retry the call once before treating it as a disconnect --
+        // but only for read-only/idempotent tools. Retrying `act`,
+        // `navigate`, `run_skill`, or `ask_human` blindly risks double-firing
+        // a click/submit/navigation if the original CDP command actually
+        // reached Chrome and only the *response* was lost in transit.
+        if is_retry_safe_tool(name) {
+            if let Err(err) = &result {
+                if core_runtime::is_transport_error(err) {
+                    result = self.dispatch_tool(name, &arguments);
+                }
+            }
+        }
 
         let result = match result {
             Err(err) if core_runtime::is_browser_disconnected(&err) => {
-                match self.backend.handle_browser_disconnect() {
-                    Ok(restart_count) => {
-                        Err(SessionError::BrowserRestarted { restart_count }.into())
+                // ISSUE-260: a disconnect-shaped error doesn't necessarily
+                // mean the Chrome process died -- probe process liveness
+                // when the backend supports it, and skip the (destructive)
+                // full session restart if Chrome is confirmed still alive.
+                // Bounded by MAX_ALIVE_SKIPS_BEFORE_RESTART so a session
+                // whose CDP transport is genuinely and permanently broken
+                // (e.g. a stale PID reused by an unrelated process, or a tab
+                // that never recovers) still eventually restarts rather than
+                // silently failing forever.
+                if self.backend.is_chrome_process_alive() == Some(true)
+                    && self.consecutive_alive_skips < MAX_ALIVE_SKIPS_BEFORE_RESTART
+                {
+                    self.consecutive_alive_skips += 1;
+                    Err(err)
+                } else {
+                    self.consecutive_alive_skips = 0;
+                    match self.backend.handle_browser_disconnect() {
+                        Ok(restart_count) => {
+                            Err(SessionError::BrowserRestarted { restart_count }.into())
+                        }
+                        Err(reason) => Err(SessionError::BrowserRestartFailed { reason }.into()),
                     }
-                    Err(reason) => Err(SessionError::BrowserRestartFailed { reason }.into()),
                 }
             }
-            other => other,
+            other => {
+                if other.is_ok() {
+                    self.consecutive_alive_skips = 0;
+                }
+                other
+            }
         };
 
         let payload = result?;
@@ -1822,6 +1904,10 @@ impl McpBackend for CoreRuntimeBackend {
 
     fn browser_restart_count(&self) -> u64 {
         self.browser_restarts
+    }
+
+    fn is_chrome_process_alive(&self) -> Option<bool> {
+        self.client.as_ref()?.is_process_alive()
     }
 
     fn speculative_usage(&self) -> (u64, u64) {
@@ -3380,13 +3466,36 @@ mod tests {
 
     // --- browser disconnect/restart interception (ISSUE-149) ---
 
-    /// Backend whose `get_state` simulates a Chrome disconnect on the first
-    /// call (a `ConnectionClosed`-shaped error), and whose
-    /// `handle_browser_disconnect` returns a configurable outcome.
+    /// Backend whose `get_state` pops successive results off
+    /// `get_state_responses` (allowing tests to simulate a disconnect, a
+    /// transient transport blip that clears up, or one that persists across
+    /// a retry), and whose `handle_browser_disconnect` / process-liveness
+    /// probe return configurable outcomes (ISSUE-149 / ISSUE-260).
     struct RestartMockBackend {
-        fail_get_state_with_disconnect: bool,
+        get_state_responses: std::collections::VecDeque<anyhow::Result<Value>>,
         disconnect_outcome: std::result::Result<u64, String>,
         browser_restarts: u64,
+        /// Mirrors [`McpBackend::is_chrome_process_alive`]'s contract.
+        chrome_alive: Option<bool>,
+        /// If set, the *next* `act` call returns this error message once
+        /// (then clears back to `None`), and subsequent calls succeed. Used
+        /// to verify ISSUE-260's transport-error retry is NOT applied to
+        /// non-idempotent tools like `act`.
+        act_error_once: Option<String>,
+        act_call_count: u32,
+    }
+
+    impl Default for RestartMockBackend {
+        fn default() -> Self {
+            Self {
+                get_state_responses: std::collections::VecDeque::new(),
+                disconnect_outcome: Ok(0),
+                browser_restarts: 0,
+                chrome_alive: None,
+                act_error_once: None,
+                act_call_count: 0,
+            }
+        }
     }
 
     impl McpBackend for RestartMockBackend {
@@ -3397,13 +3506,15 @@ mod tests {
         }
 
         fn get_state(&mut self, _: Value) -> anyhow::Result<Value> {
-            if self.fail_get_state_with_disconnect {
-                self.fail_get_state_with_disconnect = false;
-                return Err(anyhow::anyhow!("connection is closed"));
-            }
-            Ok(json!({}))
+            self.get_state_responses
+                .pop_front()
+                .unwrap_or_else(|| Ok(json!({})))
         }
         fn act(&mut self, _: Value) -> anyhow::Result<Value> {
+            self.act_call_count += 1;
+            if let Some(message) = self.act_error_once.take() {
+                return Err(anyhow::anyhow!(message));
+            }
             Ok(json!({}))
         }
         fn verify(&mut self, _: Value) -> anyhow::Result<Value> {
@@ -3435,14 +3546,22 @@ mod tests {
         fn browser_restart_count(&self) -> u64 {
             self.browser_restarts
         }
+
+        fn is_chrome_process_alive(&self) -> Option<bool> {
+            self.chrome_alive
+        }
     }
 
     #[test]
     fn call_tool_intercepts_disconnect_and_reports_restart() {
         let mut server = McpServer::new(RestartMockBackend {
-            fail_get_state_with_disconnect: true,
+            get_state_responses: std::collections::VecDeque::from([Err(anyhow::anyhow!(
+                "connection is closed"
+            ))]),
             disconnect_outcome: Ok(1),
             browser_restarts: 0,
+            chrome_alive: None,
+            ..Default::default()
         });
 
         let err = server
@@ -3456,12 +3575,126 @@ mod tests {
         );
     }
 
+    // ISSUE-260: a transient transport-level error (broken pipe) that
+    // clears up on retry must not tear down the session.
+    #[test]
+    fn call_tool_retries_transport_error_without_restart() {
+        let mut server = McpServer::new(RestartMockBackend {
+            get_state_responses: std::collections::VecDeque::from([
+                Err(anyhow::anyhow!("broken pipe")),
+                Ok(json!({"ok": true})),
+            ]),
+            disconnect_outcome: Ok(1),
+            browser_restarts: 0,
+            chrome_alive: None,
+            ..Default::default()
+        });
+
+        let payload = server
+            .call_tool("get_state", json!({}))
+            .expect("retry should recover without a restart");
+        assert_eq!(payload["ok"], true);
+
+        let usage = server
+            .call_tool("get_usage_report", json!({}))
+            .expect("usage report should succeed");
+        assert_eq!(
+            usage["browser_restarts"], 0,
+            "a transport blip that clears on retry must not trigger a restart"
+        );
+    }
+
+    // ISSUE-260: if the transport error recurs even after the retry, it
+    // should still escalate to a full restart (recovery path, not a hang).
+    #[test]
+    fn call_tool_escalates_to_restart_when_transport_error_persists_after_retry() {
+        let mut server = McpServer::new(RestartMockBackend {
+            get_state_responses: std::collections::VecDeque::from([
+                Err(anyhow::anyhow!("broken pipe")),
+                Err(anyhow::anyhow!("broken pipe")),
+            ]),
+            disconnect_outcome: Ok(1),
+            browser_restarts: 0,
+            chrome_alive: None,
+            ..Default::default()
+        });
+
+        let err = server
+            .call_tool("get_state", json!({}))
+            .expect_err("persisting transport error should surface as an error");
+        let message = err.to_string();
+        assert!(message.contains("restart #1"), "message: {message}");
+    }
+
+    // ISSUE-260: a disconnect-shaped error must not tear down the session
+    // when the Chrome process is confirmed still alive.
+    #[test]
+    fn call_tool_skips_restart_when_chrome_process_confirmed_alive() {
+        let mut server = McpServer::new(RestartMockBackend {
+            get_state_responses: std::collections::VecDeque::from([Err(anyhow::anyhow!(
+                "connection is closed"
+            ))]),
+            disconnect_outcome: Ok(1),
+            browser_restarts: 0,
+            chrome_alive: Some(true),
+            ..Default::default()
+        });
+
+        let err = server
+            .call_tool("get_state", json!({}))
+            .expect_err("disconnect-shaped error should still surface");
+        assert_eq!(err.to_string(), "connection is closed");
+
+        let usage = server
+            .call_tool("get_usage_report", json!({}))
+            .expect("usage report should succeed");
+        assert_eq!(
+            usage["browser_restarts"], 0,
+            "confirmed-alive Chrome process must not be restarted"
+        );
+    }
+
+    // ISSUE-260: even when Chrome is confirmed alive, a disconnect-shaped
+    // error that keeps recurring must eventually force a restart -- the
+    // alive-check must not permanently wedge a genuinely broken session
+    // (e.g. a stale/reused PID, or a tab whose CDP transport never heals).
+    #[test]
+    fn call_tool_forces_restart_after_max_consecutive_alive_skips() {
+        let mut server = McpServer::new(RestartMockBackend {
+            get_state_responses: std::collections::VecDeque::from([
+                Err(anyhow::anyhow!("connection is closed")),
+                Err(anyhow::anyhow!("connection is closed")),
+                Err(anyhow::anyhow!("connection is closed")),
+            ]),
+            disconnect_outcome: Ok(1),
+            browser_restarts: 0,
+            chrome_alive: Some(true),
+            ..Default::default()
+        });
+
+        for _ in 0..MAX_ALIVE_SKIPS_BEFORE_RESTART {
+            let err = server
+                .call_tool("get_state", json!({}))
+                .expect_err("disconnect-shaped error should surface while skipped");
+            assert_eq!(err.to_string(), "connection is closed");
+        }
+
+        let err = server
+            .call_tool("get_state", json!({}))
+            .expect_err("persisting disconnect should eventually force a restart");
+        assert!(err.to_string().contains("restart #1"), "message: {err}");
+    }
+
     #[test]
     fn call_tool_reports_restart_failure_when_relaunch_fails() {
         let mut server = McpServer::new(RestartMockBackend {
-            fail_get_state_with_disconnect: true,
+            get_state_responses: std::collections::VecDeque::from([Err(anyhow::anyhow!(
+                "connection is closed"
+            ))]),
             disconnect_outcome: Err("relaunch failed: Failed to launch browser".to_string()),
             browser_restarts: 0,
+            chrome_alive: None,
+            ..Default::default()
         });
 
         let err = server
@@ -3473,6 +3706,32 @@ mod tests {
             "message: {message}"
         );
         assert!(message.contains("relaunch failed"), "message: {message}");
+    }
+
+    // ISSUE-260: `act` is not in `is_retry_safe_tool` because a lost
+    // response after Chrome already executed the command must not be
+    // retried blindly (risk of double-firing a click/submit). A transport
+    // error on `act` must escalate straight to the disconnect/restart path
+    // on the first failure, with no retry attempt in between.
+    #[test]
+    fn call_tool_does_not_retry_transport_error_for_non_idempotent_tools() {
+        let mut server = McpServer::new(RestartMockBackend {
+            disconnect_outcome: Ok(1),
+            act_error_once: Some("broken pipe".to_string()),
+            ..Default::default()
+        });
+
+        let err = server
+            .call_tool("act", json!({"target_id": 1, "action": "click"}))
+            .expect_err("transport error on a non-retry-safe tool should escalate");
+        let message = err.to_string();
+        assert!(message.contains("restart #1"), "message: {message}");
+
+        assert_eq!(
+            server.backend_mut().act_call_count,
+            1,
+            "act must not be retried after a transport-level error"
+        );
     }
 
     #[test]
@@ -3518,9 +3777,11 @@ mod tests {
     #[test]
     fn get_usage_report_includes_browser_restarts() {
         let mut server = McpServer::new(RestartMockBackend {
-            fail_get_state_with_disconnect: false,
+            get_state_responses: std::collections::VecDeque::new(),
             disconnect_outcome: Ok(0),
             browser_restarts: 2,
+            chrome_alive: None,
+            ..Default::default()
         });
 
         let payload = server
