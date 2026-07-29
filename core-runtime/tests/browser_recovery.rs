@@ -66,6 +66,47 @@ fn relaunch_recovers_session_after_chrome_process_is_killed() -> anyhow::Result<
     Ok(())
 }
 
+// Uses the Unix `kill` command to probe process liveness (ISSUE-260); not supported on Windows.
+#[cfg(unix)]
+#[test]
+fn is_process_alive_detects_running_and_killed_chrome() -> anyhow::Result<()> {
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    assert_eq!(
+        client.is_process_alive(),
+        Some(true),
+        "freshly launched Chrome process should be reported alive"
+    );
+
+    let pid = client
+        .process_id()
+        .expect("launched BrowserClient should have a process id");
+    std::process::Command::new("kill")
+        .arg("-9")
+        .arg(pid.to_string())
+        .status()
+        .context("failed to signal the Chrome process")?;
+
+    // Give the OS a moment to reap the process before probing again.
+    let mut confirmed_dead = false;
+    for _ in 0..10 {
+        if client.is_process_alive() == Some(false) {
+            confirmed_dead = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        confirmed_dead,
+        "killed Chrome process should eventually be reported dead"
+    );
+
+    Ok(())
+}
+
 /// `BrowserClient::confirm_alive` (ISSUE-261) should confirm a healthy,
 /// freshly-launched browser as alive well within its bound.
 #[test]

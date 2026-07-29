@@ -364,6 +364,20 @@ impl BrowserClient {
         self.inner.get_process_id()
     }
 
+    /// Best-effort probe of whether the underlying Chrome process is still
+    /// running (ISSUE-260). Returns `None` when the process ID is unknown
+    /// (e.g. connected to an existing debugger URL rather than launched) or
+    /// liveness could not be determined; `Some(true)`/`Some(false)`
+    /// otherwise.
+    ///
+    /// Used to distinguish a merely disconnected CDP session (e.g. a single
+    /// tab losing its transport, or a transient websocket blip) from an
+    /// actually dead Chrome process before tearing down the whole browser
+    /// session.
+    pub fn is_process_alive(&self) -> Option<bool> {
+        is_pid_alive(self.process_id()?)
+    }
+
     /// Relaunches the Chrome process after a crash/disconnect and returns a
     /// fresh [`PageSession`] (ISSUE-149: Chrome crash/disconnect recovery).
     ///
@@ -445,9 +459,24 @@ fn confirm_alive_with(probe: impl FnOnce() -> bool + Send + 'static, timeout: Du
     rx.recv_timeout(timeout).unwrap_or(false)
 }
 
+/// Transport-level error markers (ISSUE-260): text patterns that most often
+/// indicate a transient CDP WebSocket blip (e.g. a large `get_visual`
+/// payload write racing a read timeout under load) rather than the Chrome
+/// process itself having died.
+const TRANSPORT_ERROR_MARKERS: [&str; 2] = ["broken pipe", "connection reset"];
+
+/// Returns `true` if `err`'s chain matches a transport-level marker
+/// (ISSUE-260). A `true` result does not by itself confirm that the Chrome
+/// process died; callers should retry the failed CDP call once before
+/// escalating to [`is_browser_disconnected`] / a full restart.
+pub fn is_transport_error(err: &anyhow::Error) -> bool {
+    error_chain_contains_any(err, &TRANSPORT_ERROR_MARKERS)
+}
+
 /// Returns `true` if `err`'s error chain indicates that the underlying Chrome
 /// process disconnected (crashed, was killed, or the CDP websocket dropped),
-/// as opposed to a page-level error (ISSUE-149).
+/// as opposed to a page-level error (ISSUE-149) or a merely transient
+/// transport blip (ISSUE-260).
 ///
 /// This marker match alone is not sufficient evidence of a genuine crash: a
 /// client-side request timeout on a slow-but-alive operation can surface the
@@ -464,13 +493,73 @@ pub fn is_browser_disconnected(err: &anyhow::Error) -> bool {
         return true;
     }
 
-    let markers = [
-        "connection is closed",
-        "broken pipe",
-        "connection reset",
-        "not connected",
-    ];
-    error_chain_contains_any(err, &markers)
+    let definite_markers = ["connection is closed", "broken pipe", "connection reset"];
+    if error_chain_contains_any(err, &definite_markers) {
+        return true;
+    }
+
+    // ISSUE-260: "not connected" alone is ambiguous -- it can mean a single
+    // tab lost its CDP session while Chrome itself is still alive. Only
+    // treat it as a full disconnect when corroborated by a second marker
+    // (or literal "ConnectionClosed" text that didn't downcast above,
+    // e.g. because it was flattened into a plain string by an intermediate
+    // `.context()`).
+    if error_chain_contains_any(err, &["not connected"]) {
+        let corroborating_markers = [
+            "connection is closed",
+            "broken pipe",
+            "connection reset",
+            "connectionclosed",
+        ];
+        return error_chain_contains_any(err, &corroborating_markers);
+    }
+
+    false
+}
+
+/// Best-effort liveness probe for a Chrome process by PID (ISSUE-260).
+///
+/// Returns `Some(true)`/`Some(false)` when liveness could be determined,
+/// `None` when it could not (e.g. unsupported platform, or the `ps`
+/// utility failed to spawn). Callers should treat `None` the same as
+/// "unknown" and fall back to the pre-existing (safe) restart behavior.
+///
+/// Beyond mere existence, this cross-checks the process name against
+/// `"chrom"` (matches "Chrome"/"Chromium" variants) via `ps -o comm=`: a
+/// bare existence check (e.g. `kill -0`) only proves *some* process holds
+/// that PID -- after Chrome exits, the OS can reuse the PID for an
+/// unrelated process, and a pure existence check would then wrongly report
+/// the (dead) Chrome as alive.
+///
+/// A killed-but-not-yet-reaped process becomes a zombie (`ps` state `Z`):
+/// the PID and `comm` name are still present, but the process cannot
+/// execute anything (including serve CDP requests) -- so a zombie must be
+/// treated as dead here, not alive.
+#[cfg(unix)]
+fn is_pid_alive(pid: u32) -> Option<bool> {
+    let output = std::process::Command::new("ps")
+        .arg("-p")
+        .arg(pid.to_string())
+        .arg("-o")
+        .arg("stat=,comm=")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return Some(false);
+    }
+    let line = String::from_utf8_lossy(&output.stdout);
+    let Some((stat, comm)) = line.trim().split_once(char::is_whitespace) else {
+        return Some(false);
+    };
+    if stat.starts_with('Z') {
+        return Some(false);
+    }
+    Some(comm.to_lowercase().contains("chrom"))
+}
+
+#[cfg(not(unix))]
+fn is_pid_alive(_pid: u32) -> Option<bool> {
+    None
 }
 
 fn apply_viewport_size(tab: &headless_chrome::Tab, width: u32, height: u32) -> Result<()> {
@@ -3298,7 +3387,6 @@ mod tests {
             "Connection is closed",
             "Broken pipe",
             "connection reset by peer",
-            "transport not connected",
         ] {
             let err = anyhow::anyhow!("{marker}");
             assert!(
@@ -3312,6 +3400,46 @@ mod tests {
     fn is_browser_disconnected_ignores_page_level_errors() {
         let err = anyhow::anyhow!("Could not find node with given id");
         assert!(!is_browser_disconnected(&err));
+    }
+
+    // ISSUE-260: "not connected" alone is ambiguous (a single tab can lose
+    // its CDP session while Chrome itself stays alive), so it must not by
+    // itself trigger a full session teardown.
+    #[test]
+    fn is_browser_disconnected_ignores_bare_not_connected_marker() {
+        let err = anyhow::anyhow!("transport not connected");
+        assert!(!is_browser_disconnected(&err));
+    }
+
+    #[test]
+    fn is_browser_disconnected_detects_not_connected_with_corroboration() {
+        let err = anyhow::anyhow!("tab not connected: broken pipe while writing frame");
+        assert!(is_browser_disconnected(&err));
+    }
+
+    // ISSUE-260: "broken pipe" / "connection reset" are transport-level
+    // blips that callers should retry before treating as a disconnect.
+    #[test]
+    fn is_transport_error_detects_broken_pipe_and_connection_reset() {
+        for marker in ["broken pipe", "connection reset by peer"] {
+            let err = anyhow::anyhow!("{marker}");
+            assert!(
+                is_transport_error(&err),
+                "expected transport marker '{marker}' to be detected"
+            );
+        }
+    }
+
+    #[test]
+    fn is_transport_error_ignores_definite_disconnect_markers() {
+        let err = anyhow::anyhow!("connection is closed");
+        assert!(!is_transport_error(&err));
+    }
+
+    #[test]
+    fn is_transport_error_ignores_page_level_errors() {
+        let err = anyhow::anyhow!("Could not find node with given id");
+        assert!(!is_transport_error(&err));
     }
 
     #[test]
