@@ -143,6 +143,25 @@ pub trait McpBackend {
         Err("browser restart not supported".to_string())
     }
 
+    /// Confirms whether a suspected browser disconnect (detected via
+    /// [`core_runtime::is_browser_disconnected`]) is a genuine Chrome
+    /// crash/exit rather than a false positive caused by a client-side
+    /// request timeout on a slow-but-alive operation (ISSUE-261's
+    /// `get_visual`/`get_state` transport-busy scenario).
+    ///
+    /// Called by [`McpServer::call_tool_output`] before committing to
+    /// [`handle_browser_disconnect`](Self::handle_browser_disconnect): when
+    /// this returns `false`, the original error is returned to the caller
+    /// unchanged and no restart is performed.
+    ///
+    /// The default implementation reports "confirmed disconnected"
+    /// (`true`), preserving the prior always-restart-on-marker-match
+    /// behavior for backends without a lightweight liveness probe
+    /// available (e.g. test doubles).
+    fn confirm_browser_disconnected(&self) -> bool {
+        true
+    }
+
     /// Total number of automatic browser restarts performed so far.
     fn browser_restart_count(&self) -> u64 {
         0
@@ -306,11 +325,23 @@ impl<B: McpBackend> McpServer<B> {
 
         let result = match result {
             Err(err) if core_runtime::is_browser_disconnected(&err) => {
-                match self.backend.handle_browser_disconnect() {
-                    Ok(restart_count) => {
-                        Err(SessionError::BrowserRestarted { restart_count }.into())
+                // ISSUE-261: a marker match alone can be a false positive
+                // when a slow-but-alive operation (e.g. `get_visual`'s
+                // screenshot + SoM pipeline) causes a client-side request
+                // timeout that a later command then observes as a
+                // transport-level error. Confirm true unresponsiveness
+                // with a bounded CDP health-check before committing to a
+                // restart; if the browser answers, propagate the original
+                // error instead so it isn't misdiagnosed as a crash.
+                if self.backend.confirm_browser_disconnected() {
+                    match self.backend.handle_browser_disconnect() {
+                        Ok(restart_count) => {
+                            Err(SessionError::BrowserRestarted { restart_count }.into())
+                        }
+                        Err(reason) => Err(SessionError::BrowserRestartFailed { reason }.into()),
                     }
-                    Err(reason) => Err(SessionError::BrowserRestartFailed { reason }.into()),
+                } else {
+                    Err(err)
                 }
             }
             other => other,
@@ -1824,6 +1855,17 @@ impl McpBackend for CoreRuntimeBackend {
         self.browser_restarts
     }
 
+    fn confirm_browser_disconnected(&self) -> bool {
+        match self.client.as_ref() {
+            // No managed BrowserClient (e.g. backends constructed via
+            // `CoreRuntimeBackend::new` for tests) cannot run a liveness
+            // probe; preserve the prior always-restart-on-marker-match
+            // behavior.
+            None => true,
+            Some(client) => !client.confirm_alive(core_runtime::HEALTH_CHECK_TIMEOUT),
+        }
+    }
+
     fn speculative_usage(&self) -> (u64, u64) {
         (self.speculative_hits, self.speculative_misses)
     }
@@ -2776,6 +2818,42 @@ mod tests {
         assert!(backend.navigation_allow_private_network);
     }
 
+    /// `CoreRuntimeBackend` constructed via [`CoreRuntimeBackend::new`] has no
+    /// managed `BrowserClient` (ISSUE-261) and therefore cannot run a
+    /// liveness probe; it must preserve the prior always-restart behavior.
+    #[test]
+    fn confirm_browser_disconnected_defaults_true_without_managed_client() {
+        if test_bench_support::should_skip_browser_tests() {
+            return;
+        }
+        let client = BrowserClient::new().expect("browser client");
+        let page = client.new_page().expect("new page");
+        let backend = CoreRuntimeBackend::new(page);
+
+        assert!(
+            backend.confirm_browser_disconnected(),
+            "without a managed BrowserClient, disconnect must be confirmed unconditionally"
+        );
+    }
+
+    /// With a managed `BrowserClient` (ISSUE-261), a healthy browser should
+    /// report as still alive, so the health check should NOT confirm a
+    /// disconnect.
+    #[test]
+    fn confirm_browser_disconnected_is_false_for_healthy_managed_client() {
+        if test_bench_support::should_skip_browser_tests() {
+            return;
+        }
+        let client = BrowserClient::new().expect("browser client");
+        let page = client.new_page().expect("new page");
+        let backend = CoreRuntimeBackend::new_with_client(client, page);
+
+        assert!(
+            !backend.confirm_browser_disconnected(),
+            "a healthy managed browser must not be confirmed as disconnected"
+        );
+    }
+
     #[test]
     fn shorten_key_truncates_64_char_sha256_to_16() {
         let full = "a".repeat(64);
@@ -3387,6 +3465,11 @@ mod tests {
         fail_get_state_with_disconnect: bool,
         disconnect_outcome: std::result::Result<u64, String>,
         browser_restarts: u64,
+        /// Controls `confirm_browser_disconnected` (ISSUE-261): when `true`,
+        /// the health check reports the browser is still alive and
+        /// `call_tool_output` must skip the restart and propagate the
+        /// original error instead.
+        confirmed_still_alive: bool,
     }
 
     impl McpBackend for RestartMockBackend {
@@ -3435,6 +3518,10 @@ mod tests {
         fn browser_restart_count(&self) -> u64 {
             self.browser_restarts
         }
+
+        fn confirm_browser_disconnected(&self) -> bool {
+            !self.confirmed_still_alive
+        }
     }
 
     #[test]
@@ -3443,6 +3530,7 @@ mod tests {
             fail_get_state_with_disconnect: true,
             disconnect_outcome: Ok(1),
             browser_restarts: 0,
+            confirmed_still_alive: false,
         });
 
         let err = server
@@ -3457,11 +3545,40 @@ mod tests {
     }
 
     #[test]
+    fn call_tool_skips_restart_when_health_check_confirms_still_alive() {
+        // ISSUE-261: a marker match on its own must not be enough to
+        // trigger a restart when the CDP health-check confirms the browser
+        // is still responsive -- the original error should propagate
+        // unchanged and `handle_browser_disconnect` must never run.
+        let mut server = McpServer::new(RestartMockBackend {
+            fail_get_state_with_disconnect: true,
+            disconnect_outcome: Ok(1),
+            browser_restarts: 0,
+            confirmed_still_alive: true,
+        });
+
+        let err = server
+            .call_tool("get_state", json!({}))
+            .expect_err("disconnect-shaped error should still propagate");
+        assert_eq!(
+            err.to_string(),
+            "connection is closed",
+            "original error should propagate unchanged when health check confirms the browser is alive"
+        );
+        assert_eq!(
+            server.backend.browser_restart_count(),
+            0,
+            "handle_browser_disconnect must not run when the health check confirms the browser is alive"
+        );
+    }
+
+    #[test]
     fn call_tool_reports_restart_failure_when_relaunch_fails() {
         let mut server = McpServer::new(RestartMockBackend {
             fail_get_state_with_disconnect: true,
             disconnect_outcome: Err("relaunch failed: Failed to launch browser".to_string()),
             browser_restarts: 0,
+            confirmed_still_alive: false,
         });
 
         let err = server
@@ -3521,6 +3638,7 @@ mod tests {
             fail_get_state_with_disconnect: false,
             disconnect_outcome: Ok(0),
             browser_restarts: 2,
+            confirmed_still_alive: false,
         });
 
         let payload = server

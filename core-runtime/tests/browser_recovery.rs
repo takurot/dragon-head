@@ -65,3 +65,59 @@ fn relaunch_recovers_session_after_chrome_process_is_killed() -> anyhow::Result<
 
     Ok(())
 }
+
+/// `BrowserClient::confirm_alive` (ISSUE-261) should confirm a healthy,
+/// freshly-launched browser as alive well within its bound.
+#[test]
+fn confirm_alive_reports_true_for_healthy_browser() -> anyhow::Result<()> {
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    assert!(
+        client.confirm_alive(Duration::from_secs(3)),
+        "a freshly launched browser should confirm alive"
+    );
+    Ok(())
+}
+
+/// After the Chrome process is killed, `confirm_alive` should eventually
+/// report `false` (ISSUE-261) -- proving the health-check correctly
+/// distinguishes a genuine crash from a merely slow-but-alive transport.
+#[cfg(unix)]
+#[test]
+fn confirm_alive_reports_false_after_chrome_process_is_killed() -> anyhow::Result<()> {
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let _page = client.new_page()?;
+
+    let pid = client
+        .process_id()
+        .expect("launched BrowserClient should have a process id");
+    std::process::Command::new("kill")
+        .arg("-9")
+        .arg(pid.to_string())
+        .status()
+        .context("failed to signal the Chrome process")?;
+
+    // The transport's background thread needs a moment to notice the
+    // closed websocket. Bounded retry: 10 attempts / 200ms apart / 2s total,
+    // each individual health check itself bounded to 2s.
+    let mut confirmed_dead = false;
+    for _ in 0..10 {
+        if !client.confirm_alive(Duration::from_secs(2)) {
+            confirmed_dead = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        confirmed_dead,
+        "confirm_alive should report false after the Chrome process is killed"
+    );
+    Ok(())
+}
