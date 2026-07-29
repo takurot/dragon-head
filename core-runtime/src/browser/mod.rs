@@ -477,20 +477,31 @@ pub fn is_browser_disconnected(err: &anyhow::Error) -> bool {
 /// that PID -- after Chrome exits, the OS can reuse the PID for an
 /// unrelated process, and a pure existence check would then wrongly report
 /// the (dead) Chrome as alive.
+///
+/// A killed-but-not-yet-reaped process becomes a zombie (`ps` state `Z`):
+/// the PID and `comm` name are still present, but the process cannot
+/// execute anything (including serve CDP requests) -- so a zombie must be
+/// treated as dead here, not alive.
 #[cfg(unix)]
 fn is_pid_alive(pid: u32) -> Option<bool> {
     let output = std::process::Command::new("ps")
         .arg("-p")
         .arg(pid.to_string())
         .arg("-o")
-        .arg("comm=")
+        .arg("stat=,comm=")
         .output()
         .ok()?;
     if !output.status.success() {
         return Some(false);
     }
-    let comm = String::from_utf8_lossy(&output.stdout).to_lowercase();
-    Some(comm.contains("chrom"))
+    let line = String::from_utf8_lossy(&output.stdout);
+    let Some((stat, comm)) = line.trim().split_once(char::is_whitespace) else {
+        return Some(false);
+    };
+    if stat.starts_with('Z') {
+        return Some(false);
+    }
+    Some(comm.to_lowercase().contains("chrom"))
 }
 
 #[cfg(not(unix))]
