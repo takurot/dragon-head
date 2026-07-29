@@ -20,7 +20,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -47,6 +47,11 @@ const NAVIGATION_FALLBACK_TIMEOUT: Duration = Duration::from_secs(3);
 const NAVIGATION_FALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SRE_EVENT_BRIDGE_SYMBOL: &str = "neural_browser.runtime.sre_event_bridge";
 const ACTION_LOG_BUFFER_LIMIT: usize = 256;
+/// Default bound for [`BrowserClient::confirm_alive`]'s CDP liveness probe
+/// (ISSUE-261), decoupled from headless_chrome's internal 30s
+/// `idle_browser_timeout` default so a suspected-disconnect confirmation
+/// stays fast.
+pub const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SemanticTarget {
@@ -411,6 +416,47 @@ impl BrowserClient {
         });
         Ok(page)
     }
+
+    /// Confirms whether the underlying Chrome process is truly unresponsive
+    /// by issuing a lightweight, session-independent `Browser.getVersion`
+    /// CDP call bounded by `timeout` (ISSUE-261).
+    ///
+    /// [`is_browser_disconnected`] matches error-chain markers ("broken
+    /// pipe", "connection reset", ...) that can also appear when a
+    /// *client-side* request timeout fires on a slow-but-legitimate
+    /// operation (e.g. `get_visual`'s screenshot + SoM pipeline keeping the
+    /// CDP transport busy) rather than an actual Chrome crash. This
+    /// browser-level call is independent of any specific `Tab`'s session,
+    /// so it can succeed even while a particular tab's command channel
+    /// appears stuck. Callers should treat a suspected disconnect as
+    /// confirmed only when this also returns `false`; otherwise the
+    /// original error should be propagated instead of triggering
+    /// [`relaunch`](Self::relaunch).
+    ///
+    /// Bounded independently of headless_chrome's internal 30s
+    /// `idle_browser_timeout` default via a detached probe thread and a
+    /// bounded channel receive: if the probe truly hangs past `timeout`,
+    /// its thread is intentionally left to run to completion in the
+    /// background (holding a cheap `Arc` clone of the browser handle)
+    /// rather than force-killed, since Rust has no safe thread-cancellation
+    /// primitive; each suspected disconnect spawns at most one such thread.
+    pub fn confirm_alive(&self, timeout: Duration) -> bool {
+        let browser = self.inner.clone();
+        confirm_alive_with(move || browser.get_version().is_ok(), timeout)
+    }
+}
+
+/// Test seam for [`BrowserClient::confirm_alive`]: runs `probe` on a
+/// background thread and returns its result if it completes within
+/// `timeout`, otherwise `false` (ISSUE-261).
+fn confirm_alive_with(probe: impl FnOnce() -> bool + Send + 'static, timeout: Duration) -> bool {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        // The receiver may already be gone if `rx.recv_timeout` below timed
+        // out first; ignore the send failure rather than panicking.
+        let _ = tx.send(probe());
+    });
+    rx.recv_timeout(timeout).unwrap_or(false)
 }
 
 /// Transport-level error markers (ISSUE-260): text patterns that most often
@@ -431,6 +477,13 @@ pub fn is_transport_error(err: &anyhow::Error) -> bool {
 /// process disconnected (crashed, was killed, or the CDP websocket dropped),
 /// as opposed to a page-level error (ISSUE-149) or a merely transient
 /// transport blip (ISSUE-260).
+///
+/// This marker match alone is not sufficient evidence of a genuine crash: a
+/// client-side request timeout on a slow-but-alive operation can surface the
+/// same transport-level wording (ISSUE-261). Callers that intend to restart
+/// the browser on a match should first confirm true unresponsiveness with
+/// [`BrowserClient::confirm_alive`] rather than restarting on this signal
+/// alone.
 pub fn is_browser_disconnected(err: &anyhow::Error) -> bool {
     if err.chain().any(|source| {
         source
@@ -3387,6 +3440,39 @@ mod tests {
     fn is_transport_error_ignores_page_level_errors() {
         let err = anyhow::anyhow!("Could not find node with given id");
         assert!(!is_transport_error(&err));
+    }
+
+    #[test]
+    fn confirm_alive_with_returns_true_when_probe_succeeds_quickly() {
+        assert!(confirm_alive_with(|| true, Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn confirm_alive_with_returns_false_when_probe_fails_quickly() {
+        assert!(!confirm_alive_with(|| false, Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn confirm_alive_with_returns_false_and_respects_bound_when_probe_hangs() {
+        // Simulates a genuinely wedged (open-but-unresponsive) CDP call:
+        // the probe never returns within the bound, so the health check
+        // must report "not confirmed alive" without blocking past
+        // `timeout`, independent of any internal transport default.
+        let timeout = Duration::from_millis(200);
+        let started = Instant::now();
+        let alive = confirm_alive_with(
+            || {
+                thread::sleep(Duration::from_secs(5));
+                true
+            },
+            timeout,
+        );
+        assert!(!alive);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "confirm_alive_with should not block past its bounded timeout, took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
