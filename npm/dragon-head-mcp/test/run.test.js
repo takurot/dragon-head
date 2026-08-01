@@ -183,6 +183,9 @@ test('isPathInsideDirectory: accepts a file under the directory, rejects escapes
   assert.equal(isPathInsideDirectory('/a/b/evil', '/a/b/pkg'), false);
   assert.equal(isPathInsideDirectory('/a/b/pkgevil/bin/x', '/a/b/pkg'), false);
   assert.equal(isPathInsideDirectory('/a/b/pkg', '/a/b/pkg'), false);
+  // A descendant whose own name happens to start with two dots (not a `..`
+  // traversal segment) must still be accepted.
+  assert.equal(isPathInsideDirectory('/a/b/pkg/..cache/bin', '/a/b/pkg'), true);
 });
 
 test('resolvePackageBinary rejects a dragonHeadBinary that escapes the platform package directory', () => {

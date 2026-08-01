@@ -30,7 +30,8 @@ const SUPPORTED_LINUX_ARCHS = new Set(['x64', 'arm64']);
 // path that traverses outside its own package directory.
 function isPathInsideDirectory(childPath, parentDir) {
   const rel = path.relative(parentDir, childPath);
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  const isEscape = rel === '..' || rel.startsWith(`..${path.sep}`);
+  return rel !== '' && !isEscape && !path.isAbsolute(rel);
 }
 
 // Reads a platform package's package.json (given its absolute path) and
