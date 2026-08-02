@@ -7,7 +7,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { execFileSync, spawnSync } = require('node:child_process');
 
-const { PLATFORM_PACKAGES, resolveBinaryPath } = require('../bin/run.js');
+const {
+  PLATFORM_PACKAGES,
+  resolveBinaryPath,
+  resolvePackageBinary,
+  isPathInsideDirectory,
+  spawnBinary,
+  registerSignalForwarding,
+} = require('../bin/run.js');
 
 const WRAPPER_PKG = require('../package.json');
 const PLATFORM_ROOT = path.join(__dirname, '..', '..', 'platform');
@@ -168,4 +175,109 @@ test('end-to-end: packed wrapper + platform tarballs resolve and exec a fake bin
   assert.match(result.stdout, /FAKE_BINARY_RAN --doctor/);
 
   fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
+
+test('isPathInsideDirectory: accepts a file under the directory, rejects escapes and the directory itself', () => {
+  assert.equal(isPathInsideDirectory('/a/b/pkg/bin/x', '/a/b/pkg'), true);
+  assert.equal(isPathInsideDirectory('/a/b/pkg/../evil', '/a/b/pkg'), false);
+  assert.equal(isPathInsideDirectory('/a/b/evil', '/a/b/pkg'), false);
+  assert.equal(isPathInsideDirectory('/a/b/pkgevil/bin/x', '/a/b/pkg'), false);
+  assert.equal(isPathInsideDirectory('/a/b/pkg', '/a/b/pkg'), false);
+  // A descendant whose own name happens to start with two dots (not a `..`
+  // traversal segment) must still be accepted.
+  assert.equal(isPathInsideDirectory('/a/b/pkg/..cache/bin', '/a/b/pkg'), true);
+});
+
+test('resolvePackageBinary rejects a dragonHeadBinary that escapes the platform package directory', () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dragon-head-mcp-traversal-'));
+  const pkgDir = path.join(tmpRoot, 'dragon-head-mcp-darwin-arm64');
+  fs.mkdirSync(pkgDir, { recursive: true });
+  const pkgJsonPath = path.join(pkgDir, 'package.json');
+  fs.writeFileSync(
+    pkgJsonPath,
+    JSON.stringify({ name: 'dragon-head-mcp-darwin-arm64', dragonHeadBinary: '../../../../etc/passwd' })
+  );
+
+  const { exitCode, errorOutput } = captureExit(() =>
+    resolvePackageBinary(pkgJsonPath, 'dragon-head-mcp-darwin-arm64')
+  );
+
+  assert.equal(exitCode, 1);
+  assert.match(errorOutput, /outside its package directory/);
+
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
+
+test('resolvePackageBinary accepts a dragonHeadBinary that stays inside the platform package directory', () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dragon-head-mcp-traversal-ok-'));
+  const pkgDir = path.join(tmpRoot, 'dragon-head-mcp-darwin-arm64');
+  fs.mkdirSync(path.join(pkgDir, 'bin'), { recursive: true });
+  const pkgJsonPath = path.join(pkgDir, 'package.json');
+  fs.writeFileSync(
+    pkgJsonPath,
+    JSON.stringify({ name: 'dragon-head-mcp-darwin-arm64', dragonHeadBinary: 'bin/dragon-head-mcp' })
+  );
+  fs.writeFileSync(path.join(pkgDir, 'bin', 'dragon-head-mcp'), '#!/usr/bin/env bash\nexit 0\n');
+
+  const binaryPath = resolvePackageBinary(pkgJsonPath, 'dragon-head-mcp-darwin-arm64');
+  assert.equal(binaryPath, path.join(pkgDir, 'bin', 'dragon-head-mcp'));
+
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
+
+test('spawnBinary catches a synchronous spawn() throw and exits cleanly instead of propagating', () => {
+  // Node's spawn() throws synchronously for malformed arguments (and, on some
+  // platforms, for a missing/ENOENT binary) rather than only emitting the
+  // async 'error' event. spawnBinary must catch that and exit(1) with a
+  // clear message instead of letting the exception crash the process.
+  const { exitCode, errorOutput } = captureExit(() => spawnBinary(Buffer.from('not-a-path-string'), []));
+  assert.equal(exitCode, 1);
+  assert.match(errorOutput, /failed to start binary/);
+});
+
+test('spawnBinary returns a live child for a valid, executable binary', () => {
+  const child = spawnBinary('/bin/echo', ['hello']);
+  assert.ok(child && typeof child.on === 'function');
+  child.kill();
+});
+
+test('registerSignalForwarding stops forwarding and cleans up listeners once the child has exited', () => {
+  const calls = [];
+  const fakeChild = {
+    kill(signal) {
+      calls.push(signal);
+    },
+  };
+
+  const sigintBefore = process.listenerCount('SIGINT');
+  const sigtermBefore = process.listenerCount('SIGTERM');
+
+  const { forwardSignal, markExited } = registerSignalForwarding(fakeChild);
+
+  assert.equal(process.listenerCount('SIGINT'), sigintBefore + 1);
+  assert.equal(process.listenerCount('SIGTERM'), sigtermBefore + 1);
+
+  forwardSignal('SIGINT');
+  assert.deepEqual(calls, ['SIGINT']);
+
+  // Simulate the child having already exited (e.g. it exited right as a
+  // second signal arrives) — forwarding again must not throw and must not
+  // attempt to kill an already-gone child.
+  markExited();
+  assert.doesNotThrow(() => forwardSignal('SIGTERM'));
+  assert.deepEqual(calls, ['SIGINT']);
+
+  assert.equal(process.listenerCount('SIGINT'), sigintBefore);
+  assert.equal(process.listenerCount('SIGTERM'), sigtermBefore);
+});
+
+test('registerSignalForwarding survives child.kill() throwing (already-exited race)', () => {
+  const fakeChild = {
+    kill() {
+      throw new Error('ESRCH: no such process');
+    },
+  };
+  const { forwardSignal, markExited } = registerSignalForwarding(fakeChild);
+  assert.doesNotThrow(() => forwardSignal('SIGINT'));
+  markExited();
 });
