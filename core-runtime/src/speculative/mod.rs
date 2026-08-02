@@ -646,7 +646,7 @@ mod tests {
     fn import_model_rejects_malformed_bytes() {
         let engine = SpeculativeEngine::new(vec![]);
         let err = engine.import_model(&[0xFF, 0x00]).unwrap_err();
-        assert!(matches!(err, SpeculativeCodecError::Malformed { .. }));
+        assert!(matches!(err, SpeculativeCodecError::InvalidFlatbuffer(_)));
     }
 
     #[test]
