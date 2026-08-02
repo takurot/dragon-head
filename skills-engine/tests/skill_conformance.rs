@@ -380,10 +380,44 @@ fn test_verify_must_match_act_target() {
     ]);
 }
 
+// Regression test for issue #266 (CRITICAL): an Act step immediately
+// preceded by a matching Verify step must be able to declare
+// `max_retries > 0` and pass validation. A retry re-invokes the same,
+// already-authorized action in place — it is not a new graph entry into
+// the Act step, so it must not require its own separate authorization
+// edge (previously, any `max_retries > 0` on an Act step made validation
+// fail unconditionally, even when the step had a perfectly valid Verify
+// predecessor).
 #[test]
-fn test_act_cannot_retry_without_reverification() {
+fn test_act_with_max_retries_and_matching_verify_passes_validation() -> Result<(), SkillEngineError>
+{
+    let skill = SkillDefinition {
+        schema_version: 1,
+        name: "act-with-retries".to_string(),
+        steps: vec![
+            verify_step("check", "target", StepControl::default()),
+            act_step(
+                "do_act",
+                "target",
+                StepControl {
+                    max_retries: 1,
+                    ..StepControl::default()
+                },
+            ),
+        ],
+    };
+
+    validate_skill_definition(&skill)?;
+    Ok(())
+}
+
+// `max_retries > 0` does not relax the ordinary Act-predecessor rule: the
+// step must still be immediately preceded by a Verify targeting the same
+// element.
+#[test]
+fn test_act_with_max_retries_still_requires_matching_verify_predecessor() {
     assert_invalid_act_flow(vec![
-        verify_step("check", "target", StepControl::default()),
+        locate_step("start", StepControl::default()),
         act_step(
             "do_act",
             "target",
@@ -521,5 +555,96 @@ fn test_safe_cycle_reverifies_before_each_act() -> Result<(), SkillEngineError> 
             "handoff"
         ]
     );
+    Ok(())
+}
+
+// Regression test for issue #266 (HIGH): the per-step retry budget must be a
+// lifetime cap for that step across the whole run, not a budget that gets a
+// fresh refill every time the step is revisited via `on_failure`. Previously
+// the retry counter was removed from `retries_by_step` as soon as it was
+// exhausted, so a cycle that routes back through the failing Act step (e.g.
+// `on_failure` -> re-verify -> Act again) gave that step a brand-new
+// `max_retries` budget on every single revisit, allowing effectively
+// unbounded cumulative retries of the same action.
+#[test]
+fn test_act_retry_budget_is_not_reset_across_on_failure_revisits() -> Result<(), SkillEngineError> {
+    let skill = SkillDefinition {
+        schema_version: 1,
+        name: "capped-retry-cycle".to_string(),
+        steps: vec![
+            verify_step(
+                "check",
+                "target",
+                StepControl {
+                    on_success: Some("do_act".to_string()),
+                    on_failure: Some("give_up".to_string()),
+                    ..StepControl::default()
+                },
+            ),
+            act_step(
+                "do_act",
+                "target",
+                StepControl {
+                    max_retries: 1,
+                    on_failure: Some("check".to_string()),
+                    ..StepControl::default()
+                },
+            ),
+            SkillStep::Handoff(HandoffStep {
+                id: Some("give_up".to_string()),
+                reason: "verification stopped succeeding".to_string(),
+                assignee: None,
+                control: StepControl::default(),
+            }),
+        ],
+    };
+
+    // `check` succeeds twice (allowing two visits to `do_act`) then fails,
+    // ending the run via `give_up`. `do_act` always fails.
+    let mut runtime = MockRuntime::default()
+        .with_script(
+            "verify",
+            vec![
+                OperationOutcome::Success,
+                OperationOutcome::Success,
+                OperationOutcome::Failure {
+                    reason: "gone".to_string(),
+                },
+            ],
+        )
+        .with_script(
+            "act",
+            vec![
+                OperationOutcome::Failure {
+                    reason: "click missed".to_string(),
+                },
+                OperationOutcome::Failure {
+                    reason: "click missed".to_string(),
+                },
+                OperationOutcome::Failure {
+                    reason: "click missed".to_string(),
+                },
+            ],
+        );
+
+    let report = SkillEngine::new().run(&skill, &mut runtime)?;
+    assert_eq!(report.status, SkillRunStatus::Handoff);
+
+    let operations: Vec<&str> = report
+        .trace
+        .iter()
+        .map(|entry| entry.operation.as_str())
+        .collect();
+
+    // First visit to `do_act` gets the full budget: initial attempt + 1
+    // retry (2 "act" calls). The second visit must NOT get a fresh budget:
+    // only 1 "act" call, immediately falling through to `on_failure` since
+    // the lifetime retry cap for that step was already spent.
+    assert_eq!(
+        operations.iter().filter(|op| **op == "act").count(),
+        3,
+        "expected exactly 3 total act attempts (2 on first visit, 1 on second visit), got: {operations:?}"
+    );
+    assert_eq!(operations.iter().filter(|op| **op == "verify").count(), 3);
     Ok(())
 }
