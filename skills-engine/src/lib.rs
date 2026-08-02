@@ -317,10 +317,12 @@ impl SkillEngine {
                     }
 
                     if let Some(target) = step.control().on_success.as_deref() {
-                        // Safe because branch targets are validated up front.
-                        cursor = *step_index
-                            .get(target)
-                            .expect("validated branch target must exist");
+                        cursor = *step_index.get(target).ok_or_else(|| {
+                            SkillEngineError::UnknownBranchTarget {
+                                step_id: step.id().map(ToString::to_string),
+                                target: target.to_string(),
+                            }
+                        })?;
                     } else {
                         cursor += 1;
                     }
@@ -332,12 +334,21 @@ impl SkillEngine {
                         *attempts += 1;
                         continue;
                     }
-                    retries_by_step.remove(&cursor);
+                    // NOTE: the retry counter is intentionally NOT removed here.
+                    // `max_retries` is a lifetime budget for this step across the
+                    // whole run, not a per-visit allowance — if `on_failure`
+                    // routes back around to this step again, it must not receive
+                    // a fresh retry budget, or a cyclic skill could retry the
+                    // same action an unbounded number of times. The budget is
+                    // only cleared on a subsequent Success (see above).
 
                     if let Some(target) = step.control().on_failure.as_deref() {
-                        cursor = *step_index
-                            .get(target)
-                            .expect("validated branch target must exist");
+                        cursor = *step_index.get(target).ok_or_else(|| {
+                            SkillEngineError::UnknownBranchTarget {
+                                step_id: step.id().map(ToString::to_string),
+                                target: target.to_string(),
+                            }
+                        })?;
                         continue;
                     }
 
@@ -489,7 +500,6 @@ pub fn validate_skill_definition(skill: &SkillDefinition) -> Result<(), SkillEng
 enum TransitionOutcome {
     Success,
     Failure,
-    Retry,
 }
 
 fn validate_act_predecessors(
@@ -504,15 +514,14 @@ fn validate_act_predecessors(
     for (source_idx, step) in skill.steps.iter().enumerate() {
         let control = step.control();
 
-        if control.max_retries > 0 {
-            validate_act_transition(
-                skill,
-                Some(source_idx),
-                TransitionOutcome::Retry,
-                source_idx,
-            )?;
-            has_incoming_edge[source_idx] = true;
-        }
+        // NOTE: `max_retries` does not need its own authorization check here.
+        // A retry re-invokes the same step in place at runtime (see `run`) —
+        // it is not a new entry into the step, so it relies on whatever
+        // Verify-authorized edge already gets this step its incoming edge
+        // below. (Previously this block unconditionally rejected any Act
+        // step with `max_retries > 0`, since a self-targeting `Retry`
+        // transition could never satisfy the Verify-predecessor check used
+        // for `Success` transitions.)
 
         if !matches!(step, SkillStep::Handoff(_)) {
             let success_target = control
@@ -711,7 +720,7 @@ pub fn validate_skill_json(value: &Value) -> Result<(), SkillSchemaError> {
 
 pub fn parse_skill_definition(value: &Value) -> Result<SkillDefinition, SkillEngineError> {
     if let Some(version) = value.get("schema_version").and_then(Value::as_u64)
-        && version > u64::from(SUPPORTED_SKILL_SCHEMA_VERSION)
+        && (version == 0 || version > u64::from(SUPPORTED_SKILL_SCHEMA_VERSION))
     {
         return Err(SkillEngineError::UnsupportedSchemaVersion {
             version,

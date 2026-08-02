@@ -149,6 +149,27 @@ fn test_parse_skill_rejects_first_unsupported_version_with_dedicated_error() {
     );
 }
 
+// Regression test for issue #266 (MEDIUM): the early `parse_skill_definition`
+// version gate only rejected versions above the supported maximum, missing
+// `schema_version == 0`. That let a version-0 document fall through to the
+// generic JSON-schema validator, surfacing a `SchemaValidation` error instead
+// of the dedicated, more informative `UnsupportedSchemaVersion` error that
+// every other out-of-range version gets.
+#[test]
+fn test_parse_skill_rejects_version_zero_with_dedicated_error() {
+    let mut zeroed = valid_skill_json();
+    zeroed["schema_version"] = serde_json::json!(0);
+
+    let error = parse_skill_definition(&zeroed).expect_err("version 0 skill must be rejected");
+    assert_eq!(
+        error,
+        SkillEngineError::UnsupportedSchemaVersion {
+            version: 0,
+            max: SUPPORTED_SKILL_SCHEMA_VERSION,
+        }
+    );
+}
+
 #[test]
 fn test_parse_skill_accepts_supported_version() {
     let skill = parse_skill_definition(&valid_skill_json())
