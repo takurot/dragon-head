@@ -78,13 +78,19 @@ pub enum EvaluationMode {
 
 impl EvaluationMode {
     pub fn from_env() -> Self {
-        match env::var("DRAGON_HEAD_EVAL_MODE")
-            .unwrap_or_else(|_| "smoke".to_string())
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "full" => Self::Full,
-            _ => Self::Smoke,
+        Self::from_env_value(env::var("DRAGON_HEAD_EVAL_MODE").ok().as_deref())
+    }
+
+    fn from_env_value(raw: Option<&str>) -> Self {
+        match raw {
+            None => Self::Smoke,
+            Some(value) => match value.to_ascii_lowercase().as_str() {
+                "smoke" => Self::Smoke,
+                "full" => Self::Full,
+                other => panic!(
+                    "invalid DRAGON_HEAD_EVAL_MODE={other:?}: expected \"smoke\" or \"full\""
+                ),
+            },
         }
     }
 
@@ -149,25 +155,35 @@ impl EvaluationBench {
 
     pub fn run_scenario<F>(&mut self, scenario_id: &str, feature_area: &str, scenario: F)
     where
-        F: FnOnce() -> Result<Value>,
+        F: FnOnce() -> Result<Value> + std::panic::UnwindSafe,
     {
         let started = Instant::now();
-        match scenario() {
-            Ok(details) => self.push_record(ScenarioRecord {
+        let outcome = std::panic::catch_unwind(scenario);
+        let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        match outcome {
+            Ok(Ok(details)) => self.push_record(ScenarioRecord {
                 scenario_id: scenario_id.to_string(),
                 feature_area: feature_area.to_string(),
                 status: ScenarioStatus::Passed,
-                duration_ms: started.elapsed().as_secs_f64() * 1_000.0,
+                duration_ms,
                 details,
                 error: None,
             }),
-            Err(err) => self.push_record(ScenarioRecord {
+            Ok(Err(err)) => self.push_record(ScenarioRecord {
                 scenario_id: scenario_id.to_string(),
                 feature_area: feature_area.to_string(),
                 status: ScenarioStatus::Failed,
-                duration_ms: started.elapsed().as_secs_f64() * 1_000.0,
+                duration_ms,
                 details: Value::Null,
                 error: Some(format!("{err:#}")),
+            }),
+            Err(panic) => self.push_record(ScenarioRecord {
+                scenario_id: scenario_id.to_string(),
+                feature_area: feature_area.to_string(),
+                status: ScenarioStatus::Failed,
+                duration_ms,
+                details: Value::Null,
+                error: Some(format!("scenario panicked: {}", panic_message(&*panic))),
             }),
         }
     }
@@ -176,6 +192,7 @@ impl EvaluationBench {
         let Ok(output_dir) = env::var("DRAGON_HEAD_EVAL_OUTPUT_DIR") else {
             return Ok(None);
         };
+        validate_output_dir(&output_dir)?;
 
         let file_name = format!(
             "{}--{}.json",
@@ -254,15 +271,113 @@ impl EvaluationBench {
     }
 }
 
+/// Rejects `DRAGON_HEAD_EVAL_OUTPUT_DIR` values containing `..` path
+/// components, which could otherwise be used to write the evaluation report
+/// outside the intended output directory.
+fn validate_output_dir(output_dir: &str) -> Result<()> {
+    let has_parent_dir = Path::new(output_dir)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir));
+    if has_parent_dir {
+        anyhow::bail!("DRAGON_HEAD_EVAL_OUTPUT_DIR must not contain '..' components: {output_dir}");
+    }
+    Ok(())
+}
+
+/// Extracts a human-readable message from a `catch_unwind` payload.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+/// Sanitizes a component for use in a filename. Distinct inputs are mapped to
+/// distinct outputs: allowed characters pass through unchanged, everything
+/// else is escaped as `_u{hex codepoint}_` so unrelated names never collide.
 fn sanitize_component(input: &str) -> String {
-    input
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push_str(&format!("_u{:x}_", ch as u32));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_scenario_records_failure_when_scenario_panics() {
+        let mut bench = EvaluationBench::new("crate", "suite", EvaluationMode::Smoke);
+
+        bench.run_scenario("panicking", "area", || panic!("boom"));
+
+        assert_eq!(bench.report().summary.total, 1);
+        assert_eq!(bench.report().summary.passed, 0);
+        assert_eq!(bench.report().summary.failed, 1);
+        let record = &bench.report().scenarios[0];
+        assert_eq!(record.status, ScenarioStatus::Failed);
+        assert_eq!(record.error.as_deref(), Some("scenario panicked: boom"));
+    }
+
+    #[test]
+    fn run_scenario_still_records_subsequent_scenarios_after_a_panic() {
+        let mut bench = EvaluationBench::new("crate", "suite", EvaluationMode::Smoke);
+
+        bench.run_scenario("panicking", "area", || panic!("boom"));
+        bench.run_scenario("ok", "area", || Ok(Value::Null));
+
+        assert_eq!(bench.report().summary.total, 2);
+        assert_eq!(bench.report().summary.passed, 1);
+        assert_eq!(bench.report().summary.failed, 1);
+    }
+
+    #[test]
+    fn from_env_value_defaults_to_smoke_when_unset() {
+        assert_eq!(EvaluationMode::from_env_value(None), EvaluationMode::Smoke);
+    }
+
+    #[test]
+    fn from_env_value_accepts_known_modes_case_insensitively() {
+        assert_eq!(
+            EvaluationMode::from_env_value(Some("FULL")),
+            EvaluationMode::Full
+        );
+        assert_eq!(
+            EvaluationMode::from_env_value(Some("smoke")),
+            EvaluationMode::Smoke
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid DRAGON_HEAD_EVAL_MODE")]
+    fn from_env_value_panics_on_unrecognized_mode() {
+        EvaluationMode::from_env_value(Some("bogus"));
+    }
+
+    #[test]
+    fn sanitize_component_does_not_collide_distinct_inputs() {
+        assert_ne!(sanitize_component("a.b"), sanitize_component("a_b"));
+        assert_ne!(sanitize_component("a.b"), sanitize_component("a b"));
+    }
+
+    #[test]
+    fn validate_output_dir_rejects_parent_dir_traversal() {
+        assert!(validate_output_dir("../escape").is_err());
+        assert!(validate_output_dir("target/eval/../../escape").is_err());
+    }
+
+    #[test]
+    fn validate_output_dir_accepts_plain_paths() {
+        assert!(validate_output_dir("target/eval-output").is_ok());
+        assert!(validate_output_dir("/tmp/eval-output").is_ok());
+    }
 }
