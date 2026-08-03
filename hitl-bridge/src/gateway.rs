@@ -84,6 +84,18 @@ impl MintedIdCache {
         id
     }
 
+    /// Read-only lookup for validation paths (e.g. checking a caller-supplied
+    /// ID against the current pending request). Never mints a new ID as a
+    /// side effect — minting here would let a validation check silently
+    /// invalidate an ID a client already holds from [`Self::id_for`], turning
+    /// a legitimate approve/reject into a spurious "no longer pending" error.
+    fn peek(&self, key: &RequestKey) -> Option<Uuid> {
+        match &self.slot {
+            Some((existing_key, id)) if existing_key == key => Some(*id),
+            _ => None,
+        }
+    }
+
     /// Drops the cached ID. Call when no request is pending, so a future
     /// request with the same key — a fresh approval cycle on the same
     /// control — mints a new UUID instead of reusing one the lock registry
@@ -115,9 +127,10 @@ impl PageSessionGateway {
             .id_for(key)
     }
 
-    /// Returns the bridge-minted ID for the current pending request, if `id`
-    /// still matches it. Used to reject stale interactions (e.g. a button
-    /// press for a request that has since been superseded).
+    /// Returns the bridge-minted ID for the current pending request, without
+    /// minting one. Used to validate a caller-supplied ID against the
+    /// current pending request; a validation lookup must not mutate cache
+    /// state (see [`MintedIdCache::peek`]).
     fn current_id(&self) -> Option<Uuid> {
         let pending = self.session.pending_policy_approval()?;
         let key = RequestKey {
@@ -125,7 +138,10 @@ impl PageSessionGateway {
             target_signature: pending.target_signature,
             action: pending.action,
         };
-        Some(self.id_for(&key))
+        self.minted
+            .lock()
+            .expect("minted-id mutex poisoned")
+            .peek(&key)
     }
 }
 
@@ -312,6 +328,44 @@ mod tests {
              must mint a new ID — reusing the old one would make the lock registry \
              treat the fresh request as already resolved"
         );
+    }
+
+    #[test]
+    fn minted_id_cache_peek_returns_none_without_minting_when_nothing_cached() {
+        let cache = MintedIdCache::default();
+        let key = sample_key();
+
+        assert_eq!(cache.peek(&key), None);
+        assert_eq!(
+            cache.peek(&key),
+            None,
+            "peek must not mint an ID as a side effect"
+        );
+    }
+
+    #[test]
+    fn minted_id_cache_peek_returns_the_minted_id_without_minting_a_new_one() {
+        let mut cache = MintedIdCache::default();
+        let key = sample_key();
+
+        let minted = cache.id_for(&key);
+
+        assert_eq!(cache.peek(&key), Some(minted));
+        assert_eq!(cache.peek(&key), Some(minted), "peek must be idempotent");
+    }
+
+    #[test]
+    fn minted_id_cache_peek_returns_none_for_a_different_key_than_the_one_cached() {
+        let mut cache = MintedIdCache::default();
+        let cached_key = sample_key();
+        let other_key = RequestKey {
+            rule_id: "approve-pay".to_string(),
+            target_signature: "sig-456".to_string(),
+            action: "click".to_string(),
+        };
+        cache.id_for(&cached_key);
+
+        assert_eq!(cache.peek(&other_key), None);
     }
 
     #[test]
