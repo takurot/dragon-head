@@ -170,6 +170,11 @@ impl SessionVault for LocalSessionVault {
     }
 
     async fn load_session(&self, session_id: &str) -> Result<Option<SessionData>> {
+        // Lock kms before storage (matching rotate_key_secret's lock order) and
+        // hold kms for the whole read+decrypt: rotate_key_secret also needs the
+        // kms lock, so it cannot retire the key/replace the ciphertext between
+        // our storage snapshot and the decrypt call below.
+        let kms = self.kms.lock().await;
         let (ciphertext, key_id) = {
             let storage = self.storage.lock().await;
             match storage.get(session_id) {
@@ -178,7 +183,6 @@ impl SessionVault for LocalSessionVault {
             }
         };
 
-        let kms = self.kms.lock().await;
         let plaintext = Zeroizing::new(kms.decrypt(&ciphertext, &key_id).await?);
         let data =
             serde_json::from_slice(&plaintext).context("Failed to deserialize session data")?;
@@ -317,10 +321,11 @@ impl KmsAdapter for SoftwareKms {
     }
 
     fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) -> Result<()> {
+        let key = Zeroizing::new(key);
         if self.keys.contains_key(&key_id) {
             anyhow::bail!("Key ID already exists: {key_id}");
         }
-        self.keys.insert(key_id.clone(), Zeroizing::new(key));
+        self.keys.insert(key_id.clone(), key);
         if make_current {
             self.current_key_id = key_id;
         }
