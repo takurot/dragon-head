@@ -297,11 +297,13 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
 
 /// Sanitizes a component for use in a filename. Distinct inputs are mapped to
 /// distinct outputs: allowed characters pass through unchanged, everything
-/// else is escaped as `_u{hex codepoint}_` so unrelated names never collide.
+/// else is escaped as `_u{hex codepoint}_`. `_` itself is always escaped
+/// (never passed through) since it is the escape delimiter — otherwise a
+/// literal `_u2e_` in the input would collide with the escaped form of `.`.
 fn sanitize_component(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
             out.push(ch);
         } else {
             out.push_str(&format!("_u{:x}_", ch as u32));
@@ -367,6 +369,7 @@ mod tests {
     fn sanitize_component_does_not_collide_distinct_inputs() {
         assert_ne!(sanitize_component("a.b"), sanitize_component("a_b"));
         assert_ne!(sanitize_component("a.b"), sanitize_component("a b"));
+        assert_ne!(sanitize_component("a.b"), sanitize_component("a_u2e_b"));
     }
 
     #[test]
