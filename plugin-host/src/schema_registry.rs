@@ -127,8 +127,11 @@ impl ExtractionRule {
                 let sel_json =
                     serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".to_string());
 
-                let field_lines: Vec<String> = fields
-                    .iter()
+                let mut sorted_fields: Vec<(&String, &String)> = fields.iter().collect();
+                sorted_fields.sort_by_key(|(key, _)| key.as_str());
+
+                let field_lines: Vec<String> = sorted_fields
+                    .into_iter()
                     .map(|(key, field_sel)| {
                         let key_json =
                             serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
@@ -421,6 +424,37 @@ mod tests {
         assert!(js.contains("querySelector(\".amt\")"));
         assert!(js.contains("\"price\""));
         assert!(js.contains("items.map"));
+    }
+
+    #[test]
+    fn structured_rule_generates_deterministic_field_order() {
+        let rule_of = |insertion_order: &[&str]| {
+            let mut fields = HashMap::new();
+            for key in insertion_order {
+                fields.insert((*key).to_string(), format!(".{key}"));
+            }
+            ExtractionRule {
+                name: "products".into(),
+                mode: ExtractionMode::Structured {
+                    selector: "tr.product".into(),
+                    fields,
+                },
+            }
+            .to_js_script()
+        };
+
+        let js_a = rule_of(&["price", "name", "sku", "rating"]);
+        let js_b = rule_of(&["rating", "sku", "name", "price"]);
+        assert_eq!(
+            js_a, js_b,
+            "field order must not depend on HashMap insertion order"
+        );
+
+        let name_pos = js_a.find("\"name\"").unwrap();
+        let price_pos = js_a.find("\"price\"").unwrap();
+        let rating_pos = js_a.find("\"rating\"").unwrap();
+        let sku_pos = js_a.find("\"sku\"").unwrap();
+        assert!(name_pos < price_pos && price_pos < rating_pos && rating_pos < sku_pos);
     }
 
     #[test]
