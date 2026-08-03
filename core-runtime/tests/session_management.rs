@@ -215,8 +215,8 @@ impl KmsAdapter for RecordingKms {
         self.inner.current_key_id()
     }
 
-    fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
-        self.inner.add_key(key, key_id, make_current);
+    fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) -> anyhow::Result<()> {
+        self.inner.add_key(key, key_id, make_current)
     }
 
     fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {

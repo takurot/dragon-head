@@ -45,8 +45,9 @@ pub trait KmsAdapter: Send + Sync {
     /// Returns the ID of the current active key.
     fn current_key_id(&self) -> String;
 
-    /// Adds a new key to the adapter.
-    fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool);
+    /// Adds a new key to the adapter. Returns an error if `key_id` already
+    /// exists, so existing key material can never be silently overwritten.
+    fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) -> Result<()>;
 
     /// Returns atomic rotation support when the adapter implements the full
     /// stage/rollback/finalize contract.
@@ -169,20 +170,20 @@ impl SessionVault for LocalSessionVault {
     }
 
     async fn load_session(&self, session_id: &str) -> Result<Option<SessionData>> {
-        {
-            let storage = self.storage.lock().await;
-            if !storage.contains_key(session_id) {
-                return Ok(None);
-            }
-        }
+        // Lock kms before storage (matching rotate_key_secret's lock order) and
+        // hold kms for the whole read+decrypt: rotate_key_secret also needs the
+        // kms lock, so it cannot retire the key/replace the ciphertext between
+        // our storage snapshot and the decrypt call below.
         let kms = self.kms.lock().await;
-        let storage = self.storage.lock().await;
-        let (ciphertext, key_id) = match storage.get(session_id) {
-            Some(entry) => entry,
-            None => return Ok(None),
+        let (ciphertext, key_id) = {
+            let storage = self.storage.lock().await;
+            match storage.get(session_id) {
+                Some((ciphertext, key_id)) => (ciphertext.clone(), key_id.clone()),
+                None => return Ok(None),
+            }
         };
 
-        let plaintext = Zeroizing::new(kms.decrypt(ciphertext, key_id).await?);
+        let plaintext = Zeroizing::new(kms.decrypt(&ciphertext, &key_id).await?);
         let data =
             serde_json::from_slice(&plaintext).context("Failed to deserialize session data")?;
         Ok(Some(data))
@@ -319,12 +320,16 @@ impl KmsAdapter for SoftwareKms {
         self.current_key_id.clone()
     }
 
-    fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
+    fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) -> Result<()> {
         let key = Zeroizing::new(key);
+        if self.keys.contains_key(&key_id) {
+            anyhow::bail!("Key ID already exists: {key_id}");
+        }
         self.keys.insert(key_id.clone(), key);
         if make_current {
             self.current_key_id = key_id;
         }
+        Ok(())
     }
 
     fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
@@ -403,8 +408,8 @@ mod tests {
             self.inner.current_key_id()
         }
 
-        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
-            self.inner.add_key(key, key_id, make_current);
+        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) -> Result<()> {
+            self.inner.add_key(key, key_id, make_current)
         }
     }
 
@@ -426,8 +431,8 @@ mod tests {
             self.inner.current_key_id()
         }
 
-        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
-            self.inner.add_key(key, key_id, make_current);
+        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) -> Result<()> {
+            self.inner.add_key(key, key_id, make_current)
         }
 
         fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
@@ -464,8 +469,8 @@ mod tests {
             self.inner.current_key_id()
         }
 
-        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
-            self.inner.add_key(key, key_id, make_current);
+        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) -> Result<()> {
+            self.inner.add_key(key, key_id, make_current)
         }
 
         fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
@@ -510,8 +515,8 @@ mod tests {
             self.inner.current_key_id()
         }
 
-        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) {
-            self.inner.add_key(key, key_id, make_current);
+        fn add_key(&mut self, key: [u8; 32], key_id: String, make_current: bool) -> Result<()> {
+            self.inner.add_key(key, key_id, make_current)
         }
 
         fn atomic_rotation(&mut self) -> Option<&mut dyn AtomicKmsRotation> {
@@ -755,6 +760,35 @@ mod tests {
 
         assert!(error.to_string().contains("does not support"));
         assert_eq!(vault.kms.lock().await.current_key_id(), "key-1");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_add_key_rejects_overwriting_an_existing_key_id() -> Result<()> {
+        let mut kms = SoftwareKms::new([1u8; 32], "key-1".to_string());
+        let (ciphertext, key_id) = kms.encrypt(b"secret").await?;
+
+        let error = kms
+            .add_key([9u8; 32], "key-1".to_string(), false)
+            .expect_err("add_key must reject a duplicate key ID");
+        assert!(error.to_string().contains("already exists"));
+
+        // The original key material must be untouched by the rejected call.
+        let plaintext = kms.decrypt(&ciphertext, &key_id).await?;
+        assert_eq!(plaintext, b"secret");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_add_key_accepts_a_new_key_id_and_can_make_it_current() -> Result<()> {
+        let mut kms = SoftwareKms::new([1u8; 32], "key-1".to_string());
+
+        kms.add_key([2u8; 32], "key-2".to_string(), true)?;
+
+        assert_eq!(kms.current_key_id(), "key-2");
+        let (ciphertext, key_id) = kms.encrypt(b"secret").await?;
+        assert_eq!(key_id, "key-2");
+        assert_eq!(kms.decrypt(&ciphertext, &key_id).await?, b"secret");
         Ok(())
     }
 }
