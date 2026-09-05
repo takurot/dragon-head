@@ -177,11 +177,15 @@ if (multiStep) {
   console.log(`Running ${activeMultiStep.length} multi-step scenario(s), ${runs} run(s) each...\n`);
 
   const allMultiStepMetrics: MultiStepPlaywrightMetrics[] = [];
+  const skippedScenarios: string[] = [];
   for (const scenario of activeMultiStep) {
     console.log(`[${scenario.name}] ${scenario.url} (${scenario.stepSelectors.length} steps)`);
     // A scenario-level failure (e.g. the launched browser itself crashes)
     // shouldn't abort every scenario after it — report it and move on, same
     // as a single run's failure is already isolated inside measureMultiStepScenario.
+    // The skip is still tracked (see skippedScenarios below) so the process
+    // exit code reflects an incomplete result set instead of reporting
+    // success on a partial JSON output.
     try {
       const { raw, custom } = await measureMultiStepScenario(scenario, runs);
       const m: MultiStepPlaywrightMetrics = {
@@ -200,6 +204,7 @@ if (multiStep) {
       );
     } catch (err) {
       console.error(`  [${scenario.name}] scenario failed, skipping: ${err}`);
+      skippedScenarios.push(scenario.name);
     }
   }
 
@@ -212,6 +217,11 @@ if (multiStep) {
     writeFileSync(outputMd, md);
     console.log(`Markdown report written to ${outputMd}`);
   }
+
+  if (skippedScenarios.length > 0) {
+    console.error(`\n${skippedScenarios.length} scenario(s) skipped: ${skippedScenarios.join(', ')}`);
+    process.exitCode = 1;
+  }
 } else {
   const outputJson = argValue(args, '--output') ?? 'results/playwright-metrics.json';
   const active = scenarioFilter
@@ -221,6 +231,7 @@ if (multiStep) {
   console.log(`Running ${active.length} scenario(s), ${runs} run(s) each...\n`);
 
   const allMetrics: PlaywrightMetrics[] = [];
+  const skippedScenarios: string[] = [];
   for (const scenario of active) {
     console.log(`[${scenario.name}] ${scenario.url}`);
     // Same scenario-level isolation as the multi-step branch above.
@@ -233,6 +244,7 @@ if (multiStep) {
       console.log(`  screenshot:     ${(m.screenshot.avg_bytes / 1024).toFixed(0)} KB`);
     } catch (err) {
       console.error(`  [${scenario.name}] scenario failed, skipping: ${err}`);
+      skippedScenarios.push(scenario.name);
     }
   }
 
@@ -244,5 +256,10 @@ if (multiStep) {
     const md = buildMarkdownReport(allMetrics);
     writeFileSync(outputMd, md);
     console.log(`Markdown report written to ${outputMd}`);
+  }
+
+  if (skippedScenarios.length > 0) {
+    console.error(`\n${skippedScenarios.length} scenario(s) skipped: ${skippedScenarios.join(', ')}`);
+    process.exitCode = 1;
   }
 }
