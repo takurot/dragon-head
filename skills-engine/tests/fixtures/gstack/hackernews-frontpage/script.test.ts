@@ -105,6 +105,15 @@ describe('decodeHtmlEntities coverage (ISSUE-291)', () => {
     const stories = parseStoriesFromHtml(html);
     expect(stories[0].title).toBe('Café — naïve');
   });
+
+  it('leaves an out-of-range numeric entity untouched instead of throwing', () => {
+    const html =
+      '<tr class="athing" id="1"><td class="title"><span class="titleline">' +
+      '<a href="https://example.com/x">Bad&#x110000;Entity and&#9999999;Too</a></span></td></tr>';
+    expect(() => parseStoriesFromHtml(html)).not.toThrow();
+    const stories = parseStoriesFromHtml(html);
+    expect(stories[0].title).toBe('Bad&#x110000;Entity and&#9999999;Too');
+  });
 });
 
 describe('rank sequencing does not gap on skipped rows (ISSUE-291)', () => {
@@ -129,6 +138,13 @@ describe('row matching is attribute-order independent (ISSUE-291)', () => {
     expect(stories).toHaveLength(1);
     expect(stories[0].id).toBe('99');
     expect(stories[0].title).toBe('Reordered attrs');
+  });
+
+  it('does not treat a hyphenated class like "not-athing" as an athing row', () => {
+    const html =
+      '<tr id="1" class="not-athing"><td class="title"><span class="titleline">' +
+      '<a href="https://example.com/x">Should be ignored</a></span></td></tr>';
+    expect(parseStoriesFromHtml(html)).toEqual([]);
   });
 });
 

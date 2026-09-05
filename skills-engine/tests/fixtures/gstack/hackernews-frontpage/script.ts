@@ -62,7 +62,11 @@ export function parseStoriesFromHtml(html: string): Story[] {
   let rank = 0;
   while ((match = rowRegex.exec(html)) !== null) {
     const attrs = match[1];
-    if (!/\bclass="[^"]*\bathing\b[^"]*"/.test(attrs)) continue;
+    // `\b` alone would also match "athing" inside a hyphenated class like
+    // "not-athing" (a `-` is a word-boundary character). Require "athing" to
+    // be its own whitespace-delimited class token instead.
+    const classMatch = attrs.match(/\bclass="([^"]*)"/);
+    if (!classMatch || !classMatch[1].split(/\s+/).includes('athing')) continue;
     const idMatch = attrs.match(/\bid="(\d+)"/);
     if (!idMatch) continue;
     const id = idMatch[1];
@@ -138,15 +142,31 @@ const NAMED_ENTITIES: Record<string, string> = {
   '&reg;': '®',
 };
 
+// Highest valid Unicode scalar value; String.fromCodePoint throws RangeError
+// above this (and MDN doesn't special-case the surrogate-pair range either,
+// so this single upper bound is the only guard actually needed here).
+const MAX_CODE_POINT = 0x10ffff;
+
+/** Decode one numeric entity's captured value, or leave malformed input untouched. */
+function decodeNumericEntity(raw: string, radix: 10 | 16): string {
+  const codePoint = parseInt(raw, radix);
+  if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > MAX_CODE_POINT) {
+    return radix === 16 ? `&#x${raw};` : `&#${raw};`;
+  }
+  return String.fromCodePoint(codePoint);
+}
+
 function decodeHtmlEntities(s: string): string {
   let out = s;
   for (const [entity, char] of Object.entries(NAMED_ENTITIES)) {
     out = out.split(entity).join(char);
   }
   // Numeric entities (decimal &#123; and hex &#x7B;), then the catch-all &amp;.
+  // Malformed input (e.g. &#x110000; — beyond the Unicode scalar range) is
+  // left as-is instead of throwing and aborting the whole scrape.
   out = out
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => decodeNumericEntity(hex, 16))
+    .replace(/&#(\d+);/g, (_, dec) => decodeNumericEntity(dec, 10))
     .replace(/&amp;/g, '&');
   return out;
 }

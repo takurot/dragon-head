@@ -4,20 +4,40 @@
  * construction-time logic only, never `command()`.
  */
 
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { BrowseClient, resolveBrowseAuth } from './browse-client';
 
-const ORIGINAL_BROWSE_TAB = process.env.BROWSE_TAB;
+const ORIGINAL_ENV = {
+  BROWSE_TAB: process.env.BROWSE_TAB,
+  GSTACK_PORT: process.env.GSTACK_PORT,
+  GSTACK_SKILL_TOKEN: process.env.GSTACK_SKILL_TOKEN,
+};
+
+function restoreEnv(key: keyof typeof ORIGINAL_ENV) {
+  const original = ORIGINAL_ENV[key];
+  if (original === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = original;
+  }
+}
+
+// GSTACK_PORT/GSTACK_SKILL_TOKEN take priority over the state-file fallback
+// in resolveBrowseAuth — clear them so the state-file tests below exercise
+// the state-file path deterministically, whether or not the test runner's
+// own environment happens to set them.
+beforeEach(() => {
+  delete process.env.GSTACK_PORT;
+  delete process.env.GSTACK_SKILL_TOKEN;
+});
 
 afterEach(() => {
-  if (ORIGINAL_BROWSE_TAB === undefined) {
-    delete process.env.BROWSE_TAB;
-  } else {
-    process.env.BROWSE_TAB = ORIGINAL_BROWSE_TAB;
-  }
+  restoreEnv('BROWSE_TAB');
+  restoreEnv('GSTACK_PORT');
+  restoreEnv('GSTACK_SKILL_TOKEN');
 });
 
 describe('BrowseClient tabId parsing', () => {
