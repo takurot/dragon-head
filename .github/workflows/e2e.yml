@@ -5,9 +5,19 @@ on:
     - cron: '0 0 * * *'  # Run daily at midnight
   workflow_dispatch:
 
+# Least-privilege default; notify-on-failure declares its own `issues: write` override.
+permissions:
+  contents: read
+
+# Dedup: a manual dispatch shouldn't run concurrently with the nightly cron.
+concurrency:
+  group: e2e-${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   nfr-benchmark-long:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       CHROME_INSTALLED: "true"
       NFR_BENCH_MODE: "full"
@@ -27,6 +37,7 @@ jobs:
       NFR_CAPACITY_MIN_SUCCESS_RATE_PERCENT: "100"
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -54,8 +65,10 @@ jobs:
 
   full-e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -78,8 +91,10 @@ jobs:
 
   mcp-binary-e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -99,6 +114,7 @@ jobs:
 
   evaluation-bench-full:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CHROME_INSTALLED: "true"
       DRAGON_HEAD_EVAL_MODE: "full"
@@ -106,6 +122,7 @@ jobs:
       DRAGON_HEAD_EVAL_DASHBOARD_PATH: "${{ github.workspace }}/target/evaluation-dashboard.md"
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -135,6 +152,7 @@ jobs:
 
   notify-on-failure:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [nfr-benchmark-long, full-e2e, mcp-binary-e2e, evaluation-bench-full]
     if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     permissions:
