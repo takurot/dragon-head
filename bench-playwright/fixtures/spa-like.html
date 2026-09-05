@@ -83,14 +83,24 @@
   <script>
     // SPA-like: render 40 cards dynamically to simulate real-world DOM size
     const categories = ['Technology', 'Design', 'Science', 'Business', 'Culture'];
-    const actions = ['👍 Like', '💬 Comment', '🔗 Share', '🔖 Save'];
+    // One content type per card, cycled — matches the filter buttons' values
+    // (all/articles/discussions/videos/links) so filtering has something
+    // real to compare against.
+    const contentTypes = ['articles', 'discussions', 'videos', 'links'];
 
+    // generateCard only ever interpolates locally-computed values (the
+    // categories/contentTypes constants above, and numeric loop/random
+    // values) — never external/untrusted input. Keep it that way: if this
+    // fixture is ever extended to render server- or user-supplied content,
+    // escape it before interpolating into this template (insertAdjacentHTML
+    // has no HTML-escaping of its own).
     function generateCard(i) {
       const cat = categories[i % categories.length];
+      const type = contentTypes[i % contentTypes.length];
       const likes = Math.floor(Math.random() * 500);
       const comments = Math.floor(Math.random() * 80);
       return `
-        <article class="card" data-id="${i}" aria-labelledby="card-title-${i}">
+        <article class="card" data-id="${i}" data-type="${type}" aria-labelledby="card-title-${i}">
           <div class="card-header">
             <div class="avatar" aria-hidden="true"></div>
             <div>
@@ -112,10 +122,10 @@
             </div>
           </div>
           <div class="card-actions">
-            <button type="button" aria-label="Like post ${i}, currently ${likes} likes" data-action="like" data-post="${i}">👍 ${likes}</button>
+            <button type="button" aria-label="Like post ${i}, currently ${likes} likes" data-action="like" data-post="${i}" data-liked="false">👍 ${likes}</button>
             <button type="button" aria-label="${comments} comments on post ${i}" data-action="comment" data-post="${i}">💬 ${comments}</button>
             <button type="button" aria-label="Share post ${i}" data-action="share" data-post="${i}">🔗 Share</button>
-            <button type="button" aria-label="Bookmark post ${i}" data-action="bookmark" data-post="${i}">🔖</button>
+            <button type="button" aria-label="Bookmark post ${i}" data-action="bookmark" data-post="${i}" data-saved="false">🔖</button>
             <a href="/post/${i}" style="margin-left:auto;font-size:0.8rem;color:#2563eb;">Read more →</a>
           </div>
         </article>
@@ -123,27 +133,57 @@
     }
 
     const feed = document.getElementById('feed');
-    for (let i = 0; i < 40; i++) {
+    let itemCount = 40;
+    for (let i = 0; i < itemCount; i++) {
       feed.insertAdjacentHTML('beforeend', generateCard(i));
     }
 
-    // Filter buttons
+    function applyFilter(filter) {
+      document.querySelectorAll('#feed .card').forEach(card => {
+        card.style.display = (filter === 'all' || card.dataset.type === filter) ? '' : 'none';
+      });
+    }
+
+    let activeFilter = 'all';
+
+    // Filter buttons: actually filter the cards, not just toggle the
+    // pressed-button's own styling.
     document.querySelectorAll('.filter-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        activeFilter = btn.dataset.filter;
+        applyFilter(activeFilter);
       });
     });
 
+    // Card actions: like/bookmark toggle a persisted (data-attribute) state
+    // so a click is observable in the DOM; comment/share are read-only
+    // affordances in this fixture and intentionally have no side effect
+    // beyond being clickable.
+    feed.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      if (btn.dataset.action === 'like') {
+        const liked = btn.dataset.liked === 'true';
+        btn.dataset.liked = String(!liked);
+        btn.classList.toggle('liked', !liked);
+      } else if (btn.dataset.action === 'bookmark') {
+        const saved = btn.dataset.saved === 'true';
+        btn.dataset.saved = String(!saved);
+        btn.classList.toggle('saved', !saved);
+      }
+    });
+
     // Load more
-    let page = 1;
     document.getElementById('load-more').addEventListener('click', () => {
-      const start = 40 * page;
+      const start = itemCount;
       for (let i = start; i < start + 10; i++) {
         feed.insertAdjacentHTML('beforeend', generateCard(i));
       }
-      page++;
-      document.getElementById('status-bar').textContent = `✓ Connected — showing latest ${40 + 10 * page} items`;
+      itemCount += 10;
+      document.getElementById('status-bar').textContent = `✓ Connected — showing latest ${itemCount} items`;
+      applyFilter(activeFilter);
     });
 
     // Compose
