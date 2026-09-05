@@ -30,7 +30,6 @@ class StateChainEntry:
     state_hash: str
     timestamp: int
     kind: str  # "snapshot" | "patch"
-    patch_applied: bool = True
 
 
 @dataclass
@@ -77,11 +76,11 @@ def _apply_json_patch(doc: Any, ops: list[dict]) -> Any:
         parts = _ptr_parts(path)
 
         if operation == "replace":
-            _patch_set(doc, parts, op["value"])
+            doc = _patch_set(doc, parts, op["value"])
         elif operation == "add":
-            _patch_add(doc, parts, op["value"])
+            doc = _patch_add(doc, parts, op["value"])
         elif operation == "remove":
-            _patch_remove(doc, parts)
+            doc = _patch_remove(doc, parts)
         elif operation == "test":
             actual = _patch_get(doc, parts)
             if actual != op.get("value"):
@@ -91,33 +90,52 @@ def _apply_json_patch(doc: Any, ops: list[dict]) -> Any:
         elif operation == "copy":
             from_parts = _ptr_parts(op["from"])
             val = _patch_get(doc, from_parts)
-            _patch_set(doc, parts, val)
+            doc = _patch_set(doc, parts, val)
         elif operation == "move":
             from_parts = _ptr_parts(op["from"])
             val = _patch_get(doc, from_parts)
-            _patch_remove(doc, from_parts)
-            _patch_set(doc, parts, val)
+            doc = _patch_remove(doc, from_parts)
+            doc = _patch_set(doc, parts, val)
         else:
             raise ValueError(f"unsupported patch op: {operation!r}")
     return doc
 
 
 def _ptr_parts(path: str) -> list[str]:
-    """Split a JSON Pointer path into segments, decoding RFC 6902 escape sequences."""
+    """Split a JSON Pointer path into segments, decoding RFC 6902 escape sequences.
+
+    Only the pointer's mandatory leading "" (the artifact of the leading "/")
+    is dropped — every other segment is kept as-is, including a legitimate
+    empty-string key (e.g. "/a//b" points through key "a", then key "", then
+    key "b"; RFC 6901 explicitly allows "" as a reference token). Filtering
+    *all* empty segments would silently collapse "/a//b" into ["a", "b"].
+    """
     if not path:
         return []
-    return [
-        p.replace("~1", "/").replace("~0", "~")
-        for p in path.split("/")
-        if p != ""
-    ]
+    if not path.startswith("/"):
+        raise ValueError(f"invalid JSON Pointer (must start with '/'): {path!r}")
+    return [p.replace("~1", "/").replace("~0", "~") for p in path.split("/")[1:]]
+
+
+def _array_index(part: str) -> int:
+    """Parse an RFC 6901 array index token.
+
+    RFC 6901 restricts an array reference token to "0" or a non-zero digit
+    followed by more digits — no leading zeros, no sign. Python's bare
+    int(part) would silently accept "-1" (and resolve it as the *last*
+    element via Python's negative-index wraparound) or "01", neither of
+    which is a valid JSON Pointer array index.
+    """
+    if part == "0" or (part[:1] not in ("", "0") and part.isdigit()):
+        return int(part)
+    raise ValueError(f"invalid array index in JSON Pointer: {part!r}")
 
 
 def _resolve(doc: Any, parts: list[str]) -> tuple[Any, str]:
     """Walk to the parent of the target; return (parent, last_key)."""
     for part in parts[:-1]:
         if isinstance(doc, list):
-            doc = doc[int(part)]
+            doc = doc[_array_index(part)]
         else:
             doc = doc[part]
     return doc, parts[-1] if parts else ""
@@ -126,43 +144,59 @@ def _resolve(doc: Any, parts: list[str]) -> tuple[Any, str]:
 def _patch_get(doc: Any, parts: list[str]) -> Any:
     for part in parts:
         if isinstance(doc, list):
-            doc = doc[int(part)]
+            doc = doc[_array_index(part)]
         else:
             doc = doc[part]
     return doc
 
 
-def _patch_set(doc: Any, parts: list[str], value: Any) -> None:
+def _patch_set(doc: Any, parts: list[str], value: Any) -> Any:
+    """Apply "replace" (also used for "copy"/"move" targets). Returns the new doc.
+
+    RFC 6902 §4.3: "replace" with a root target path ("") replaces the
+    entire target document with the given value — it is not an error, and
+    since a Python container can't rebind itself in place, the caller must
+    use the returned value as the new document.
+    """
     if not parts:
-        raise ValueError("cannot replace root")
+        return copy.deepcopy(value)
     parent, key = _resolve(doc, parts)
     if isinstance(parent, list):
-        parent[int(key)] = value
+        parent[_array_index(key)] = value
     else:
         parent[key] = value
+    return doc
 
 
-def _patch_add(doc: Any, parts: list[str], value: Any) -> None:
+def _patch_add(doc: Any, parts: list[str], value: Any) -> Any:
+    """Apply "add". Returns the new doc — see _patch_set's root-path note.
+
+    RFC 6902 §4.1: "add" with a root target path also replaces the entire
+    target document (the "member/element does not exist" case is vacuous
+    at the root — there's nothing to insert into).
+    """
     if not parts:
-        raise ValueError("cannot add to root")
+        return copy.deepcopy(value)
     parent, key = _resolve(doc, parts)
     if isinstance(parent, list):
         if key == "-":
             parent.append(value)
         else:
-            parent.insert(int(key), value)
+            parent.insert(_array_index(key), value)
     else:
         parent[key] = value
+    return doc
 
 
-def _patch_remove(doc: Any, parts: list[str]) -> None:
+def _patch_remove(doc: Any, parts: list[str]) -> Any:
     if not parts:
-        raise ValueError("cannot remove root")
+        raise ValueError("cannot remove root document")
     parent, key = _resolve(doc, parts)
     if isinstance(parent, list):
-        del parent[int(key)]
+        del parent[_array_index(key)]
     else:
         del parent[key]
+    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +210,9 @@ def _contains_redaction(value: Any) -> bool:
     if isinstance(value, list):
         return any(_contains_redaction(v) for v in value)
     if isinstance(value, dict):
-        return any(_contains_redaction(v) for v in value.values())
+        return any(_contains_redaction(k) for k in value) or any(
+            _contains_redaction(v) for v in value.values()
+        )
     return False
 
 
@@ -225,7 +261,6 @@ def replay_events(events: list[dict]) -> ReplayReport:
                 state_hash=state_hash,
                 timestamp=timestamp,
                 kind="patch",
-                patch_applied=True,
             ))
 
         elif event_type == "TOOL_CALL":
@@ -329,6 +364,14 @@ def report_to_json(report: ReplayReport) -> str:
 # ---------------------------------------------------------------------------
 
 def _parse_ndjson(path: Path) -> list[dict]:
+    """Parse a newline-delimited JSON file. Raises ValueError on a malformed line.
+
+    Raising (rather than calling sys.exit directly) keeps this usable as a
+    library function — a caller other than this file's own CLI (e.g. a test,
+    or another script importing it) can catch the error and decide how to
+    report it, instead of having the whole process terminated out from under
+    it.
+    """
     events: list[dict] = []
     with path.open(encoding="utf-8") as fh:
         for lineno, line in enumerate(fh, 1):
@@ -338,8 +381,7 @@ def _parse_ndjson(path: Path) -> list[dict]:
             try:
                 events.append(json.loads(line))
             except json.JSONDecodeError as exc:
-                print(f"[ERROR] line {lineno}: {exc}", file=sys.stderr)
-                sys.exit(1)
+                raise ValueError(f"line {lineno}: {exc}") from exc
     return events
 
 
@@ -366,7 +408,11 @@ def main() -> None:
         print(f"[ERROR] File not found: {args.input}", file=sys.stderr)
         sys.exit(1)
 
-    events = _parse_ndjson(args.input)
+    try:
+        events = _parse_ndjson(args.input)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        sys.exit(1)
 
     try:
         report = replay_events(events)
