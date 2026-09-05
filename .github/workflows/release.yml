@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+# Least-privilege default; jobs that need more (release: contents:write,
+# npm-publish-*: id-token:write) declare their own override.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -40,7 +45,7 @@ jobs:
       # so save-if never writes back — this is intentional to avoid polluting
       # the main-branch cache with release-specific target artifacts.
       # The cross job (Docker-based) gets no cache benefit; skip it there.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
         if: '!matrix.cross'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -50,7 +55,7 @@ jobs:
 
       - name: Install cross (Linux arm64 only)
         if: matrix.cross
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
           tool: cross
 
@@ -111,7 +116,7 @@ jobs:
         run: ls -lh dist/
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/*
           generate_release_notes: true
@@ -194,6 +199,16 @@ jobs:
               echo "::notice::${pkg_name}@${NPM_VERSION} already published, skipping."
             else
               for attempt in 1 2 3; do
+                # Re-check on every attempt, not just before the loop: a prior
+                # attempt can succeed on the registry while the step still
+                # reports failure (e.g. the connection drops after the publish
+                # lands but before npm reads the response). Without this check
+                # a retry would hit "cannot publish over previously published
+                # version" and the loop would exhaust as a false failure.
+                if npm view "${pkg_name}@${NPM_VERSION}" version 2>/dev/null | grep -qF "${NPM_VERSION}"; then
+                  echo "::notice::${pkg_name}@${NPM_VERSION} already published (detected before attempt $attempt), skipping."
+                  break
+                fi
                 # Prefix with ./ so npm treats this as a directory path, not
                 # a "user/repo" GitHub shorthand (npm/platform/* is fine, but
                 # an abundance of caution avoids any ambiguity).
@@ -204,8 +219,15 @@ jobs:
                   echo "Attempt $attempt failed for ${platform_dir}, retrying in 15s..."
                   sleep 15
                 else
-                  echo "::error::All 3 publish attempts failed for ${platform_dir}"
-                  exit 1
+                  # Last chance: confirm the final attempt didn't actually
+                  # succeed despite reporting failure before treating this as
+                  # a hard error.
+                  if npm view "${pkg_name}@${NPM_VERSION}" version 2>/dev/null | grep -qF "${NPM_VERSION}"; then
+                    echo "::notice::${pkg_name}@${NPM_VERSION} published despite reported failure, continuing."
+                  else
+                    echo "::error::All 3 publish attempts failed for ${platform_dir}"
+                    exit 1
+                  fi
                 fi
               done
             fi
@@ -252,6 +274,16 @@ jobs:
             echo "::notice::${pkg_name}@${NPM_VERSION} already published, skipping."
           else
             for attempt in 1 2 3; do
+              # Re-check on every attempt, not just before the loop: a prior
+              # attempt can succeed on the registry while the step still
+              # reports failure (e.g. the connection drops after the publish
+              # lands but before npm reads the response). Without this check
+              # a retry would hit "cannot publish over previously published
+              # version" and the loop would exhaust as a false failure.
+              if npm view "${pkg_name}@${NPM_VERSION}" version 2>/dev/null | grep -qF "${NPM_VERSION}"; then
+                echo "::notice::${pkg_name}@${NPM_VERSION} already published (detected before attempt $attempt), skipping."
+                break
+              fi
               # Use ./ prefix: "npm/dragon-head-mcp" without it is ambiguous
               # and npm 11 misreads it as the "npm" GitHub org + "dragon-head-mcp"
               # repo shorthand, triggering a git ls-remote that always fails.
@@ -262,8 +294,15 @@ jobs:
                 echo "Attempt $attempt failed for wrapper, retrying in 15s..."
                 sleep 15
               else
-                echo "::error::All 3 publish attempts failed for wrapper"
-                exit 1
+                # Last chance: confirm the final attempt didn't actually
+                # succeed despite reporting failure before treating this as
+                # a hard error.
+                if npm view "${pkg_name}@${NPM_VERSION}" version 2>/dev/null | grep -qF "${NPM_VERSION}"; then
+                  echo "::notice::${pkg_name}@${NPM_VERSION} published despite reported failure, continuing."
+                else
+                  echo "::error::All 3 publish attempts failed for wrapper"
+                  exit 1
+                fi
               fi
             done
           fi
