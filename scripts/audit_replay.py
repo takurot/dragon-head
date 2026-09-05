@@ -72,7 +72,14 @@ def _apply_json_patch(doc: Any, ops: list[dict]) -> Any:
     doc = copy.deepcopy(doc)
     for op in ops:
         operation = op.get("op")
-        path = op.get("path", "")
+        # RFC 6902 §4 requires every operation object to carry "path" — it's
+        # not optional. `.get("path", "")` would treat a member the sender
+        # simply omitted the same as an explicit root path (""), silently
+        # accepting a malformed op like {"op": "replace", "value": ...}
+        # instead of failing validation. Missing here raises KeyError, which
+        # replay_events already treats as a patch-application failure (same
+        # as the existing op["value"]/op["from"] accesses below).
+        path = op["path"]
         parts = _ptr_parts(path)
 
         if operation == "replace":
@@ -228,12 +235,19 @@ def replay_events(events: list[dict]) -> ReplayReport:
     """
     report = ReplayReport(total_events=len(events), has_redacted_content=False)
     current_snapshot: Optional[Any] = None
+    # Tracked separately from current_snapshot's value: a root-path STATE_PATCH
+    # (RFC 6902 replace/add at path "") can legitimately set the document to
+    # JSON null, and `current_snapshot is None` alone can't distinguish that
+    # from "no STATE_SNAPSHOT seen yet" — which would otherwise make the
+    # very next STATE_PATCH falsely fail with "no preceding STATE_SNAPSHOT".
+    have_snapshot = False
 
     for event in events:
         event_type = event.get("type")
 
         if event_type == "STATE_SNAPSHOT":
             current_snapshot = event.get("payload")
+            have_snapshot = True
             report.state_chain.append(StateChainEntry(
                 state_hash=event.get("state_hash", ""),
                 timestamp=event.get("timestamp", 0),
@@ -245,7 +259,7 @@ def replay_events(events: list[dict]) -> ReplayReport:
         elif event_type == "STATE_PATCH":
             state_hash = event.get("state_hash", "")
             timestamp = event.get("timestamp", 0)
-            if current_snapshot is None:
+            if not have_snapshot:
                 raise ValueError(
                     f"STATE_PATCH (hash={state_hash}, t={timestamp}) has no preceding STATE_SNAPSHOT"
                 )

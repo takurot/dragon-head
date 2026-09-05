@@ -26,6 +26,12 @@ class TestApplyJsonPatch(unittest.TestCase):
         with self.assertRaises(ValueError):
             audit_replay._apply_json_patch({"a": 1}, [{"op": "remove", "path": ""}])
 
+    def test_missing_path_member_is_rejected(self):
+        # {"op": "replace", "value": ...} with no "path" at all must not be
+        # silently treated as an explicit root path "".
+        with self.assertRaises((ValueError, KeyError)):
+            audit_replay._apply_json_patch({"a": 1}, [{"op": "replace", "value": {"b": 2}}])
+
     def test_replace_nested_field(self):
         result = audit_replay._apply_json_patch({"a": {"b": 1}}, [{"op": "replace", "path": "/a/b", "value": 2}])
         self.assertEqual(result, {"a": {"b": 2}})
@@ -147,6 +153,39 @@ class TestStateChainEntryHasNoDeadField(unittest.TestCase):
         # constructing an entry for a failed patch) — dead state, removed.
         entry = audit_replay.StateChainEntry(state_hash="h", timestamp=1, kind="patch")
         self.assertFalse(hasattr(entry, "patch_applied"))
+
+
+class TestReplayEventsSnapshotTracking(unittest.TestCase):
+    def test_state_patch_after_snapshot_becomes_null_still_applies(self):
+        # A root-path replace/add can legitimately set the document to JSON
+        # null. `current_snapshot is None` alone can't distinguish that from
+        # "no snapshot yet" — it must not make the *next* STATE_PATCH falsely
+        # fail with "no preceding STATE_SNAPSHOT".
+        events = [
+            {"type": "STATE_SNAPSHOT", "state_hash": "h1", "timestamp": 1, "payload": {"a": 1}},
+            {
+                "type": "STATE_PATCH",
+                "state_hash": "h2",
+                "timestamp": 2,
+                "patch": [{"op": "replace", "path": "", "value": None}],
+            },
+            {
+                "type": "STATE_PATCH",
+                "state_hash": "h3",
+                "timestamp": 3,
+                "patch": [{"op": "replace", "path": "", "value": {"b": 2}}],
+            },
+        ]
+        report = audit_replay.replay_events(events)
+        self.assertEqual(len(report.state_chain), 3)
+        self.assertEqual(report.state_chain[-1].kind, "patch")
+
+    def test_state_patch_before_any_snapshot_is_rejected(self):
+        events = [
+            {"type": "STATE_PATCH", "state_hash": "h1", "timestamp": 1, "patch": []},
+        ]
+        with self.assertRaises(ValueError):
+            audit_replay.replay_events(events)
 
 
 if __name__ == "__main__":
