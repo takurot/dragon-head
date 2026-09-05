@@ -502,20 +502,33 @@ fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<
     // never does: this test exists specifically to exercise click-driven
     // navigation, so silently skipping on a real regression there would be
     // a false pass on the exact behavior under test.
+    //
+    // Wait for BOTH the URL to change AND page B's button to be findable in
+    // one loop, not two separate waits: `window.location.href` can update
+    // before the new document finishes parsing, so a URL-only check can
+    // exit while `find_button_info` still transiently fails (or errors,
+    // while Chrome is mid-swap of the execution context) — treat that as
+    // "not ready yet" rather than a hard error.
     let nav_deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if page.current_url()?.as_str() == url_b {
-            break;
+    let (target_id_b, target_key_b) = loop {
+        let url_matches = page.current_url()?.as_str() == url_b;
+        let button = if url_matches {
+            find_button_info(&page).ok()
+        } else {
+            None
+        };
+        if let Some(info) = button {
+            break info;
         }
         anyhow::ensure!(
             std::time::Instant::now() < nav_deadline,
-            "click-driven navigation to page B never completed (still on {}); \
-             can't verify approval-expiry behavior without it",
+            "click-driven navigation to page B never completed (still on {}, \
+             or its button never became findable); can't verify \
+             approval-expiry behavior without it",
             page.current_url()?,
         );
         std::thread::sleep(Duration::from_millis(50));
-    }
-    let (target_id_b, target_key_b) = find_button_info(&page)?;
+    };
 
     // The URL is now url_b, but the grant recorded url_a. Approval must be expired.
     let post_nav_attempt = page.act(Some(target_id_b), Some(&target_key_b), "click", None);
