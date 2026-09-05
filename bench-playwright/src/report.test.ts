@@ -88,4 +88,31 @@ describe('buildMultiStepMarkdownReport', () => {
     const md = buildMultiStepMarkdownReport([sampleMultiStepMetrics]);
     expect(md).toContain('no delta-delivery concept');
   });
+
+  it('does not throw and bounds the table when custom_extract has fewer steps than raw_html (ISSUE-278)', () => {
+    const mismatched: MultiStepPlaywrightMetrics = {
+      ...sampleMultiStepMetrics,
+      raw_html: {
+        runs: 2,
+        steps: 3,
+        avg_step_bytes: [20000, 20100, 20200],
+        cumulative_avg_bytes: [20000, 40100, 60300],
+        success_rate: 100,
+      },
+      custom_extract: {
+        runs: 2,
+        steps: 1,
+        avg_step_bytes: [5000],
+        cumulative_avg_bytes: [5000],
+        success_rate: 50,
+      },
+    };
+    expect(() => buildMultiStepMarkdownReport([mismatched])).not.toThrow();
+    const md = buildMultiStepMarkdownReport([mismatched]);
+    // Only the first (shared) step should appear in the table.
+    expect(md).toContain('5000');
+    expect(md).not.toContain('40100');
+    expect(md).toContain('**Steps:** 1');
+    expect(md).toContain('raw HTML captured 3 step(s) but custom extract only 1');
+  });
 });

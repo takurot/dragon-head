@@ -11,6 +11,20 @@ import {
 } from './metrics.js';
 import { SCENARIOS, MULTI_STEP_SCENARIOS, type MultiStepScenario } from './scenarios.js';
 import { buildMarkdownReport, buildMultiStepMarkdownReport } from './report.js';
+import { argValue } from './cli-args.js';
+
+const DEFAULT_RUNS = 3;
+
+/** Parse --runs=N, falling back to DEFAULT_RUNS on missing/non-numeric/non-positive input. */
+function parseRuns(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_RUNS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    console.error(`--runs=${raw} is not a positive integer; using default (${DEFAULT_RUNS}).`);
+    return DEFAULT_RUNS;
+  }
+  return n;
+}
 
 // Extract only interactive elements — mirrors what browser-use and similar
 // LLM browser integrations do to reduce context size. Shared between the
@@ -37,51 +51,58 @@ async function measureUrl(url: string, runs: number): Promise<RunResult[]> {
   const browser = await chromium.launch({ headless: true });
   const results: RunResult[] = [];
 
-  for (let i = 0; i < runs; i++) {
-    const page = await browser.newPage();
-    let raw_html_bytes = 0;
-    let custom_extract_bytes = 0;
-    let screenshot_bytes = 0;
-    let raw_success = false;
-    let custom_success = false;
-    let screenshot_success = false;
-    let ttft_ms = 0;
+  // The outer try/finally guarantees browser.close() runs even if a run
+  // throws before reaching its own try (e.g. browser.newPage() itself
+  // fails) — without it, a failure there would leak the browser process.
+  try {
+    for (let i = 0; i < runs; i++) {
+      let page: Page | undefined;
+      let raw_html_bytes = 0;
+      let custom_extract_bytes = 0;
+      let screenshot_bytes = 0;
+      let raw_success = false;
+      let custom_success = false;
+      let screenshot_success = false;
+      let ttft_ms = 0;
 
-    try {
-      const t0 = Date.now();
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
-      ttft_ms = Date.now() - t0;
+      try {
+        page = await browser.newPage();
+        const t0 = Date.now();
+        await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+        ttft_ms = Date.now() - t0;
 
-      const html = await page.content();
-      raw_html_bytes = Buffer.byteLength(html, 'utf8');
-      raw_success = true;
+        const html = await page.content();
+        raw_html_bytes = Buffer.byteLength(html, 'utf8');
+        raw_success = true;
 
-      custom_extract_bytes = await extractInteractiveElementsBytes(page);
-      custom_success = true;
+        custom_extract_bytes = await extractInteractiveElementsBytes(page);
+        custom_success = true;
 
-      const screenshot = await page.screenshot({ type: 'png' });
-      screenshot_bytes = screenshot.length;
-      screenshot_success = true;
-    } catch (err) {
-      console.error(`  Run ${i + 1} failed: ${err}`);
-    } finally {
-      await page.close();
+        const screenshot = await page.screenshot({ type: 'png' });
+        screenshot_bytes = screenshot.length;
+        screenshot_success = true;
+      } catch (err) {
+        console.error(`  Run ${i + 1} failed: ${err}`);
+      } finally {
+        await page?.close();
+      }
+
+      results.push({
+        url,
+        run_idx: i,
+        raw_html_bytes,
+        custom_extract_bytes,
+        screenshot_bytes,
+        ttft_ms,
+        raw_success,
+        custom_success,
+        screenshot_success,
+      });
     }
-
-    results.push({
-      url,
-      run_idx: i,
-      raw_html_bytes,
-      custom_extract_bytes,
-      screenshot_bytes,
-      ttft_ms,
-      raw_success,
-      custom_success,
-      screenshot_success,
-    });
+  } finally {
+    await browser.close();
   }
 
-  await browser.close();
   return results;
 }
 
@@ -101,51 +122,54 @@ async function measureMultiStepScenario(
   const raw: MultiStepRunResult[] = [];
   const custom: MultiStepRunResult[] = [];
 
-  for (let i = 0; i < runs; i++) {
-    const page = await browser.newPage();
-    const rawStepBytes: number[] = [];
-    const customStepBytes: number[] = [];
-    let success = true;
+  try {
+    for (let i = 0; i < runs; i++) {
+      let page: Page | undefined;
+      const rawStepBytes: number[] = [];
+      const customStepBytes: number[] = [];
+      let success = true;
 
-    const measureStep = async () => {
-      const html = await page.content();
-      rawStepBytes.push(Buffer.byteLength(html, 'utf8'));
-      customStepBytes.push(await extractInteractiveElementsBytes(page));
-    };
+      try {
+        page = await browser.newPage();
+        const measureStep = async () => {
+          const html = await page!.content();
+          rawStepBytes.push(Buffer.byteLength(html, 'utf8'));
+          customStepBytes.push(await extractInteractiveElementsBytes(page!));
+        };
 
-    try {
-      await page.goto(scenario.url, { waitUntil: 'networkidle', timeout: 30_000 });
-      await measureStep(); // step 0: initial full capture
+        await page.goto(scenario.url, { waitUntil: 'networkidle', timeout: 30_000 });
+        await measureStep(); // step 0: initial full capture
 
-      for (const selector of scenario.stepSelectors) {
-        await page.click(selector, { timeout: 5_000 });
-        await measureStep();
+        for (const selector of scenario.stepSelectors) {
+          await page.click(selector, { timeout: 5_000 });
+          await measureStep();
+        }
+      } catch (err) {
+        console.error(`  Run ${i + 1} failed: ${err}`);
+        success = false;
+      } finally {
+        await page?.close();
       }
-    } catch (err) {
-      console.error(`  Run ${i + 1} failed: ${err}`);
-      success = false;
-    } finally {
-      await page.close();
-    }
 
-    raw.push({ run_idx: i, step_bytes: rawStepBytes, success });
-    custom.push({ run_idx: i, step_bytes: customStepBytes, success });
+      raw.push({ run_idx: i, step_bytes: rawStepBytes, success });
+      custom.push({ run_idx: i, step_bytes: customStepBytes, success });
+    }
+  } finally {
+    await browser.close();
   }
 
-  await browser.close();
   return { raw, custom };
 }
 
 // CLI
 const args = process.argv.slice(2);
-const runs = Number(args.find((a) => a.startsWith('--runs='))?.split('=')[1] ?? 3);
-const outputMd = args.find((a) => a.startsWith('--output-md='))?.split('=')[1];
-const scenarioFilter = args.find((a) => a.startsWith('--scenarios='))?.split('=')[1]?.split(',');
+const runs = parseRuns(argValue(args, '--runs'));
+const outputMd = argValue(args, '--output-md');
+const scenarioFilter = argValue(args, '--scenarios')?.split(',');
 const multiStep = args.includes('--multi-step');
 
 if (multiStep) {
-  const outputJson =
-    args.find((a) => a.startsWith('--output='))?.split('=')[1] ?? 'results/playwright-multi-step.json';
+  const outputJson = argValue(args, '--output') ?? 'results/playwright-multi-step.json';
   const activeMultiStep = scenarioFilter
     ? MULTI_STEP_SCENARIOS.filter((s) => scenarioFilter.includes(s.name))
     : MULTI_STEP_SCENARIOS;
@@ -155,21 +179,28 @@ if (multiStep) {
   const allMultiStepMetrics: MultiStepPlaywrightMetrics[] = [];
   for (const scenario of activeMultiStep) {
     console.log(`[${scenario.name}] ${scenario.url} (${scenario.stepSelectors.length} steps)`);
-    const { raw, custom } = await measureMultiStepScenario(scenario, runs);
-    const m: MultiStepPlaywrightMetrics = {
-      name: scenario.name,
-      url: scenario.url,
-      runs,
-      raw_html: aggregateMultiStepResults(raw),
-      custom_extract: aggregateMultiStepResults(custom),
-    };
-    allMultiStepMetrics.push(m);
-    console.log(
-      `  raw HTML cumulative:       ${m.raw_html.cumulative_avg_bytes.at(-1)?.toFixed(0) ?? 0} bytes`,
-    );
-    console.log(
-      `  custom extract cumulative: ${m.custom_extract.cumulative_avg_bytes.at(-1)?.toFixed(0) ?? 0} bytes`,
-    );
+    // A scenario-level failure (e.g. the launched browser itself crashes)
+    // shouldn't abort every scenario after it — report it and move on, same
+    // as a single run's failure is already isolated inside measureMultiStepScenario.
+    try {
+      const { raw, custom } = await measureMultiStepScenario(scenario, runs);
+      const m: MultiStepPlaywrightMetrics = {
+        name: scenario.name,
+        url: scenario.url,
+        runs,
+        raw_html: aggregateMultiStepResults(raw),
+        custom_extract: aggregateMultiStepResults(custom),
+      };
+      allMultiStepMetrics.push(m);
+      console.log(
+        `  raw HTML cumulative:       ${m.raw_html.cumulative_avg_bytes.at(-1)?.toFixed(0) ?? 0} bytes`,
+      );
+      console.log(
+        `  custom extract cumulative: ${m.custom_extract.cumulative_avg_bytes.at(-1)?.toFixed(0) ?? 0} bytes`,
+      );
+    } catch (err) {
+      console.error(`  [${scenario.name}] scenario failed, skipping: ${err}`);
+    }
   }
 
   mkdirSync(dirname(outputJson), { recursive: true });
@@ -182,8 +213,7 @@ if (multiStep) {
     console.log(`Markdown report written to ${outputMd}`);
   }
 } else {
-  const outputJson =
-    args.find((a) => a.startsWith('--output='))?.split('=')[1] ?? 'results/playwright-metrics.json';
+  const outputJson = argValue(args, '--output') ?? 'results/playwright-metrics.json';
   const active = scenarioFilter
     ? SCENARIOS.filter((s) => scenarioFilter.includes(s.name))
     : SCENARIOS;
@@ -193,12 +223,17 @@ if (multiStep) {
   const allMetrics: PlaywrightMetrics[] = [];
   for (const scenario of active) {
     console.log(`[${scenario.name}] ${scenario.url}`);
-    const results = await measureUrl(scenario.url, runs);
-    const m = aggregateResults(scenario.url, results);
-    allMetrics.push(m);
-    console.log(`  raw HTML:       ${m.raw_html.avg_tokens} tokens  (${m.raw_html.avg_ttft_ms.toFixed(0)} ms TTFT)`);
-    console.log(`  custom extract: ${m.custom_extract.avg_tokens} tokens`);
-    console.log(`  screenshot:     ${(m.screenshot.avg_bytes / 1024).toFixed(0)} KB`);
+    // Same scenario-level isolation as the multi-step branch above.
+    try {
+      const results = await measureUrl(scenario.url, runs);
+      const m = aggregateResults(scenario.url, results);
+      allMetrics.push(m);
+      console.log(`  raw HTML:       ${m.raw_html.avg_tokens} tokens  (${m.raw_html.avg_ttft_ms.toFixed(0)} ms TTFT)`);
+      console.log(`  custom extract: ${m.custom_extract.avg_tokens} tokens`);
+      console.log(`  screenshot:     ${(m.screenshot.avg_bytes / 1024).toFixed(0)} KB`);
+    } catch (err) {
+      console.error(`  [${scenario.name}] scenario failed, skipping: ${err}`);
+    }
   }
 
   mkdirSync(dirname(outputJson), { recursive: true });
