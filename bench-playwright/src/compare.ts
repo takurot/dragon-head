@@ -1,7 +1,25 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, realpathSync } from 'fs';
 import { dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { reductionPct, costUsd, GPT4O_COST_PER_MILLION, type PlaywrightMetrics } from './metrics.js';
 import { argValue } from './cli-args.js';
+
+/** Read and JSON.parse a metrics file, with a clear error instead of a raw stack trace. */
+function readMetricsFile(path: string, label: string): unknown {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (err) {
+    console.error(`Failed to read ${label} metrics file "${path}": ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.error(`Failed to parse ${label} metrics file "${path}" as JSON: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
+}
 
 export interface DragonHeadApproachMetrics {
   avg_tokens: number;
@@ -67,8 +85,29 @@ export function buildComparisonMarkdown(
   return lines.join('\n');
 }
 
-// CLI entry point
-if (process.argv[1]?.endsWith('compare.ts') || process.argv[1]?.endsWith('compare.js')) {
+// CLI entry point. Compares this module's real (symlink-resolved) path
+// against the invoked script's real path — the ESM idiom for "is this the
+// entry module", replacing CommonJS's `require.main === module` — rather
+// than `endsWith('compare.ts')`, which breaks under a renamed copy or any
+// invocation path that doesn't literally end in that filename.
+//
+// realpathSync on both sides (not just import.meta.url) matters: Node
+// resolves import.meta.url to the real target of a symlink, but leaves
+// process.argv[1] as the symlink path the user actually typed — comparing
+// one resolved and one not would silently skip this whole block (and the
+// CLI would exit 0 having done nothing) for exactly the symlink case this
+// fix exists to support.
+function isMainModule(): boolean {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(argv1);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const args = process.argv.slice(2);
   const pwPath = argValue(args, '--playwright');
   const dhPath = argValue(args, '--dragon-head');
@@ -80,8 +119,8 @@ if (process.argv[1]?.endsWith('compare.ts') || process.argv[1]?.endsWith('compar
     process.exit(1);
   }
 
-  const pwData: PlaywrightMetrics[] = JSON.parse(readFileSync(pwPath, 'utf8'));
-  const dhData: DragonHeadMetrics[] = JSON.parse(readFileSync(dhPath, 'utf8'));
+  const pwData = readMetricsFile(pwPath, 'Playwright') as PlaywrightMetrics[];
+  const dhData = readMetricsFile(dhPath, 'Dragon Head') as DragonHeadMetrics[];
   const md = buildComparisonMarkdown(pwData, dhData);
 
   const outputPath = argValue(args, '--output') ?? 'comparison-report.md';

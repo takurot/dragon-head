@@ -1,3 +1,11 @@
 node_modules/
 results/
 dist/
+
+# Playwright's own default output dirs (HTML report, traces/videos/screenshots).
+playwright-report/
+test-results/
+
+# Local env files — never commit secrets/config overrides.
+.env
+.env.*

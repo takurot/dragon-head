@@ -15,6 +15,18 @@ import { argValue } from './cli-args.js';
 
 const DEFAULT_RUNS = 3;
 
+/** Write the JSON results file (and an optional markdown report) and log both paths. */
+function persistResults(outputJson: string, data: unknown, outputMd: string | undefined, markdown: string | undefined): void {
+  mkdirSync(dirname(outputJson), { recursive: true });
+  writeFileSync(outputJson, JSON.stringify(data, null, 2));
+  console.log(`\nJSON results written to ${outputJson}`);
+
+  if (outputMd && markdown !== undefined) {
+    writeFileSync(outputMd, markdown);
+    console.log(`Markdown report written to ${outputMd}`);
+  }
+}
+
 /** Parse --runs=N, falling back to DEFAULT_RUNS on missing/non-numeric/non-positive input. */
 function parseRuns(raw: string | undefined): number {
   if (raw === undefined) return DEFAULT_RUNS;
@@ -208,15 +220,12 @@ if (multiStep) {
     }
   }
 
-  mkdirSync(dirname(outputJson), { recursive: true });
-  writeFileSync(outputJson, JSON.stringify(allMultiStepMetrics, null, 2));
-  console.log(`\nJSON results written to ${outputJson}`);
-
-  if (outputMd) {
-    const md = buildMultiStepMarkdownReport(allMultiStepMetrics);
-    writeFileSync(outputMd, md);
-    console.log(`Markdown report written to ${outputMd}`);
-  }
+  persistResults(
+    outputJson,
+    allMultiStepMetrics,
+    outputMd,
+    outputMd ? buildMultiStepMarkdownReport(allMultiStepMetrics) : undefined,
+  );
 
   if (skippedScenarios.length > 0) {
     console.error(`\n${skippedScenarios.length} scenario(s) skipped: ${skippedScenarios.join(', ')}`);
@@ -248,15 +257,7 @@ if (multiStep) {
     }
   }
 
-  mkdirSync(dirname(outputJson), { recursive: true });
-  writeFileSync(outputJson, JSON.stringify(allMetrics, null, 2));
-  console.log(`\nJSON results written to ${outputJson}`);
-
-  if (outputMd) {
-    const md = buildMarkdownReport(allMetrics);
-    writeFileSync(outputMd, md);
-    console.log(`Markdown report written to ${outputMd}`);
-  }
+  persistResults(outputJson, allMetrics, outputMd, outputMd ? buildMarkdownReport(allMetrics) : undefined);
 
   if (skippedScenarios.length > 0) {
     console.error(`\n${skippedScenarios.length} scenario(s) skipped: ${skippedScenarios.join(', ')}`);
