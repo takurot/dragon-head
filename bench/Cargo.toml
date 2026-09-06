@@ -2,7 +2,9 @@
 name = "bench"
 version = "0.1.0"
 edition = "2021"
+rust-version.workspace = true
 license.workspace = true
+description = "NFR / ROI benchmarking harness and dashboard report generation for dragon-head (dragon-head-bench binary)"
 
 [dependencies]
 anyhow = { workspace = true }

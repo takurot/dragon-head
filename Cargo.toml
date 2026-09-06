@@ -13,9 +13,24 @@ resolver = "2"
 
 [workspace.package]
 license = "MIT"
+repository = "https://github.com/takurot/dragon-head"
+# Edition is intentionally NOT uniform across the workspace: plugin-host,
+# skills-engine, and marketplace are on 2024 (skills-engine relies on
+# 2024 let-chains); the rest stay on 2021 to avoid the incidental
+# workspace-wide rustfmt import-reordering and unsafe_op_in_unsafe_fn churn
+# that a forced 2024 convergence would otherwise cause. Both editions need
+# Rust >= 1.85, which is the workspace's effective MSRV floor either way.
+rust-version = "1.85"
 
 [workspace.dependencies]
-tokio = { version = "1.36", features = ["full"] }
+# rt-multi-thread: core-runtime's `Runtime::new()` builds a multi-thread
+#                  runtime (implies `rt`, which also covers hitl-bridge's
+#                  `Builder::new_current_thread()`)
+# macros:          `#[tokio::test]`
+# sync:            `tokio::sync::Mutex` (core-runtime)
+# time:            `tokio::time::timeout` (core-runtime)
+# net:             `tokio::net::TcpListener` (hitl-bridge)
+tokio = { version = "1.36", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 anyhow = "1.0"
 thiserror = "1.0"
 tracing = "0.1"
@@ -24,6 +39,10 @@ headless_chrome = "=1.0.21"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+ed25519-dalek = "2.1"
+jsonschema = "0.37"
 
 [profile.test]
 # Keep the default workspace test and compile-only verification paths stable across developer filesystems.

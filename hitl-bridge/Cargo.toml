@@ -2,7 +2,9 @@
 name = "hitl-bridge"
 version = "0.1.0"
 edition = "2021"
+rust-version.workspace = true
 license.workspace = true
+description = "Slack/Teams human-in-the-loop reference bridge for ask_human (HMAC-verified webhook server) for dragon-head"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -18,8 +20,8 @@ axum = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 hmac = "0.12"
-sha2 = "0.10"
-hex = "0.4"
+sha2 = { workspace = true }
+hex = { workspace = true }
 serde_urlencoded = "0.7"
 base64 = "0.22"
 

@@ -2,7 +2,10 @@
 name = "test-bench-support"
 version = "0.1.0"
 edition = "2021"
+rust-version.workspace = true
 license.workspace = true
+publish = false
+description = "Shared test helpers (e.g. should_skip_browser_tests()) used across dragon-head crate test suites"
 
 [dependencies]
 anyhow = { workspace = true }
