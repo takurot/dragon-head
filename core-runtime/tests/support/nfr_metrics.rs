@@ -25,7 +25,15 @@ pub fn env_u64_with_default(key: &str, default: u64) -> u64 {
 }
 
 pub fn percentile_duration_ms(samples: &[Duration], quantile: f64) -> f64 {
-    debug_assert!(!samples.is_empty());
+    // An empty sample set has no percentile to report — return 0.0 rather
+    // than panicking (this guard must hold in release too, not just debug;
+    // `debug_assert!` alone is stripped in release builds, at which point
+    // `micros[rank]` on an empty vec would panic anyway, just with a less
+    // useful message). See the identical fix on `percentile_f64` below
+    // (issue #281).
+    if samples.is_empty() {
+        return 0.0;
+    }
     let mut micros = samples
         .iter()
         .map(Duration::as_micros)
@@ -37,6 +45,9 @@ pub fn percentile_duration_ms(samples: &[Duration], quantile: f64) -> f64 {
 }
 
 pub fn average_duration_ms(samples: &[Duration]) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
     let total_micros: u128 = samples.iter().map(Duration::as_micros).sum();
     total_micros as f64 / samples.len() as f64 / 1_000.0
 }
@@ -46,7 +57,10 @@ pub fn max_duration_ms(samples: &[Duration]) -> f64 {
 }
 
 pub fn percentile_f64(samples: &[f64], quantile: f64) -> f64 {
-    debug_assert!(!samples.is_empty());
+    // See `percentile_duration_ms` above — same empty-input fix (issue #281).
+    if samples.is_empty() {
+        return 0.0;
+    }
     let mut sorted = samples.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -55,6 +69,9 @@ pub fn percentile_f64(samples: &[f64], quantile: f64) -> f64 {
 }
 
 pub fn average_f64(samples: &[f64]) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
     let total: f64 = samples.iter().sum();
     total / samples.len() as f64
 }
@@ -97,4 +114,40 @@ pub fn write_metric(metric_id: &str, payload: Value) -> anyhow::Result<()> {
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn average_duration_ms_returns_zero_for_empty_samples() {
+        assert_eq!(average_duration_ms(&[]), 0.0);
+    }
+
+    #[test]
+    fn average_f64_returns_zero_for_empty_samples() {
+        assert_eq!(average_f64(&[]), 0.0);
+    }
+
+    #[test]
+    fn percentile_duration_ms_returns_zero_for_empty_samples() {
+        assert_eq!(percentile_duration_ms(&[], 0.95), 0.0);
+    }
+
+    #[test]
+    fn percentile_f64_returns_zero_for_empty_samples() {
+        assert_eq!(percentile_f64(&[], 0.95), 0.0);
+    }
+
+    #[test]
+    fn percentile_duration_ms_still_computes_correctly_for_nonempty_samples() {
+        let samples = [
+            Duration::from_millis(10),
+            Duration::from_millis(20),
+            Duration::from_millis(30),
+        ];
+        assert_eq!(average_duration_ms(&samples), 20.0);
+        assert_eq!(percentile_duration_ms(&samples, 1.0), 30.0);
+    }
 }
