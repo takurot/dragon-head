@@ -55,3 +55,16 @@ success-output = "immediate"
 [[profile.ci.overrides]]
 filter = 'test(test_repro_unstable_keys_on_sibling_insertion)'
 success-output = "immediate"
+
+# test_browser_launch_and_navigate (ISSUE-281) had no bound on its own
+# runtime beyond the whole job's timeout-minutes — a hung Chrome launch or
+# CDP call could silently eat the rest of the CI job's budget instead of
+# failing this one test. slow-timeout marks it slow after 20s and kills it
+# (turning a hang into a definite failure) after 3 periods (60s).
+[[profile.default.overrides]]
+filter = 'test(test_browser_launch_and_navigate)'
+slow-timeout = { period = "20s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_browser_launch_and_navigate)'
+slow-timeout = { period = "20s", terminate-after = 3 }

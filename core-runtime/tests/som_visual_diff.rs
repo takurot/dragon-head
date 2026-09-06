@@ -2,6 +2,8 @@ use std::{
     fs,
     io::Cursor,
     path::{Path, PathBuf},
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -9,7 +11,24 @@ use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 
 use core_runtime::BrowserClient;
 
-const DIFF_THRESHOLD: f64 = 0.06;
+// Calibrated for the 3-channel (RGB-only) diff computed by `diff_ratio_and_image`
+// below — screenshots are always fully opaque (alpha constant at 255, so
+// including it in the diff only ever adds zero and dilutes the ratio's
+// ceiling from 1.0 to 0.75 for no signal). This is the same absolute RGB
+// sensitivity as the previous 4-channel `0.06` threshold (0.06 * 4/3 = 0.08),
+// not a loosening (issue #281).
+const DIFF_THRESHOLD: f64 = 0.08;
+
+/// `BrowserClient::new()` leaves the window size unset, so the captured
+/// screenshot's canvas is whatever viewport Chrome defaults to — unspecified
+/// and observed to differ across OS/Chrome builds (e.g. macOS 756x417 vs
+/// Linux CI 780x437 for the same fixture). Pinning the window size below
+/// (`new_with_window_size`) makes the capture deterministic, so a real
+/// dimension mismatch now reliably indicates a capture/layout regression
+/// rather than environment noise — only a couple of pixels of slack remain,
+/// for encoder-level rounding (issue #281; Codex review on PR #322).
+const FIXTURE_WINDOW_SIZE: (u32, u32) = (800, 600);
+const MAX_DIMENSION_SLACK_PX: u32 = 2;
 
 #[test]
 fn test_som_visual_regression_threshold() -> Result<()> {
@@ -17,7 +36,7 @@ fn test_som_visual_regression_threshold() -> Result<()> {
         return Ok(());
     }
 
-    let client = BrowserClient::new()?;
+    let client = BrowserClient::new_with_window_size(FIXTURE_WINDOW_SIZE.0, FIXTURE_WINDOW_SIZE.1)?;
     let page = client.new_page()?;
 
     let html = r#"
@@ -33,6 +52,13 @@ fn test_som_visual_regression_threshold() -> Result<()> {
     "#;
     let url = format!("data:text/html,{}", urlencoding::encode(html));
     page.navigate(&url)?;
+
+    // `navigate` resolves once the load event fires, but doesn't guarantee a
+    // final layout/paint pass has settled — capturing immediately after was
+    // a source of occasional single-frame diff noise. This fixture has no
+    // fonts, images, or transitions, so a short fixed wait is sufficient
+    // (issue #281).
+    thread::sleep(Duration::from_millis(150));
 
     let capture = page.get_visual()?;
     let artifact_dir = artifact_dir()?;
@@ -80,6 +106,16 @@ fn diff_ratio_and_image(baseline_png: &[u8], actual_png: &[u8]) -> Result<(f64, 
 
     let (baseline_w, baseline_h) = baseline_decoded.dimensions();
     let (actual_w, actual_h) = actual_decoded.dimensions();
+    if baseline_w.abs_diff(actual_w) > MAX_DIMENSION_SLACK_PX
+        || baseline_h.abs_diff(actual_h) > MAX_DIMENSION_SLACK_PX
+    {
+        anyhow::bail!(
+            "screenshot dimensions diverged by more than {MAX_DIMENSION_SLACK_PX}px: \
+             baseline=({baseline_w},{baseline_h}), actual=({actual_w},{actual_h}) — \
+             the window size is pinned via new_with_window_size, so this most likely \
+             indicates a real capture/layout regression"
+        );
+    }
     let width = baseline_w.min(actual_w);
     let height = baseline_h.min(actual_h);
     if width == 0 || height == 0 {
@@ -88,8 +124,10 @@ fn diff_ratio_and_image(baseline_png: &[u8], actual_png: &[u8]) -> Result<(f64, 
         );
     }
 
-    // Different environments can produce slightly different screenshot canvas sizes.
-    // Compare the common top-left viewport area to keep regression checks stable.
+    // With the window size pinned (see FIXTURE_WINDOW_SIZE above), the only
+    // expected size variance is a pixel or two of encoder-level rounding.
+    // Compare the common top-left viewport area to keep regression checks
+    // stable against that.
     let baseline = image::imageops::crop_imm(&baseline_decoded, 0, 0, width, height).to_image();
     let actual = image::imageops::crop_imm(&actual_decoded, 0, 0, width, height).to_image();
     let mut diff = RgbaImage::new(width, height);
@@ -103,10 +141,13 @@ fn diff_ratio_and_image(baseline_png: &[u8], actual_png: &[u8]) -> Result<(f64, 
             let dr = base[0].abs_diff(curr[0]);
             let dg = base[1].abs_diff(curr[1]);
             let db = base[2].abs_diff(curr[2]);
-            let da = base[3].abs_diff(curr[3]);
 
-            let channel_sum = u16::from(dr) + u16::from(dg) + u16::from(db) + u16::from(da);
-            total += f64::from(channel_sum) / (255.0 * 4.0);
+            // Screenshots are always fully opaque (alpha constant at 255),
+            // so including alpha in the diff sum never adds real signal —
+            // it only dilutes the ratio's achievable ceiling from 1.0 to
+            // 0.75 (issue #281). Compare RGB only.
+            let channel_sum = u16::from(dr) + u16::from(dg) + u16::from(db);
+            total += f64::from(channel_sum) / (255.0 * 3.0);
 
             diff.put_pixel(x, y, image::Rgba([dr, dg, db, 255]));
         }
@@ -146,7 +187,10 @@ fn test_diff_ratio_handles_max_channel_diff_without_overflow() -> Result<()> {
     let actual = encode_solid_rgba_png([255, 255, 255, 255])?;
 
     let (ratio, diff) = diff_ratio_and_image(&baseline, &actual)?;
-    assert!((ratio - 0.75).abs() < f64::EPSILON, "ratio should be 0.75");
+    assert!(
+        (ratio - 1.0).abs() < f64::EPSILON,
+        "RGB-only ratio should reach the full 1.0 ceiling, got {ratio}"
+    );
     assert_eq!(diff.get_pixel(0, 0).0, [255, 255, 255, 255]);
 
     Ok(())
