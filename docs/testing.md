@@ -77,8 +77,11 @@ official Linux ARM64 Chrome build, and Ubuntu's own `chromium-browser` package i
 the Chromium *snap*, which doesn't run inside this container (installing it would silently defeat
 `should_skip_browser_tests()`'s graceful skip, since the check only looks for the binary's path,
 not whether it can actually launch). Browser-dependent tests skip cleanly there. For a working
-in-container browser on Apple Silicon, add `"runArgs": ["--platform=linux/amd64"]` to
-`devcontainer.json` and run the amd64 image under emulation.
+in-container browser on Apple Silicon, add **both** `"build": { "options": ["--platform=linux/amd64"] }`
+(so the image itself is actually built for amd64 — `runArgs` alone only affects `docker run`,
+not the preceding `docker build`, and would otherwise still produce a browserless arm64 image)
+and `"runArgs": ["--platform=linux/amd64"]` to `devcontainer.json`, then rebuild the container
+under emulation.
 
 ```bash
 # Inside the dev container or on a machine with Chrome and Rust installed:
