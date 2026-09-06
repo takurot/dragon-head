@@ -13,6 +13,9 @@
   "cpu": [
     "x64"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "dragonHeadBinary": "bin/dragon-head-mcp.exe",
   "files": [
     "bin/dragon-head-mcp.exe"

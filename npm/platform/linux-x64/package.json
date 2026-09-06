@@ -13,6 +13,12 @@
   "cpu": [
     "x64"
   ],
+  "libc": [
+    "glibc"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "dragonHeadBinary": "bin/dragon-head-mcp",
   "files": [
     "bin/dragon-head-mcp"

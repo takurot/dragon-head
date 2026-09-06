@@ -1,23 +1,23 @@
 {
-  "name": "dragon-head-mcp-darwin-x64",
+  "name": "dragon-head-mcp-win32-arm64",
   "version": "0.1.0",
-  "description": "dragon-head-mcp prebuilt binary for macOS (Intel)",
+  "description": "dragon-head-mcp prebuilt binary for Windows ARM64",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/takurot/dragon-head.git"
   },
   "os": [
-    "darwin"
+    "win32"
   ],
   "cpu": [
-    "x64"
+    "arm64"
   ],
   "engines": {
     "node": ">=18"
   },
-  "dragonHeadBinary": "bin/dragon-head-mcp",
+  "dragonHeadBinary": "bin/dragon-head-mcp.exe",
   "files": [
-    "bin/dragon-head-mcp"
+    "bin/dragon-head-mcp.exe"
   ]
 }

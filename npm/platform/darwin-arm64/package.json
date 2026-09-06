@@ -13,6 +13,9 @@
   "cpu": [
     "arm64"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "dragonHeadBinary": "bin/dragon-head-mcp",
   "files": [
     "bin/dragon-head-mcp"

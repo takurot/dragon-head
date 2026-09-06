@@ -17,6 +17,7 @@ npm/
     linux-x64/package.json
     linux-arm64/package.json
     win32-x64/package.json
+    win32-arm64/package.json
 ```
 
 Each `platform/*/package.json` is a template only — **no binary is committed
@@ -36,6 +37,6 @@ depends on and the CI integration work still to be done.
 `chmod +x` on the release artifact, but `actions/upload-artifact` /
 `actions/download-artifact` do not reliably preserve the executable bit.
 Whichever job stages a binary into `platform/<name>/bin/` **must re-apply
-`chmod +x` (all platforms except `win32-x64`) after staging, before
-`npm publish`** — otherwise `npm install` succeeds but the installed binary
-fails to spawn with `EACCES`.
+`chmod +x` (all platforms except `win32-x64`/`win32-arm64`) after staging,
+before `npm publish`** — otherwise `npm install` succeeds but the installed
+binary fails to spawn with `EACCES`.

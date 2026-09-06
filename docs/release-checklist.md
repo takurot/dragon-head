@@ -78,6 +78,7 @@ Artifacts to verify:
 | `dragon-head-mcp-linux-x64` | Linux x86-64 |
 | `dragon-head-mcp-linux-arm64` | Linux arm64 |
 | `dragon-head-mcp-windows-x64.exe` | Windows x86-64 |
+| `dragon-head-mcp-windows-arm64.exe` | Windows ARM64 |
 
 ---
 
@@ -109,7 +110,7 @@ Artifacts to verify:
   ```bash
   for pkg in dragon-head-mcp-darwin-arm64 dragon-head-mcp-darwin-x64 \
               dragon-head-mcp-linux-x64 dragon-head-mcp-linux-arm64 \
-              dragon-head-mcp-win32-x64; do
+              dragon-head-mcp-win32-x64 dragon-head-mcp-win32-arm64; do
     npm view "$pkg" version
   done
   ```
