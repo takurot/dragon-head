@@ -1,6 +1,7 @@
 import {
   reductionPct,
   costUsd,
+  estimateTokens,
   GPT4O_COST_PER_MILLION,
   type PlaywrightMetrics,
   type MultiStepPlaywrightMetrics,
@@ -82,7 +83,7 @@ export function buildMultiStepMarkdownReport(metricsList: MultiStepPlaywrightMet
     const rawTotal = steps > 0 ? m.raw_html.cumulative_avg_bytes[steps - 1]! : 0;
     const customTotal = steps > 0 ? m.custom_extract.cumulative_avg_bytes[steps - 1]! : 0;
     lines.push(
-      `**Total cumulative cost over ${steps} steps:** raw HTML ${costUsd(rawTotal / 4, GPT4O_COST_PER_MILLION).toFixed(6)} USD, custom extract ${costUsd(customTotal / 4, GPT4O_COST_PER_MILLION).toFixed(6)} USD (GPT-4o pricing).\n`,
+      `**Total cumulative cost over ${steps} steps:** raw HTML ${costUsd(estimateTokens(rawTotal), GPT4O_COST_PER_MILLION).toFixed(6)} USD, custom extract ${costUsd(estimateTokens(customTotal), GPT4O_COST_PER_MILLION).toFixed(6)} USD (GPT-4o pricing).\n`,
     );
   }
 

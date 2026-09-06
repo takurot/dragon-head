@@ -3,6 +3,14 @@ import { fileURLToPath } from 'url';
 
 const fixturesDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
 
+// Deliberately a real external site, not another local fixture: this
+// scenario exists specifically to confirm the harness behaves the same
+// against a real network target as it does against file:// fixtures (the
+// "baseline compatibility" the description below refers to). Overridable
+// for environments where reaching the public internet during a benchmark
+// run isn't desirable.
+const EXTERNAL_BASELINE_URL = process.env.BENCH_EXTERNAL_URL ?? 'https://example.com';
+
 export interface Scenario {
   name: string;
   url: string;
@@ -27,7 +35,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     name: 'example-com',
-    url: 'https://example.com',
+    url: EXTERNAL_BASELINE_URL,
     description: 'Real external site — baseline compatibility with Rust bench',
   },
 ];
