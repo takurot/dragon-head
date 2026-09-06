@@ -138,19 +138,22 @@ async fn test_session_management_key_rotation_restore_roundtrip() -> anyhow::Res
 }
 
 fn set_cookie(page: &core_runtime::PageSession, name: &str, value: &str) -> anyhow::Result<()> {
-    let script = format!(
-        r#"document.cookie = "{}={}; path=/; max-age=3600";"#,
-        name, value
-    );
+    // `name`/`value` are interpolated into a JS string literal, not just
+    // into the cookie itself — encode the whole assembled cookie string as
+    // a JSON string literal (a safe JS string literal, since JSON string
+    // syntax is a subset of JS's) so a `"`, backslash, or `</script>` in a
+    // test fixture's name/value can't break out of the literal and inject
+    // arbitrary script (issue #282).
+    let cookie = format!("{name}={value}; path=/; max-age=3600");
+    let script = format!("document.cookie = {};", serde_json::to_string(&cookie)?);
     page.evaluate_script(&script)?;
     Ok(())
 }
 
 fn clear_cookie(page: &core_runtime::PageSession, name: &str) -> anyhow::Result<()> {
-    let script = format!(
-        r#"document.cookie = "{}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";"#,
-        name
-    );
+    // See `set_cookie` above — same JS-string-literal escaping (issue #282).
+    let cookie = format!("{name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT");
+    let script = format!("document.cookie = {};", serde_json::to_string(&cookie)?);
     page.evaluate_script(&script)?;
     Ok(())
 }

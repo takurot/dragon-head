@@ -168,7 +168,7 @@ fn scenario_stable_key_recovery() -> anyhow::Result<Value> {
     let root = page.get_document_node()?;
     let sem = normalize_dom(LoadProfile::Minimal, &root)?;
     let state = SemanticState::new(sem, LoadProfile::Minimal);
-    let (_, stable_key) = find_button_info(state.root()).context("button not found")?;
+    let (_, stable_key) = find_button_info(state.root())?.context("button not found")?;
 
     page.evaluate_script("replaceButton()")?;
     page.act(Some(999_999), Some(&stable_key), "click", None)?;
@@ -218,7 +218,7 @@ fn scenario_semantic_wait() -> anyhow::Result<Value> {
     let root = page.get_document_node()?;
     let sem = normalize_dom(LoadProfile::Interactive, &root)?;
     let state = SemanticState::new(sem, LoadProfile::Interactive);
-    let stable_key = find_button_info(state.root())
+    let stable_key = find_button_info(state.root())?
         .map(|(_, k)| k)
         .context("login button stable_key missing")?;
 
@@ -373,23 +373,34 @@ fn scenario_session_vault_roundtrip() -> anyhow::Result<Value> {
     }))
 }
 
-fn find_button_info(node: &core_runtime::sre::state::SemanticNode) -> Option<(i64, String)> {
+/// Returns `Ok(None)` when no `<button>` node exists at all, and a distinct
+/// `Err` when a button was found but is missing its `stable_key` — these
+/// were previously both collapsed into a plain `None`, which made "no
+/// button in the DOM" and "found the button but stable_key assignment is
+/// broken" indistinguishable failures at the call sites (issue #282).
+fn find_button_info(
+    node: &core_runtime::sre::state::SemanticNode,
+) -> anyhow::Result<Option<(i64, String)>> {
     if node.role == "button" {
-        return Some((node.backend_node_id, node.stable_key.clone()?));
+        let stable_key = node
+            .stable_key
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("button node found but has no stable_key assigned"))?;
+        return Ok(Some((node.backend_node_id, stable_key)));
     }
     for child in &node.children {
-        if let Some(found) = find_button_info(child) {
-            return Some(found);
+        if let Some(found) = find_button_info(child)? {
+            return Ok(Some(found));
         }
     }
-    None
+    Ok(None)
 }
 
 fn find_button_info_from_page(page: &PageSession) -> anyhow::Result<(i64, String)> {
     let root = page.get_document_node()?;
     let sem = normalize_dom(LoadProfile::Interactive, &root)?;
     let state = SemanticState::new(sem, LoadProfile::Interactive);
-    find_button_info(state.root()).context("button not found")
+    find_button_info(state.root())?.context("button not found")
 }
 
 fn find_node_info_by_dom_id(
@@ -415,19 +426,23 @@ fn find_node_info_by_dom_id(
 }
 
 fn set_cookie(page: &PageSession, name: &str, value: &str) -> anyhow::Result<()> {
-    let script = format!(
-        r#"document.cookie = "{}={}; path=/; max-age=3600";"#,
-        name, value
-    );
+    // `name`/`value` are interpolated into a JS string literal, not just
+    // into the cookie itself — encode the whole assembled cookie string as
+    // a JSON string literal (a safe JS string literal, since JSON string
+    // syntax is a subset of JS's) so a `"`, backslash, or `</script>` in a
+    // test fixture's name/value can't break out of the literal and inject
+    // arbitrary script (issue #282). Same fix duplicated in
+    // session_management.rs.
+    let cookie = format!("{name}={value}; path=/; max-age=3600");
+    let script = format!("document.cookie = {};", serde_json::to_string(&cookie)?);
     page.evaluate_script(&script)?;
     Ok(())
 }
 
 fn clear_cookie(page: &PageSession, name: &str) -> anyhow::Result<()> {
-    let script = format!(
-        r#"document.cookie = "{}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";"#,
-        name
-    );
+    // See `set_cookie` above — same JS-string-literal escaping (issue #282).
+    let cookie = format!("{name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT");
+    let script = format!("document.cookie = {};", serde_json::to_string(&cookie)?);
     page.evaluate_script(&script)?;
     Ok(())
 }
