@@ -95,11 +95,20 @@ pub fn aggregate(results: &[RunResult]) -> AggregatedMetrics {
 }
 
 pub fn cost_savings(raw_tokens: u64, sre_tokens: u64) -> CostSavings {
-    let token_reduction_pct = if raw_tokens == 0 {
-        0.0
-    } else {
-        (1.0 - sre_tokens as f64 / raw_tokens as f64) * 100.0
-    };
+    if raw_tokens == 0 {
+        // No raw-DOM baseline to compare against, so a percentage or dollar
+        // change relative to zero is undefined — report a fully neutral
+        // CostSavings rather than a 0% reduction alongside a nonzero (and
+        // potentially negative, if sre_tokens > 0) dollar figure, which
+        // previously claimed "no change" and "some change" at the same
+        // time.
+        return CostSavings {
+            token_reduction_pct: 0.0,
+            gpt4o_savings_usd: 0.0,
+            claude_savings_usd: 0.0,
+        };
+    }
+    let token_reduction_pct = (1.0 - sre_tokens as f64 / raw_tokens as f64) * 100.0;
     // Use signed delta so a cost increase (SRE > raw) shows as negative savings.
     let token_delta = raw_tokens as i64 - sre_tokens as i64;
     CostSavings {
@@ -109,20 +118,52 @@ pub fn cost_savings(raw_tokens: u64, sre_tokens: u64) -> CostSavings {
     }
 }
 
-/// One run of a multi-step interaction sequence.
-///
-/// `step_bytes[0]` is the initial full-state capture; `step_bytes[1..]` are
-/// the per-step payload sent after each interaction (an RFC 6902 patch, a
-/// full re-send on `DeltaPolicy` fallback, or 0 for a no-op).
-/// `step_kinds` is parallel to `step_bytes` and records which `StateUpdate`
-/// variant produced each entry ("full" | "delta" | "noop"), so a delta
-/// fallback to full mid-sequence is visible rather than hidden inside a byte
-/// count (see docs/bench-playwright-comparison.md caveats).
+/// Which `StateUpdate` variant produced a step's payload. A closed set (the
+/// three `StateUpdate` variants), not a raw `&'static str` — the string form
+/// let a typo compile silently instead of failing to build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    Full,
+    Delta,
+    Noop,
+}
+
+impl StepKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StepKind::Full => "full",
+            StepKind::Delta => "delta",
+            StepKind::Noop => "noop",
+        }
+    }
+}
+
+impl std::fmt::Display for StepKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One step's payload: its byte size and which `StateUpdate` variant
+/// produced it (an RFC 6902 patch, a full re-send on `DeltaPolicy`
+/// fallback, or 0 bytes for a no-op) — paired in one struct, not two
+/// parallel `Vec`s, so they can't independently drift to different
+/// lengths (see docs/bench-playwright-comparison.md caveats for why the
+/// kind matters: a delta fallback to full mid-sequence must stay visible
+/// rather than hidden inside a byte count).
+#[derive(Debug, Clone, Copy)]
+pub struct Step {
+    pub bytes: usize,
+    pub kind: StepKind,
+}
+
+/// One run of a multi-step interaction sequence. `steps[0]` is the initial
+/// full-state capture; `steps[1..]` are the per-step payload sent after
+/// each interaction.
 #[derive(Debug, Clone)]
 pub struct MultiStepResult {
     pub run: u32,
-    pub step_bytes: Vec<usize>,
-    pub step_kinds: Vec<&'static str>,
+    pub steps: Vec<Step>,
     pub success: bool,
 }
 
@@ -147,11 +188,11 @@ pub fn aggregate_multi_step(results: &[MultiStepResult]) -> MultiStepAggregatedM
     let n = results.len();
     let ok: Vec<&MultiStepResult> = results.iter().filter(|r| r.success).collect();
 
-    let steps = ok.iter().map(|r| r.step_bytes.len()).min().unwrap_or(0);
+    let steps = ok.iter().map(|r| r.steps.len()).min().unwrap_or(0);
 
     let avg_step_bytes: Vec<f64> = (0..steps)
         .map(|i| {
-            let sum: usize = ok.iter().map(|r| r.step_bytes[i]).sum();
+            let sum: usize = ok.iter().map(|r| r.steps[i].bytes).sum();
             sum as f64 / ok.len() as f64
         })
         .collect();
@@ -202,6 +243,20 @@ mod tests {
         let savings = cost_savings(0, 0);
         assert_eq!(savings.token_reduction_pct, 0.0);
         assert_eq!(savings.gpt4o_savings_usd, 0.0);
+    }
+
+    #[test]
+    fn cost_savings_zero_raw_tokens_with_nonzero_sre_tokens_is_fully_neutral() {
+        // raw_tokens == 0 with sre_tokens > 0 has no baseline to compare
+        // against. The previous behavior clamped the percentage to 0% (no
+        // change) while still computing a negative dollar figure (a cost
+        // increase) from the same inputs — inconsistent. Both must now
+        // agree: no defensible savings/increase figure exists, so both are
+        // 0, not just the percentage.
+        let savings = cost_savings(0, 500);
+        assert_eq!(savings.token_reduction_pct, 0.0);
+        assert_eq!(savings.gpt4o_savings_usd, 0.0);
+        assert_eq!(savings.claude_savings_usd, 0.0);
     }
 
     #[test]
@@ -288,11 +343,16 @@ mod tests {
     }
 
     fn ok_multi_step(run: u32, step_bytes: Vec<usize>) -> MultiStepResult {
-        let step_kinds = step_bytes.iter().map(|_| "delta").collect();
+        let steps = step_bytes
+            .into_iter()
+            .map(|bytes| Step {
+                bytes,
+                kind: StepKind::Delta,
+            })
+            .collect();
         MultiStepResult {
             run,
-            step_bytes,
-            step_kinds,
+            steps,
             success: true,
         }
     }

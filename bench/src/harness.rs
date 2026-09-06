@@ -1,4 +1,4 @@
-use crate::metrics::{MultiStepResult, RunResult};
+use crate::metrics::{MultiStepResult, RunResult, Step, StepKind};
 use core_runtime::{BrowserClient, DeltaPolicy, LoadProfile, StateUpdate};
 use std::time::Instant;
 
@@ -80,16 +80,14 @@ fn measure_sre(url: &str, chrome_path: Option<String>) -> anyhow::Result<(usize,
 pub fn run_multi_step(url: &str, step_selectors: &[&str], run_idx: u32) -> MultiStepResult {
     let chrome_path = std::env::var("CHROME_PATH").ok();
     match run_multi_step_inner(url, step_selectors, chrome_path) {
-        Ok((step_bytes, step_kinds)) => MultiStepResult {
+        Ok(steps) => MultiStepResult {
             run: run_idx,
-            step_bytes,
-            step_kinds,
+            steps,
             success: true,
         },
         Err(_) => MultiStepResult {
             run: run_idx,
-            step_bytes: Vec::new(),
-            step_kinds: Vec::new(),
+            steps: Vec::new(),
             success: false,
         },
     }
@@ -99,7 +97,7 @@ fn run_multi_step_inner(
     url: &str,
     step_selectors: &[&str],
     chrome_path: Option<String>,
-) -> anyhow::Result<(Vec<usize>, Vec<&'static str>)> {
+) -> anyhow::Result<Vec<Step>> {
     let client = BrowserClient::new_with_chrome_path(chrome_path)?;
     let page = client.new_page()?;
     page.navigate(url)?;
@@ -108,10 +106,11 @@ fn run_multi_step_inner(
     let initial_bytes =
         serde_json::to_string(&previous.generate_fast_state().interactive_elements)?.len();
 
-    let mut step_bytes = Vec::with_capacity(step_selectors.len() + 1);
-    let mut step_kinds = Vec::with_capacity(step_selectors.len() + 1);
-    step_bytes.push(initial_bytes);
-    step_kinds.push("full");
+    let mut steps = Vec::with_capacity(step_selectors.len() + 1);
+    steps.push(Step {
+        bytes: initial_bytes,
+        kind: StepKind::Full,
+    });
 
     for selector in step_selectors {
         let selector_js = serde_json::to_string(selector)?;
@@ -132,18 +131,24 @@ fn run_multi_step_inner(
         let next = page.capture_semantic_state(LoadProfile::Minimal)?;
         let update = next.select_update(Some(&previous), DeltaPolicy::default())?;
 
-        let (bytes, kind) = match &update {
-            StateUpdate::Noop { .. } => (0, "noop"),
-            StateUpdate::Delta { delta } => (delta.patch_size_bytes(), "delta"),
-            StateUpdate::Full { state } => (
-                serde_json::to_string(&state.generate_fast_state().interactive_elements)?.len(),
-                "full",
-            ),
+        let step = match &update {
+            StateUpdate::Noop { .. } => Step {
+                bytes: 0,
+                kind: StepKind::Noop,
+            },
+            StateUpdate::Delta { delta } => Step {
+                bytes: delta.patch_size_bytes(),
+                kind: StepKind::Delta,
+            },
+            StateUpdate::Full { state } => Step {
+                bytes: serde_json::to_string(&state.generate_fast_state().interactive_elements)?
+                    .len(),
+                kind: StepKind::Full,
+            },
         };
-        step_bytes.push(bytes);
-        step_kinds.push(kind);
+        steps.push(step);
         previous = next;
     }
 
-    Ok((step_bytes, step_kinds))
+    Ok(steps)
 }
