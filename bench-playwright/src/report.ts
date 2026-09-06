@@ -52,20 +52,37 @@ export function buildMultiStepMarkdownReport(metricsList: MultiStepPlaywrightMet
   ];
 
   for (const m of metricsList) {
+    // The two approaches aggregate their step counts independently (each is
+    // capped at the shortest successful run for *that* approach — see
+    // aggregateMultiStepResults), so custom_extract.steps can be shorter
+    // than raw_html.steps if extraction failed on a step raw HTML captured
+    // fine. Bound the loop by the shorter of the two so every index is
+    // valid in both arrays.
+    const steps = Math.min(m.raw_html.steps, m.custom_extract.steps);
     lines.push(`## ${m.name} (${m.url})\n`);
-    lines.push(`**Runs:** ${m.runs}  |  **Steps:** ${m.raw_html.steps}\n`);
+    lines.push(`**Runs:** ${m.runs}  |  **Steps:** ${steps}\n`);
+    if (m.raw_html.steps !== m.custom_extract.steps) {
+      lines.push(
+        `> Note: raw HTML captured ${m.raw_html.steps} step(s) but custom extract only ${m.custom_extract.steps} — showing the first ${steps}.\n`,
+      );
+    }
     lines.push('| Step | Raw HTML Bytes | Raw HTML Cumulative | Custom Extract Bytes | Custom Extract Cumulative |');
     lines.push('|-----:|---------------:|---------------------:|----------------------:|---------------------------:|');
-    for (let i = 0; i < m.raw_html.steps; i++) {
+    for (let i = 0; i < steps; i++) {
       lines.push(
         `| ${i} | ${m.raw_html.avg_step_bytes[i]!.toFixed(0)} | ${m.raw_html.cumulative_avg_bytes[i]!.toFixed(0)} | ${m.custom_extract.avg_step_bytes[i]!.toFixed(0)} | ${m.custom_extract.cumulative_avg_bytes[i]!.toFixed(0)} |`,
       );
     }
     lines.push('');
-    const rawTotal = m.raw_html.cumulative_avg_bytes.at(-1) ?? 0;
-    const customTotal = m.custom_extract.cumulative_avg_bytes.at(-1) ?? 0;
+    // Use the cumulative value at the shared `steps` boundary (not each
+    // array's own final element, and not m.raw_html.steps in the label) —
+    // otherwise a mismatched step count compares totals over a different
+    // number of interactions per approach, contradicting the truncation
+    // note above and understating/overstating the real cost gap.
+    const rawTotal = steps > 0 ? m.raw_html.cumulative_avg_bytes[steps - 1]! : 0;
+    const customTotal = steps > 0 ? m.custom_extract.cumulative_avg_bytes[steps - 1]! : 0;
     lines.push(
-      `**Total cumulative cost over ${m.raw_html.steps} steps:** raw HTML ${costUsd(rawTotal / 4, GPT4O_COST_PER_MILLION).toFixed(6)} USD, custom extract ${costUsd(customTotal / 4, GPT4O_COST_PER_MILLION).toFixed(6)} USD (GPT-4o pricing).\n`,
+      `**Total cumulative cost over ${steps} steps:** raw HTML ${costUsd(rawTotal / 4, GPT4O_COST_PER_MILLION).toFixed(6)} USD, custom extract ${costUsd(customTotal / 4, GPT4O_COST_PER_MILLION).toFixed(6)} USD (GPT-4o pricing).\n`,
     );
   }
 
