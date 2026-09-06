@@ -18,10 +18,22 @@ impl MockRuntime {
     }
 
     fn next(&mut self, operation: &'static str) -> OperationOutcome {
-        self.scripts
-            .get_mut(operation)
-            .and_then(VecDeque::pop_front)
-            .unwrap_or(OperationOutcome::Success)
+        match self.scripts.get_mut(operation) {
+            // Explicitly scripted: pop the next outcome, but panic if the
+            // queue is exhausted instead of silently falling back to
+            // Success. A test that scripts N outcomes for an operation is
+            // asserting it's called exactly N times — an (N+1)th call means
+            // the code under test behaved unexpectedly, and that should
+            // fail loudly, not be masked as a coincidental extra success.
+            Some(queue) => queue.pop_front().unwrap_or_else(|| {
+                panic!(
+                    "MockRuntime: '{operation}' was scripted but called more times than outcomes were provided"
+                )
+            }),
+            // Never scripted at all: this test doesn't care about this
+            // operation's outcome, so default to Success.
+            None => OperationOutcome::Success,
+        }
     }
 }
 
@@ -81,7 +93,7 @@ impl SkillRuntime for PanicRuntime {
 
 fn happy_path_skill() -> SkillDefinition {
     SkillDefinition {
-        schema_version: 1,
+        schema_version: SUPPORTED_SKILL_SCHEMA_VERSION,
         name: "search-and-extract".to_string(),
         steps: vec![
             SkillStep::Locate(LocateStep {
@@ -134,6 +146,16 @@ fn test_validate_rejects_unsupported_typed_schema_versions() {
             SkillEngineError::UnsupportedSchemaVersion { .. }
         ));
     }
+}
+
+#[test]
+fn test_validate_accepts_the_currently_supported_schema_version() {
+    // The rejection test above only ever exercises versions the boundary
+    // check must reject — it never confirms the boundary lets the
+    // currently-supported version itself through. A validator that
+    // rejected *everything* would still pass the test above.
+    validate_skill_definition(&single_locate_skill(SUPPORTED_SKILL_SCHEMA_VERSION))
+        .expect("the currently supported schema version must be accepted");
 }
 
 #[test]
@@ -203,7 +225,7 @@ fn test_verify_failure_suppresses_act() -> Result<(), SkillEngineError> {
 #[test]
 fn test_retry_branch_and_handoff() -> Result<(), SkillEngineError> {
     let skill = SkillDefinition {
-        schema_version: 1,
+        schema_version: SUPPORTED_SKILL_SCHEMA_VERSION,
         name: "retry-branch-handoff".to_string(),
         steps: vec![
             SkillStep::Locate(LocateStep {
@@ -265,16 +287,32 @@ fn test_retry_branch_and_handoff() -> Result<(), SkillEngineError> {
         .iter()
         .map(|entry| entry.operation.as_str())
         .collect();
-    assert_eq!(operations.iter().filter(|op| **op == "locate").count(), 2);
-    assert!(operations.contains(&"handoff"));
-    assert!(!operations.contains(&"extract"));
+    // Exact ordered sequence, not just presence/counts: locate fails once
+    // (scripted transient failure) then retries and succeeds; verify/act
+    // default to Success (unscripted); the engine records policy_check and
+    // post_check around act (see test_skill_conformance_happy_path_order);
+    // act's on_success jumps straight to handoff_step — skipping
+    // extract_should_skip entirely, not merely "somewhere absent from the
+    // trace".
+    assert_eq!(
+        operations,
+        vec![
+            "locate",
+            "locate",
+            "verify",
+            "policy_check",
+            "act",
+            "post_check",
+            "handoff"
+        ]
+    );
     Ok(())
 }
 
 #[test]
 fn test_act_requires_immediate_verify_predecessor() {
     let invalid = SkillDefinition {
-        schema_version: 1,
+        schema_version: SUPPORTED_SKILL_SCHEMA_VERSION,
         name: "invalid-order".to_string(),
         steps: vec![
             SkillStep::Locate(LocateStep {
@@ -329,7 +367,7 @@ fn locate_step(id: &str, control: StepControl) -> SkillStep {
 
 fn assert_invalid_act_flow(steps: Vec<SkillStep>) {
     let skill = SkillDefinition {
-        schema_version: 1,
+        schema_version: SUPPORTED_SKILL_SCHEMA_VERSION,
         name: "invalid-act-flow".to_string(),
         steps,
     };
@@ -392,7 +430,7 @@ fn test_verify_must_match_act_target() {
 fn test_act_with_max_retries_and_matching_verify_passes_validation() -> Result<(), SkillEngineError>
 {
     let skill = SkillDefinition {
-        schema_version: 1,
+        schema_version: SUPPORTED_SKILL_SCHEMA_VERSION,
         name: "act-with-retries".to_string(),
         steps: vec![
             verify_step("check", "target", StepControl::default()),
@@ -462,7 +500,7 @@ fn test_unsafe_backward_edge_into_act_is_rejected() {
 #[test]
 fn test_branched_verify_can_authorize_matching_act() -> Result<(), SkillEngineError> {
     let skill = SkillDefinition {
-        schema_version: 1,
+        schema_version: SUPPORTED_SKILL_SCHEMA_VERSION,
         name: "safe-verify-branch".to_string(),
         steps: vec![
             verify_step(
@@ -500,7 +538,7 @@ fn test_branched_verify_can_authorize_matching_act() -> Result<(), SkillEngineEr
 #[test]
 fn test_safe_cycle_reverifies_before_each_act() -> Result<(), SkillEngineError> {
     let skill = SkillDefinition {
-        schema_version: 1,
+        schema_version: SUPPORTED_SKILL_SCHEMA_VERSION,
         name: "safe-reverify-cycle".to_string(),
         steps: vec![
             verify_step(
@@ -569,7 +607,7 @@ fn test_safe_cycle_reverifies_before_each_act() -> Result<(), SkillEngineError> 
 #[test]
 fn test_act_retry_budget_is_not_reset_across_on_failure_revisits() -> Result<(), SkillEngineError> {
     let skill = SkillDefinition {
-        schema_version: 1,
+        schema_version: SUPPORTED_SKILL_SCHEMA_VERSION,
         name: "capped-retry-cycle".to_string(),
         steps: vec![
             verify_step(
