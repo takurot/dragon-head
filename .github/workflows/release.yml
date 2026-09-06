@@ -14,9 +14,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate-tag:
+    name: Validate tag is semver
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Fail fast, before spending any cross-compilation time, on a tag that
+      # isn't valid semver (optionally prefixed with "v") — release.yml's
+      # publish steps derive NPM_VERSION straight from the tag name
+      # (VERSION#v) with no validation of their own, so e.g. "v1.2" or
+      # "release-1" would otherwise reach `npm publish` with a malformed or
+      # unintended version string instead of failing here with a clear
+      # message.
+      - name: Check tag matches semver
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$TAG' is not valid semver (expected e.g. v1.2.3 or v1.2.3-rc.1)." >&2
+            exit 1
+          fi
+          echo "Tag '$TAG' is valid semver."
+
   build:
     name: Build ${{ matrix.target }}
+    needs: validate-tag
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

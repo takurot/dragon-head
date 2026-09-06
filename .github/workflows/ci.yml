@@ -22,6 +22,7 @@ env:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -34,6 +35,7 @@ jobs:
 
   security-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     # rustsec/audit-check downloads a pre-built binary — no source compile needed.
@@ -46,6 +48,7 @@ jobs:
 
   cargo-deny:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     # EmbarkStudios/cargo-deny-action downloads a pre-built binary.
@@ -54,6 +57,7 @@ jobs:
   bench-playwright:
     name: Bench Playwright (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -93,6 +97,7 @@ jobs:
             arch: aarch64-macos
             uname: arm64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -106,6 +111,7 @@ jobs:
 
   shellcheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
     - uses: actions/checkout@v4
     - name: Install shellcheck
@@ -122,6 +128,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
     # The workspace test build can exhaust the hosted runner's available disk
@@ -162,6 +169,7 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Only run after the correctness gate passes — no point measuring coverage
     # on a broken workspace.
     needs: [test]
@@ -230,6 +238,7 @@ jobs:
 
   smoke-e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -246,6 +255,7 @@ jobs:
 
   cdp-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -271,6 +281,7 @@ jobs:
 
   sre-regression:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -291,6 +302,7 @@ jobs:
 
   sre-semantic-delta:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -299,6 +311,7 @@ jobs:
 
   stable-key-compatibility:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -307,6 +320,7 @@ jobs:
 
   policy-regression:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -321,6 +335,7 @@ jobs:
 
   policy-schema-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -329,6 +344,7 @@ jobs:
 
   som-regression:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -350,6 +366,7 @@ jobs:
 
   skill-conformance:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -358,6 +375,7 @@ jobs:
 
   skill-schema-compatibility:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -366,6 +384,7 @@ jobs:
 
   plugin-signature-verification:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -374,6 +393,7 @@ jobs:
 
   plugin-sbom-validation:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -405,6 +425,7 @@ jobs:
 
   mcp-api-schema-diff:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -413,6 +434,7 @@ jobs:
 
   mcp-schema-compatibility:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -421,6 +443,7 @@ jobs:
 
   metering-regression:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -429,6 +452,7 @@ jobs:
 
   pricing-snapshot:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
@@ -438,6 +462,7 @@ jobs:
   nfr-benchmark-short:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       CHROME_INSTALLED: "true"
       NFR_BENCH_MODE: "short"
@@ -499,6 +524,7 @@ jobs:
   evaluation-bench-smoke:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       CHROME_INSTALLED: "true"
       DRAGON_HEAD_EVAL_MODE: "smoke"
