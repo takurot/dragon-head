@@ -94,12 +94,14 @@ fn run_multi_step_mode(args: &Args, selectors: &[String]) -> anyhow::Result<()> 
     let mut results = Vec::with_capacity(args.runs as usize);
     for i in 0..args.runs {
         let r = harness::run_multi_step(&args.url, &selector_refs, i);
+        let step_bytes: Vec<usize> = r.steps.iter().map(|s| s.bytes).collect();
+        let step_kinds: Vec<&str> = r.steps.iter().map(|s| s.kind.as_str()).collect();
         eprintln!(
             "  Run {}/{}: step_bytes={:?} step_kinds={:?}",
             r.run + 1,
             args.runs,
-            r.step_bytes,
-            r.step_kinds
+            step_bytes,
+            step_kinds
         );
         results.push(r);
     }
@@ -110,7 +112,7 @@ fn run_multi_step_mode(args: &Args, selectors: &[String]) -> anyhow::Result<()> 
     let sample_kinds: Vec<&str> = results
         .iter()
         .find(|r| r.success)
-        .map(|r| r.step_kinds.clone())
+        .map(|r| r.steps.iter().map(|s| s.kind.as_str()).collect())
         .unwrap_or_default();
 
     let metrics = metrics::aggregate_multi_step(&results);

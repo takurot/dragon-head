@@ -95,12 +95,24 @@ pub fn aggregate(results: &[RunResult]) -> AggregatedMetrics {
 }
 
 pub fn cost_savings(raw_tokens: u64, sre_tokens: u64) -> CostSavings {
+    // Only the percentage has a genuine divide-by-zero problem when there's
+    // no raw-DOM baseline — the dollar delta below is plain subtraction and
+    // stays well-defined (and meaningful: if sre_tokens > 0, that's a real
+    // cost with no offsetting raw-DOM cost to net against). Clamping the
+    // dollar figures to 0 alongside the percentage (an earlier version of
+    // this fix) looked "consistent" with the percentage but was actually
+    // wrong in a different way: report.rs displays raw/SRE cost and this
+    // savings figure as three cells in the same row, and $0 raw − nonzero
+    // SRE ≠ $0 savings — a reader can see the subtraction not adding up.
+    // Report the real dollar delta; only the percentage is the genuinely
+    // undefined value here (Codex review, PR #320).
     let token_reduction_pct = if raw_tokens == 0 {
         0.0
     } else {
         (1.0 - sre_tokens as f64 / raw_tokens as f64) * 100.0
     };
-    // Use signed delta so a cost increase (SRE > raw) shows as negative savings.
+    // Use signed delta so a cost increase (SRE > raw, or SRE > 0 with no raw
+    // baseline at all) shows as negative savings.
     let token_delta = raw_tokens as i64 - sre_tokens as i64;
     CostSavings {
         token_reduction_pct,
@@ -109,20 +121,52 @@ pub fn cost_savings(raw_tokens: u64, sre_tokens: u64) -> CostSavings {
     }
 }
 
-/// One run of a multi-step interaction sequence.
-///
-/// `step_bytes[0]` is the initial full-state capture; `step_bytes[1..]` are
-/// the per-step payload sent after each interaction (an RFC 6902 patch, a
-/// full re-send on `DeltaPolicy` fallback, or 0 for a no-op).
-/// `step_kinds` is parallel to `step_bytes` and records which `StateUpdate`
-/// variant produced each entry ("full" | "delta" | "noop"), so a delta
-/// fallback to full mid-sequence is visible rather than hidden inside a byte
-/// count (see docs/bench-playwright-comparison.md caveats).
+/// Which `StateUpdate` variant produced a step's payload. A closed set (the
+/// three `StateUpdate` variants), not a raw `&'static str` — the string form
+/// let a typo compile silently instead of failing to build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    Full,
+    Delta,
+    Noop,
+}
+
+impl StepKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StepKind::Full => "full",
+            StepKind::Delta => "delta",
+            StepKind::Noop => "noop",
+        }
+    }
+}
+
+impl std::fmt::Display for StepKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One step's payload: its byte size and which `StateUpdate` variant
+/// produced it (an RFC 6902 patch, a full re-send on `DeltaPolicy`
+/// fallback, or 0 bytes for a no-op) — paired in one struct, not two
+/// parallel `Vec`s, so they can't independently drift to different
+/// lengths (see docs/bench-playwright-comparison.md caveats for why the
+/// kind matters: a delta fallback to full mid-sequence must stay visible
+/// rather than hidden inside a byte count).
+#[derive(Debug, Clone, Copy)]
+pub struct Step {
+    pub bytes: usize,
+    pub kind: StepKind,
+}
+
+/// One run of a multi-step interaction sequence. `steps[0]` is the initial
+/// full-state capture; `steps[1..]` are the per-step payload sent after
+/// each interaction.
 #[derive(Debug, Clone)]
 pub struct MultiStepResult {
     pub run: u32,
-    pub step_bytes: Vec<usize>,
-    pub step_kinds: Vec<&'static str>,
+    pub steps: Vec<Step>,
     pub success: bool,
 }
 
@@ -147,11 +191,11 @@ pub fn aggregate_multi_step(results: &[MultiStepResult]) -> MultiStepAggregatedM
     let n = results.len();
     let ok: Vec<&MultiStepResult> = results.iter().filter(|r| r.success).collect();
 
-    let steps = ok.iter().map(|r| r.step_bytes.len()).min().unwrap_or(0);
+    let steps = ok.iter().map(|r| r.steps.len()).min().unwrap_or(0);
 
     let avg_step_bytes: Vec<f64> = (0..steps)
         .map(|i| {
-            let sum: usize = ok.iter().map(|r| r.step_bytes[i]).sum();
+            let sum: usize = ok.iter().map(|r| r.steps[i].bytes).sum();
             sum as f64 / ok.len() as f64
         })
         .collect();
@@ -202,6 +246,25 @@ mod tests {
         let savings = cost_savings(0, 0);
         assert_eq!(savings.token_reduction_pct, 0.0);
         assert_eq!(savings.gpt4o_savings_usd, 0.0);
+    }
+
+    #[test]
+    fn cost_savings_zero_raw_tokens_with_nonzero_sre_tokens_keeps_real_dollar_delta() {
+        // raw_tokens == 0 with sre_tokens > 0 has no baseline to compute a
+        // *percentage* against (division by zero), but the dollar delta is
+        // plain subtraction and stays meaningful: sre_tokens costs real
+        // money with nothing to offset it against. An earlier version of
+        // this fix zeroed the dollar figures too "for consistency" with the
+        // 0% placeholder, but that broke a different, more visible
+        // consistency: report.rs shows raw cost / SRE cost / savings as
+        // three cells in one row, and $0 raw − nonzero SRE must not equal
+        // $0 savings (Codex review, PR #320).
+        let savings = cost_savings(0, 500);
+        assert_eq!(savings.token_reduction_pct, 0.0);
+        let expected_gpt4o = -500.0 * GPT4O_COST_PER_TOKEN;
+        assert!((savings.gpt4o_savings_usd - expected_gpt4o).abs() < 1e-9);
+        let expected_claude = -500.0 * CLAUDE_COST_PER_TOKEN;
+        assert!((savings.claude_savings_usd - expected_claude).abs() < 1e-9);
     }
 
     #[test]
@@ -288,11 +351,16 @@ mod tests {
     }
 
     fn ok_multi_step(run: u32, step_bytes: Vec<usize>) -> MultiStepResult {
-        let step_kinds = step_bytes.iter().map(|_| "delta").collect();
+        let steps = step_bytes
+            .into_iter()
+            .map(|bytes| Step {
+                bytes,
+                kind: StepKind::Delta,
+            })
+            .collect();
         MultiStepResult {
             run,
-            step_bytes,
-            step_kinds,
+            steps,
             success: true,
         }
     }
