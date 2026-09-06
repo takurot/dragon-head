@@ -274,7 +274,9 @@ fn build_multi_step_markdown(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::{aggregate, aggregate_multi_step, MultiStepResult, RunResult};
+    use crate::metrics::{
+        aggregate, aggregate_multi_step, MultiStepResult, RunResult, Step, StepKind,
+    };
 
     fn sample_metrics() -> AggregatedMetrics {
         let results = vec![RunResult {
@@ -362,8 +364,20 @@ mod tests {
     fn sample_multi_step_metrics() -> (MultiStepAggregatedMetrics, Vec<&'static str>) {
         let results = vec![MultiStepResult {
             run: 0,
-            step_bytes: vec![4000, 40, 30],
-            step_kinds: vec!["full", "delta", "delta"],
+            steps: vec![
+                Step {
+                    bytes: 4000,
+                    kind: StepKind::Full,
+                },
+                Step {
+                    bytes: 40,
+                    kind: StepKind::Delta,
+                },
+                Step {
+                    bytes: 30,
+                    kind: StepKind::Delta,
+                },
+            ],
             success: true,
         }];
         (
