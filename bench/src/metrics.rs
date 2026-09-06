@@ -95,21 +95,24 @@ pub fn aggregate(results: &[RunResult]) -> AggregatedMetrics {
 }
 
 pub fn cost_savings(raw_tokens: u64, sre_tokens: u64) -> CostSavings {
-    if raw_tokens == 0 {
-        // No raw-DOM baseline to compare against, so a percentage or dollar
-        // change relative to zero is undefined — report a fully neutral
-        // CostSavings rather than a 0% reduction alongside a nonzero (and
-        // potentially negative, if sre_tokens > 0) dollar figure, which
-        // previously claimed "no change" and "some change" at the same
-        // time.
-        return CostSavings {
-            token_reduction_pct: 0.0,
-            gpt4o_savings_usd: 0.0,
-            claude_savings_usd: 0.0,
-        };
-    }
-    let token_reduction_pct = (1.0 - sre_tokens as f64 / raw_tokens as f64) * 100.0;
-    // Use signed delta so a cost increase (SRE > raw) shows as negative savings.
+    // Only the percentage has a genuine divide-by-zero problem when there's
+    // no raw-DOM baseline — the dollar delta below is plain subtraction and
+    // stays well-defined (and meaningful: if sre_tokens > 0, that's a real
+    // cost with no offsetting raw-DOM cost to net against). Clamping the
+    // dollar figures to 0 alongside the percentage (an earlier version of
+    // this fix) looked "consistent" with the percentage but was actually
+    // wrong in a different way: report.rs displays raw/SRE cost and this
+    // savings figure as three cells in the same row, and $0 raw − nonzero
+    // SRE ≠ $0 savings — a reader can see the subtraction not adding up.
+    // Report the real dollar delta; only the percentage is the genuinely
+    // undefined value here (Codex review, PR #320).
+    let token_reduction_pct = if raw_tokens == 0 {
+        0.0
+    } else {
+        (1.0 - sre_tokens as f64 / raw_tokens as f64) * 100.0
+    };
+    // Use signed delta so a cost increase (SRE > raw, or SRE > 0 with no raw
+    // baseline at all) shows as negative savings.
     let token_delta = raw_tokens as i64 - sre_tokens as i64;
     CostSavings {
         token_reduction_pct,
@@ -246,17 +249,22 @@ mod tests {
     }
 
     #[test]
-    fn cost_savings_zero_raw_tokens_with_nonzero_sre_tokens_is_fully_neutral() {
-        // raw_tokens == 0 with sre_tokens > 0 has no baseline to compare
-        // against. The previous behavior clamped the percentage to 0% (no
-        // change) while still computing a negative dollar figure (a cost
-        // increase) from the same inputs — inconsistent. Both must now
-        // agree: no defensible savings/increase figure exists, so both are
-        // 0, not just the percentage.
+    fn cost_savings_zero_raw_tokens_with_nonzero_sre_tokens_keeps_real_dollar_delta() {
+        // raw_tokens == 0 with sre_tokens > 0 has no baseline to compute a
+        // *percentage* against (division by zero), but the dollar delta is
+        // plain subtraction and stays meaningful: sre_tokens costs real
+        // money with nothing to offset it against. An earlier version of
+        // this fix zeroed the dollar figures too "for consistency" with the
+        // 0% placeholder, but that broke a different, more visible
+        // consistency: report.rs shows raw cost / SRE cost / savings as
+        // three cells in one row, and $0 raw − nonzero SRE must not equal
+        // $0 savings (Codex review, PR #320).
         let savings = cost_savings(0, 500);
         assert_eq!(savings.token_reduction_pct, 0.0);
-        assert_eq!(savings.gpt4o_savings_usd, 0.0);
-        assert_eq!(savings.claude_savings_usd, 0.0);
+        let expected_gpt4o = -500.0 * GPT4O_COST_PER_TOKEN;
+        assert!((savings.gpt4o_savings_usd - expected_gpt4o).abs() < 1e-9);
+        let expected_claude = -500.0 * CLAUDE_COST_PER_TOKEN;
+        assert!((savings.claude_savings_usd - expected_claude).abs() < 1e-9);
     }
 
     #[test]
