@@ -23,15 +23,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Google Chrome (amd64) via Google's officially signed APT repo — apt
+# Google Chrome (amd64 only) via Google's officially signed APT repo — apt
 # verifies the repo's Release/Packages metadata against this GPG key before
 # trusting any package from it, unlike the previous plain `wget` + `dpkg -i`
 # of a loose .deb with no integrity check at all.
 #
-# Google does not publish an official Linux ARM64 Chrome build, so ARM64
-# hosts (e.g. Apple Silicon running this devcontainer) get Chromium from
-# Ubuntu's own signed repo instead — test_bench_support::should_skip_browser_tests()
-# already accepts either binary, matching what CI's Linux runners do.
+# ARM64 intentionally gets no browser installed here, not a substitute
+# package: Google publishes no official Linux ARM64 Chrome build (not even
+# an unsigned snapshot — checked https://storage.googleapis.com/chromium-browser-snapshots/,
+# there is no Linux_Arm64 channel), and Ubuntu's own "chromium-browser"
+# package is a transitional launcher for the Chromium *snap* on every
+# architecture since 22.04 — it stages a working shim at /usr/bin/chromium-browser
+# but snapd doesn't run inside this container, so invoking it would fail at
+# launch. Installing that stub would be worse than installing nothing: this
+# project's own core_runtime::chrome_detection / test_bench_support::should_skip_browser_tests()
+# only check that the path *exists*, so the broken stub would defeat their
+# graceful-skip behavior and browser-dependent tests would fail outright
+# instead of skipping cleanly. Apple Silicon users who need a working
+# browser in-container should add `"runArgs": ["--platform=linux/amd64"]`
+# to devcontainer.json and run the amd64 image under emulation.
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "${arch}" in \
@@ -42,17 +52,16 @@ RUN set -eux; \
           > /etc/apt/sources.list.d/google-chrome.list; \
         apt-get update; \
         apt-get install -y --no-install-recommends google-chrome-stable; \
+        rm -rf /var/lib/apt/lists/*; \
         ;; \
       arm64) \
-        apt-get update; \
-        apt-get install -y --no-install-recommends chromium-browser; \
+        echo "No browser installed on arm64 — see the comment above this RUN step." >&2; \
         ;; \
       *) \
-        echo "Unsupported architecture for Chrome/Chromium: ${arch}" >&2; \
+        echo "Unsupported architecture for Chrome: ${arch}" >&2; \
         exit 1; \
         ;; \
-    esac; \
-    rm -rf /var/lib/apt/lists/*
+    esac
 
 # Non-root user (standard VS Code Dev Containers convention: uid/gid 1000
 # matches the default first user on Linux/macOS Docker hosts, so bind-mounted
