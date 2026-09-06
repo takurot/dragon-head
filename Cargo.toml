@@ -18,9 +18,13 @@ repository = "https://github.com/takurot/dragon-head"
 # skills-engine, and marketplace are on 2024 (skills-engine relies on
 # 2024 let-chains); the rest stay on 2021 to avoid the incidental
 # workspace-wide rustfmt import-reordering and unsafe_op_in_unsafe_fn churn
-# that a forced 2024 convergence would otherwise cause. Both editions need
-# Rust >= 1.85, which is the workspace's effective MSRV floor either way.
-rust-version = "1.85"
+# that a forced 2024 convergence would otherwise cause. Both editions only
+# need Rust >= 1.85, but the actual floor is set by locked dependencies:
+# `time` 0.3.53 (transitive, via rcgen dev-dependency) declares
+# rust-version 1.88, the highest of any crate currently in Cargo.lock
+# (checked via `cargo metadata`'s `rust_version` field) — keep this in
+# sync with `cargo metadata` after dependency bumps.
+rust-version = "1.88"
 
 [workspace.dependencies]
 # rt-multi-thread: core-runtime's `Runtime::new()` builds a multi-thread
