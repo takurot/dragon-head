@@ -45,7 +45,14 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
         Some("alice@example.com 4000 1234 5678 9012 345"),
     )?;
 
-    let events = wait_for_events(&page, 3, Duration::from_secs(2));
+    let events = wait_for_events_matching(&page, Duration::from_secs(2), |events| {
+        events
+            .iter()
+            .any(|e| matches!(e, AuditEvent::ToolCall { tool_name, .. } if tool_name == "act"))
+            && events
+                .iter()
+                .any(|e| matches!(e, AuditEvent::StateSnapshot { .. }))
+    });
     assert!(
         !events.is_empty(),
         "audit events should be emitted for act execution"
@@ -76,7 +83,7 @@ fn test_audit_logging_sequence_and_pii_masking() -> anyhow::Result<()> {
         "tool args should redact email addresses"
     );
     assert!(
-        !tool_args_text.contains("4111-1111-1111-1111"),
+        !tool_args_text.contains("4000 1234 5678 9012 345"),
         "tool args should redact raw card numbers"
     );
     assert_eq!(
@@ -174,7 +181,11 @@ fn test_audit_logging_verify_text_masks_expected_text() -> anyhow::Result<()> {
         "verify_text should fail on mismatched expectation"
     );
 
-    let events = wait_for_events(&page, 1, Duration::from_secs(2));
+    let events = wait_for_events_matching(&page, Duration::from_secs(2), |events| {
+        events.iter().any(
+            |e| matches!(e, AuditEvent::ToolCall { tool_name, .. } if tool_name == "verify_text"),
+        )
+    });
     let tool_args = events
         .iter()
         .find_map(|event| match event {
@@ -282,7 +293,14 @@ fn test_repeated_state_capture_emits_state_patch_for_incremental_update() -> any
 
     assert_ne!(baseline.state_hash(), updated.state_hash());
 
-    let events = wait_for_events(&page, 2, Duration::from_secs(2));
+    let events = wait_for_events_matching(&page, Duration::from_secs(2), |events| {
+        events
+            .iter()
+            .any(|e| matches!(e, AuditEvent::StateSnapshot { .. }))
+            && events
+                .iter()
+                .any(|e| matches!(e, AuditEvent::StatePatch { .. }))
+    });
     assert!(
         matches!(events.first(), Some(AuditEvent::StateSnapshot { .. })),
         "first capture should emit a full state snapshot"
@@ -444,15 +462,24 @@ fn replay_invalid_patch_chain_produces_actionable_error() {
     );
 }
 
-fn wait_for_events(
+/// Poll `page.audit_events()` until `is_ready` accepts the current snapshot,
+/// or `timeout` elapses (whichever comes first).
+///
+/// Waits for the *specific* event types a test needs rather than a bare
+/// count: a count can be satisfied by unrelated/incidental events while the
+/// event the test actually cares about is still in flight, returning an
+/// incomplete list before it fully lands — flaky, not a silent pass, since
+/// callers still assert on the specific event afterward, but flaky
+/// nonetheless.
+fn wait_for_events_matching(
     page: &core_runtime::PageSession,
-    min_events: usize,
     timeout: Duration,
+    is_ready: impl Fn(&[AuditEvent]) -> bool,
 ) -> Vec<AuditEvent> {
     let start = Instant::now();
     loop {
         let events = page.audit_events();
-        if events.len() >= min_events || start.elapsed() >= timeout {
+        if is_ready(&events) || start.elapsed() >= timeout {
             return events;
         }
         std::thread::sleep(Duration::from_millis(25));

@@ -313,6 +313,15 @@ fn test_set_policy_rules_clears_stale_approvals() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Timebox duration and post-expiry wait for the Timeboxed-scope assertion
+// below. thread::sleep never returns early, so waiting TIMEBOX_MS + MARGIN_MS
+// guarantees at least that much real time has elapsed since the grant — a
+// generous margin makes the intent explicit and leaves headroom for a slow
+// CI runner, rather than the two literals (1_000 / 1_250) implying a tight
+// 250ms tolerance that isn't actually load-bearing.
+const TIMEBOX_MS: u64 = 1_000;
+const TIMEBOX_MARGIN_MS: u64 = 1_000;
+
 #[test]
 fn test_until_navigation_and_timeboxed_scopes_expire() -> anyhow::Result<()> {
     if test_bench_support::should_skip_browser_tests() {
@@ -373,7 +382,7 @@ fn test_until_navigation_and_timeboxed_scopes_expire() -> anyhow::Result<()> {
         text_regex: Some("(?i)transfer".to_string()),
         context_regex: None,
         action: PolicyAction::RequireHumanApproval,
-        scope: Some(ApprovalScope::Timeboxed { ms: 1_000 }),
+        scope: Some(ApprovalScope::Timeboxed { ms: TIMEBOX_MS }),
         outcome_projector: None,
     }])?;
 
@@ -394,7 +403,7 @@ fn test_until_navigation_and_timeboxed_scopes_expire() -> anyhow::Result<()> {
         None,
     )?;
 
-    thread::sleep(Duration::from_millis(1_250));
+    thread::sleep(Duration::from_millis(TIMEBOX_MS + TIMEBOX_MARGIN_MS));
     let expired_attempt = page.act(
         Some(target_id_timeboxed),
         Some(&target_key_timeboxed),
@@ -424,11 +433,23 @@ fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<
 
     use std::fs;
 
+    // Removes the wrapped temp file when dropped — including on panic (e.g.
+    // from an `assert!` failing partway through the test), so a failing run
+    // doesn't leave stray dragon-test-*.html files behind in the OS temp dir.
+    struct TempFileGuard(std::path::PathBuf);
+    impl Drop for TempFileGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
     // Use unique names based on uuid to avoid test collisions.
     let tmp = std::env::temp_dir();
     let id = uuid::Uuid::new_v4();
     let path_b = tmp.join(format!("dragon-test-{id}-b.html"));
     let path_a = tmp.join(format!("dragon-test-{id}-a.html"));
+    let _guard_b = TempFileGuard(path_b.clone());
+    let _guard_a = TempFileGuard(path_a.clone());
 
     let html_b = "<html><body><button id='transfer'>Transfer</button></body></html>";
     fs::write(&path_b, html_b).context("failed to write page B")?;
@@ -474,16 +495,39 @@ fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<
     // Click the link to page B via JavaScript — does NOT call navigate(), so
     // navigation_epoch remains the same. Only the URL changes.
     page.evaluate_script("document.getElementById('goto-b').click()")?;
-    // Give Chrome time to complete the navigation.
-    std::thread::sleep(std::time::Duration::from_millis(800));
 
-    // Page B should now be loaded. Find the button there.
-    let find_result = find_button_info(&page);
-    let (target_id_b, target_key_b) = match find_result {
-        Ok(info) => info,
-        // If the DOM didn't update (e.g., browser security blocked the link),
-        // skip gracefully rather than false-fail.
-        Err(_) => return Ok(()),
+    // Poll for the navigation to actually land instead of a fixed sleep —
+    // adapts to CI speed rather than flaking on a slow runner or wasting
+    // time on a fast one — and fail loudly (not a silent `Ok(())`) if it
+    // never does: this test exists specifically to exercise click-driven
+    // navigation, so silently skipping on a real regression there would be
+    // a false pass on the exact behavior under test.
+    //
+    // Wait for BOTH the URL to change AND page B's button to be findable in
+    // one loop, not two separate waits: `window.location.href` can update
+    // before the new document finishes parsing, so a URL-only check can
+    // exit while `find_button_info` still transiently fails (or errors,
+    // while Chrome is mid-swap of the execution context) — treat that as
+    // "not ready yet" rather than a hard error.
+    let nav_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let (target_id_b, target_key_b) = loop {
+        let url_matches = page.current_url()?.as_str() == url_b;
+        let button = if url_matches {
+            find_button_info(&page).ok()
+        } else {
+            None
+        };
+        if let Some(info) = button {
+            break info;
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < nav_deadline,
+            "click-driven navigation to page B never completed (still on {}, \
+             or its button never became findable); can't verify \
+             approval-expiry behavior without it",
+            page.current_url()?,
+        );
+        std::thread::sleep(Duration::from_millis(50));
     };
 
     // The URL is now url_b, but the grant recorded url_a. Approval must be expired.
@@ -501,8 +545,8 @@ fn test_until_navigation_expires_on_click_driven_navigation() -> anyhow::Result<
         ActionError::HumanApprovalRequired { .. }
     ));
 
-    let _ = fs::remove_file(&path_a);
-    let _ = fs::remove_file(&path_b);
+    // _guard_a/_guard_b remove the temp files on drop, including on the
+    // panics above.
     Ok(())
 }
 
