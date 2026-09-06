@@ -46,7 +46,7 @@ export const MULTI_STEP_SCENARIOS: MultiStepScenario[] = [
     name: 'spa-filter-cycle',
     url: `file://${fixturesDir}/spa-like.html`,
     description:
-      'Cycle through feed filter buttons (class-toggle only, no navigation) — small, realistic per-step DOM change',
+      'Cycle through feed filter buttons (real card filtering + active-button toggle, no navigation) — small, realistic per-step DOM change',
     stepSelectors: [
       '.filter-btn[data-filter="articles"]',
       '.filter-btn[data-filter="discussions"]',
