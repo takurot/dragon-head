@@ -2,13 +2,15 @@
 name = "skills-engine"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 license.workspace = true
+description = "Declarative workflow execution engine (YAML/JSON skill definitions) for dragon-head"
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-jsonschema = "0.37"
+jsonschema = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

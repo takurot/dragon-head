@@ -2,7 +2,9 @@
 name = "mcp-server"
 version = "0.2.1"
 edition = "2021"
+rust-version.workspace = true
 license.workspace = true
+description = "Stdio MCP server binary (dragon-head-mcp) exposing get_state/act/verify/get_visual/ask_human/run_skill over JSON-RPC"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -15,10 +17,10 @@ serde_json = { workspace = true }
 skills-engine = { path = "../skills-engine" }
 plugin-host = { path = "../plugin-host" }
 thiserror = { workspace = true }
-sha2 = "0.10"
-hex = "0.4"
+sha2 = { workspace = true }
+hex = { workspace = true }
 toml = { workspace = true }
-jsonschema = "0.37"
+jsonschema = { workspace = true }
 
 [[bin]]
 name = "dragon-head-mcp"
