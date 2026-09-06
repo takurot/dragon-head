@@ -69,7 +69,19 @@ The CI pipeline is defined in `.github/workflows/`.
 
 The repository ships a `.devcontainer/` configuration that closely matches the CI environment
 (Ubuntu 24.04, Google Chrome stable, Rust stable, cargo-nextest pinned to the same version as CI).
-Open the repo in VS Code and choose **"Reopen in Container"** — or use the GitHub Codespaces button — to get a consistent test environment without manual setup.
+Open the repo in VS Code and choose **"Reopen in Container"** — or use the GitHub Codespaces button — to get a consistent test environment without manual setup. The container runs as a
+non-root `vscode` user with passwordless `sudo`, not root.
+
+**Apple Silicon / ARM64 hosts:** the container has no browser on `arm64` — Google publishes no
+official Linux ARM64 Chrome build, and Ubuntu's own `chromium-browser` package is a launcher for
+the Chromium *snap*, which doesn't run inside this container (installing it would silently defeat
+`should_skip_browser_tests()`'s graceful skip, since the check only looks for the binary's path,
+not whether it can actually launch). Browser-dependent tests skip cleanly there. For a working
+in-container browser on Apple Silicon, add **both** `"build": { "options": ["--platform=linux/amd64"] }`
+(so the image itself is actually built for amd64 — `runArgs` alone only affects `docker run`,
+not the preceding `docker build`, and would otherwise still produce a browserless arm64 image)
+and `"runArgs": ["--platform=linux/amd64"]` to `devcontainer.json`, then rebuild the container
+under emulation.
 
 ```bash
 # Inside the dev container or on a machine with Chrome and Rust installed:
