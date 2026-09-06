@@ -17,8 +17,12 @@
 # Note: `**/` prefix covers crate-local fixture trees (e.g. core-runtime/tests/fixtures/).
 **/tests/fixtures/**/*.png filter=lfs diff=lfs merge=lfs -text
 **/tests/fixtures/**/*.jpg filter=lfs diff=lfs merge=lfs -text
+**/tests/fixtures/**/*.jpeg filter=lfs diff=lfs merge=lfs -text
 **/tests/fixtures/**/*.webp filter=lfs diff=lfs merge=lfs -text
 **/tests/fixtures/**/*.gif filter=lfs diff=lfs merge=lfs -text
+**/tests/fixtures/**/*.bmp filter=lfs diff=lfs merge=lfs -text
+**/tests/fixtures/**/*.tiff filter=lfs diff=lfs merge=lfs -text
+**/tests/fixtures/**/*.ico filter=lfs diff=lfs merge=lfs -text
 **/tests/fixtures/**/*.bin filter=lfs diff=lfs merge=lfs -text
 
 # Exceptions: files matched by the LFS globs above but below the ~500 KB threshold.

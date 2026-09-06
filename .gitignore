@@ -2,7 +2,27 @@ target/
 **/*.DS_Store
 *.swp
 *.log
-.env
+
+# Env files: ignore every variant (.env, .env.local, .env.production, ...)
+# but keep committed templates like .env.example tracked.
+.env*
+!.env.example
+
+# Private keys and certificates — never commit these regardless of location.
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# Local secret/credential stores and package-manager auth config.
+.secrets/
+.credentials/
+.npmrc
+.pypirc
 
 # Agent and session specific files
 .agents/
