@@ -150,8 +150,14 @@
           <option value="rating">Highest Rated</option>
         </select>
         <label for="per-page">Items per page:</label>
+        <!-- value="4" is smaller than this fixture's 6 product cards so the
+             control actually has an observable effect when chosen (12/24/48
+             are all >= 6, so selecting any of them alone would never hide a
+             card). "12" stays the explicit default so the page still shows
+             all 6 cards on load, matching prior behavior. -->
         <select id="per-page" name="per_page" aria-label="Items per page">
-          <option value="12">12</option>
+          <option value="4">4</option>
+          <option value="12" selected>12</option>
           <option value="24">24</option>
           <option value="48">48</option>
         </select>

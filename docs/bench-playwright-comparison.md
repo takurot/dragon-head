@@ -1,5 +1,15 @@
 # Playwright vs Dragon-Head: ベンチマーク評価レポート
 
+> ⚠️ **計測データ更新が必要 (ISSUE-269, PR #313)**: 本レポート以降、`bench-playwright/fixtures/`
+> の3ファイル (`simple.html` / `form.html` / `spa-like.html`) に機能バグ修正を適用した
+> (検索/ニュースレターフォームの実体化、フィルタボタンの実フィルタリング、画像パス修正、
+> promo のMath.random除去 等)。特に `spa-filter-cycle` (下記「デルタ配信の累積コスト実測」)
+> はフィルタボタンが実際にカードの表示/非表示を切り替えるようになったため、旧計測の
+> 「delta 248 bytes/コール」を含む本レポートの全数値は**現在のフィクスチャを反映していない**。
+> 各表の数値は測定当時のスナップショットとして残すが、新しい結論を導く根拠として使わないこと。
+> フィクスチャ修正後の再計測は別途トラッキングする (フル再計測は Playwright 計測に加えて
+> `bench` crate 側の Chrome 実行を要するため、本 PR の範囲外とした)。
+
 **計測日:** 2026-06-27  
 **環境:** macOS (Apple Silicon), Google Chrome 130, Node.js 22, Rust stable  
 **ブランチ:** `feature/bench-playwright-comparison`
@@ -210,6 +220,11 @@ Playwright にはこの機能がなく、LLM が誤って決済ボタンを押�
 | `form-shipping-cycle` | 配送方法のラジオボタンを 3 回連続クリック | `checked` プロパティの切替 |
 
 ### 結果 1: spa-filter-cycle (実測値、3 run 平均)
+
+> ⚠️ 冒頭の注記のとおり、`spa-like.html` のフィルタボタンは現在ページ内カードの
+> 表示/非表示を実際に切り替える (旧: `.active` クラスの切替のみ)。1クリックあたりの
+> DOM 差分が大きくなったため、下記の「delta 248 bytes/コール」は再計測前の旧フィクスチャ
+> での値であり、現在のフィクスチャでの実測値ではない。
 
 | Step | 種別 (DH) | DH Avg Bytes | DH 累積 Bytes | PW raw HTML 累積 | PW custom extract 累積 |
 |---:|---|---:|---:|---:|---:|
