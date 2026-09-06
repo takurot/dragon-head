@@ -3,6 +3,8 @@ name = "marketplace"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
+repository.workspace = true
+description = "Domain-pack metadata, signature verification, and revenue-share primitives for dragon-head marketplace packs"
 
 [dependencies]
 serde = { workspace = true }

@@ -235,4 +235,26 @@ fn test_revenue_share_calculation() {
 
     let revenue_state = calculate_revenue_share(&event_state);
     assert_eq!(revenue_state, 0.5); // 100 * 0.005 = 0.5
+
+    let event_action = UsageEvent {
+        pack_id: "com.example.testpack".to_string(),
+        event_type: "action_execution".to_string(),
+        count: 100,
+    };
+
+    let revenue_action = calculate_revenue_share(&event_action);
+    assert_eq!(revenue_action, 1.0); // 100 * 0.01 = 1.0
+
+    // Unrecognized event types must still be billed, not silently free —
+    // this default branch is the fallback for any event_type the pricing
+    // table doesn't explicitly know about (e.g. a marketplace event kind
+    // added later without updating calculate_revenue_share).
+    let event_unknown = UsageEvent {
+        pack_id: "com.example.testpack".to_string(),
+        event_type: "some_future_event_type".to_string(),
+        count: 100,
+    };
+
+    let revenue_unknown = calculate_revenue_share(&event_unknown);
+    assert_eq!(revenue_unknown, 0.1); // 100 * 0.001 = 0.1
 }
