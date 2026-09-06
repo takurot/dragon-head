@@ -6,7 +6,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 
 // Keep this map in sync with the wrapper package.json's optionalDependencies
-// and the 5 npm/platform/*/package.json names (see test/run.test.js, which
+// and the 6 npm/platform/*/package.json names (see test/run.test.js, which
 // asserts all three agree). scripts/install.sh and .github/workflows/release.yml
 // maintain their own parallel platform lists in different languages/formats —
 // check those too when adding or removing a platform here.
@@ -16,6 +16,7 @@ const PLATFORM_PACKAGES = {
   'linux,x64': 'dragon-head-mcp-linux-x64',
   'linux,arm64': 'dragon-head-mcp-linux-arm64',
   'win32,x64': 'dragon-head-mcp-win32-x64',
+  'win32,arm64': 'dragon-head-mcp-win32-arm64',
 };
 
 // Architectures we publish glibc Linux builds for. Used only to decide
