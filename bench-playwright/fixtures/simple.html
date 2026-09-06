@@ -59,13 +59,13 @@
   <main>
     <section class="products" aria-label="Featured products">
       <h2>Featured Products</h2>
-      <div class="search-bar" role="search">
+      <form class="search-bar" role="search" action="/products" method="get" onsubmit="event.preventDefault();">
         <input type="search" placeholder="Search products..." aria-label="Search products" name="q">
         <button type="submit">Search</button>
-      </div>
+      </form>
       <div class="product-grid" role="list">
-        <article class="product-card" role="listitem">
-          <img src="/img/product-1.jpg" alt="Wireless Headphones" width="200" height="200" loading="lazy">
+        <article class="product-card" role="listitem" data-price="149.99">
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23f3f4f6'/%3E%3C/svg%3E" alt="Wireless Headphones" width="200" height="200" loading="lazy">
           <h3>Wireless Headphones Pro</h3>
           <p>Premium noise-cancelling headphones with 30-hour battery life and superior sound quality.</p>
           <div class="price">$149.99</div>
@@ -73,8 +73,8 @@
           <a href="/product/wireless-headphones-pro" class="btn">View Details</a>
           <button type="button" data-product-id="WHP-001">Add to Cart</button>
         </article>
-        <article class="product-card" role="listitem">
-          <img src="/img/product-2.jpg" alt="Smart Watch" width="200" height="200" loading="lazy">
+        <article class="product-card" role="listitem" data-price="299.99">
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23f3f4f6'/%3E%3C/svg%3E" alt="Smart Watch" width="200" height="200" loading="lazy">
           <h3>SmartWatch Elite</h3>
           <p>Track your fitness, receive notifications, and monitor your health 24/7.</p>
           <div class="price">$299.99</div>
@@ -82,8 +82,8 @@
           <a href="/product/smartwatch-elite" class="btn">View Details</a>
           <button type="button" data-product-id="SWE-002">Add to Cart</button>
         </article>
-        <article class="product-card" role="listitem">
-          <img src="/img/product-3.jpg" alt="Laptop Stand" width="200" height="200" loading="lazy">
+        <article class="product-card" role="listitem" data-price="79.99">
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23f3f4f6'/%3E%3C/svg%3E" alt="Laptop Stand" width="200" height="200" loading="lazy">
           <h3>Ergonomic Laptop Stand</h3>
           <p>Adjustable aluminium stand compatible with all laptops 11–17 inches.</p>
           <div class="price">$79.99</div>
@@ -91,8 +91,8 @@
           <a href="/product/ergonomic-laptop-stand" class="btn">View Details</a>
           <button type="button" data-product-id="ELS-003">Add to Cart</button>
         </article>
-        <article class="product-card" role="listitem">
-          <img src="/img/product-4.jpg" alt="Mechanical Keyboard" width="200" height="200" loading="lazy">
+        <article class="product-card" role="listitem" data-price="119.99">
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23f3f4f6'/%3E%3C/svg%3E" alt="Mechanical Keyboard" width="200" height="200" loading="lazy">
           <h3>Mechanical Keyboard TKL</h3>
           <p>Tenkeyless mechanical keyboard with RGB backlighting and tactile switches.</p>
           <div class="price">$119.99</div>
@@ -100,8 +100,8 @@
           <a href="/product/mechanical-keyboard-tkl" class="btn">View Details</a>
           <button type="button" data-product-id="MKT-004">Add to Cart</button>
         </article>
-        <article class="product-card" role="listitem">
-          <img src="/img/product-5.jpg" alt="USB-C Hub" width="200" height="200" loading="lazy">
+        <article class="product-card" role="listitem" data-price="59.99">
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23f3f4f6'/%3E%3C/svg%3E" alt="USB-C Hub" width="200" height="200" loading="lazy">
           <h3>7-in-1 USB-C Hub</h3>
           <p>Expand your connectivity with HDMI, USB-A, SD card, and Ethernet ports.</p>
           <div class="price">$59.99</div>
@@ -109,8 +109,8 @@
           <a href="/product/usb-c-hub-7in1" class="btn">View Details</a>
           <button type="button" data-product-id="UCH-005">Add to Cart</button>
         </article>
-        <article class="product-card" role="listitem">
-          <img src="/img/product-6.jpg" alt="Webcam" width="200" height="200" loading="lazy">
+        <article class="product-card" role="listitem" data-price="199.99">
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23f3f4f6'/%3E%3C/svg%3E" alt="Webcam" width="200" height="200" loading="lazy">
           <h3>4K Webcam Pro</h3>
           <p>Crystal-clear 4K video with built-in ring light and noise-cancelling microphone.</p>
           <div class="price">$199.99</div>
@@ -121,7 +121,9 @@
       </div>
 
       <div style="text-align:center;margin-top:2rem;">
-        <a href="/products?page=1" class="btn" style="background:#764ba2;color:#fff;">Previous</a>
+        <!-- Page 1: there is no previous page, so it's disabled rather than
+             linking back to page=1 (itself). -->
+        <span class="btn" style="background:#9ca3af;color:#fff;cursor:not-allowed;" aria-disabled="true">Previous</span>
         <a href="/products?page=2" class="btn" style="background:#764ba2;color:#fff;">Next</a>
       </div>
     </section>
@@ -148,8 +150,14 @@
           <option value="rating">Highest Rated</option>
         </select>
         <label for="per-page">Items per page:</label>
+        <!-- value="4" is smaller than this fixture's 6 product cards so the
+             control actually has an observable effect when chosen (12/24/48
+             are all >= 6, so selecting any of them alone would never hide a
+             card). "12" stays the explicit default so the page still shows
+             all 6 cards on load, matching prior behavior. -->
         <select id="per-page" name="per_page" aria-label="Items per page">
-          <option value="12">12</option>
+          <option value="4">4</option>
+          <option value="12" selected>12</option>
           <option value="24">24</option>
           <option value="48">48</option>
         </select>
@@ -159,7 +167,11 @@
     <section class="newsletter" aria-label="Newsletter signup">
       <h2>Stay in the Loop</h2>
       <p>Get exclusive deals, new product alerts, and member-only discounts delivered to your inbox.</p>
-      <form class="newsletter-form" method="post" action="/newsletter/subscribe">
+      <!-- This fixture has no backend: prevent the actual navigation
+           /newsletter/subscribe's method="post" would otherwise trigger
+           (breaking any interaction test that submits it), while still
+           exercising a real form/input/button structure for extraction. -->
+      <form class="newsletter-form" method="post" action="/newsletter/subscribe" onsubmit="event.preventDefault();">
         <input type="email" name="email" placeholder="your@email.com" aria-label="Email address" required autocomplete="email">
         <button type="submit">Subscribe</button>
       </form>
@@ -211,5 +223,34 @@
       <a href="/sitemap.xml">Sitemap</a>
     </p>
   </footer>
+
+  <script>
+    // Wire the sort/per-page controls to the actual product grid instead of
+    // leaving them decorative.
+    const grid = document.querySelector('.product-grid');
+
+    document.getElementById('sort').addEventListener('change', (e) => {
+      const mode = e.target.value;
+      if (mode !== 'price-asc' && mode !== 'price-desc') {
+        // "relevance" / "newest" / "rating": this static fixture has no
+        // real relevance/date/rating signal to sort by — leave the
+        // existing order rather than fabricate one.
+        return;
+      }
+      const cards = Array.from(grid.querySelectorAll('.product-card'));
+      cards.sort((a, b) => {
+        const diff = parseFloat(a.dataset.price) - parseFloat(b.dataset.price);
+        return mode === 'price-asc' ? diff : -diff;
+      });
+      cards.forEach(card => grid.appendChild(card));
+    });
+
+    document.getElementById('per-page').addEventListener('change', (e) => {
+      const limit = parseInt(e.target.value, 10);
+      document.querySelectorAll('.product-card').forEach((card, i) => {
+        card.style.display = i < limit ? '' : 'none';
+      });
+    });
+  </script>
 </body>
 </html>

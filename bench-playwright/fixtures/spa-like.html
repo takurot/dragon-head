@@ -26,6 +26,8 @@
     .card-actions { display: flex; gap: 1rem; margin-top: 1rem; }
     .card-actions button { background: none; border: 1px solid #d1d5db; border-radius: 6px; padding: 0.375rem 1rem; font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 0.375rem; }
     .card-actions button:hover { background: #f9fafb; }
+    .card-actions button.liked { color: #2563eb; border-color: #93c5fd; background: #eff6ff; }
+    .card-actions button.saved { color: #b45309; border-color: #fcd34d; background: #fffbeb; }
     .tag { display: inline-block; padding: 0.2rem 0.6rem; background: #eff6ff; color: #1d4ed8; border-radius: 9999px; font-size: 0.75rem; margin-right: 0.375rem; }
     #load-more { width: 100%; padding: 0.875rem; border: 1px dashed #d1d5db; background: #fff; border-radius: 8px; cursor: pointer; color: #6b7280; margin-top: 1rem; }
     #load-more:hover { background: #f9fafb; }
@@ -83,14 +85,24 @@
   <script>
     // SPA-like: render 40 cards dynamically to simulate real-world DOM size
     const categories = ['Technology', 'Design', 'Science', 'Business', 'Culture'];
-    const actions = ['👍 Like', '💬 Comment', '🔗 Share', '🔖 Save'];
+    // One content type per card, cycled — matches the filter buttons' values
+    // (all/articles/discussions/videos/links) so filtering has something
+    // real to compare against.
+    const contentTypes = ['articles', 'discussions', 'videos', 'links'];
 
+    // generateCard only ever interpolates locally-computed values (the
+    // categories/contentTypes constants above, and numeric loop/random
+    // values) — never external/untrusted input. Keep it that way: if this
+    // fixture is ever extended to render server- or user-supplied content,
+    // escape it before interpolating into this template (insertAdjacentHTML
+    // has no HTML-escaping of its own).
     function generateCard(i) {
       const cat = categories[i % categories.length];
+      const type = contentTypes[i % contentTypes.length];
       const likes = Math.floor(Math.random() * 500);
       const comments = Math.floor(Math.random() * 80);
       return `
-        <article class="card" data-id="${i}" aria-labelledby="card-title-${i}">
+        <article class="card" data-id="${i}" data-type="${type}" aria-labelledby="card-title-${i}">
           <div class="card-header">
             <div class="avatar" aria-hidden="true"></div>
             <div>
@@ -112,10 +124,10 @@
             </div>
           </div>
           <div class="card-actions">
-            <button type="button" aria-label="Like post ${i}, currently ${likes} likes" data-action="like" data-post="${i}">👍 ${likes}</button>
+            <button type="button" aria-label="Like post ${i}, currently ${likes} likes" aria-pressed="false" data-action="like" data-post="${i}" data-liked="false" data-base-likes="${likes}">👍 ${likes}</button>
             <button type="button" aria-label="${comments} comments on post ${i}" data-action="comment" data-post="${i}">💬 ${comments}</button>
             <button type="button" aria-label="Share post ${i}" data-action="share" data-post="${i}">🔗 Share</button>
-            <button type="button" aria-label="Bookmark post ${i}" data-action="bookmark" data-post="${i}">🔖</button>
+            <button type="button" aria-label="Bookmark post ${i}" aria-pressed="false" data-action="bookmark" data-post="${i}" data-saved="false">🔖</button>
             <a href="/post/${i}" style="margin-left:auto;font-size:0.8rem;color:#2563eb;">Read more →</a>
           </div>
         </article>
@@ -123,27 +135,66 @@
     }
 
     const feed = document.getElementById('feed');
-    for (let i = 0; i < 40; i++) {
+    let itemCount = 40;
+    for (let i = 0; i < itemCount; i++) {
       feed.insertAdjacentHTML('beforeend', generateCard(i));
     }
 
-    // Filter buttons
+    function applyFilter(filter) {
+      document.querySelectorAll('#feed .card').forEach(card => {
+        card.style.display = (filter === 'all' || card.dataset.type === filter) ? '' : 'none';
+      });
+    }
+
+    let activeFilter = 'all';
+
+    // Filter buttons: actually filter the cards, not just toggle the
+    // pressed-button's own styling.
     document.querySelectorAll('.filter-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        activeFilter = btn.dataset.filter;
+        applyFilter(activeFilter);
       });
     });
 
+    // Card actions: like/bookmark toggle real, observable state — visible
+    // text/icon, styling, and aria-pressed — not just a data attribute, so
+    // the toggle is actually perceivable by sighted and assistive-tech
+    // users alike. comment/share are read-only affordances in this fixture
+    // and intentionally have no side effect beyond being clickable.
+    feed.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      if (btn.dataset.action === 'like') {
+        const liked = btn.dataset.liked !== 'true';
+        btn.dataset.liked = String(liked);
+        btn.classList.toggle('liked', liked);
+        btn.setAttribute('aria-pressed', String(liked));
+        const baseLikes = Number(btn.dataset.baseLikes);
+        const count = baseLikes + (liked ? 1 : 0);
+        btn.textContent = `${liked ? '💙' : '👍'} ${count}`;
+        btn.setAttribute('aria-label', `Like post ${btn.dataset.post}, currently ${count} likes`);
+      } else if (btn.dataset.action === 'bookmark') {
+        const saved = btn.dataset.saved !== 'true';
+        btn.dataset.saved = String(saved);
+        btn.classList.toggle('saved', saved);
+        btn.setAttribute('aria-pressed', String(saved));
+        btn.textContent = saved ? '✅' : '🔖';
+        btn.setAttribute('aria-label', `${saved ? 'Remove bookmark from' : 'Bookmark'} post ${btn.dataset.post}`);
+      }
+    });
+
     // Load more
-    let page = 1;
     document.getElementById('load-more').addEventListener('click', () => {
-      const start = 40 * page;
+      const start = itemCount;
       for (let i = start; i < start + 10; i++) {
         feed.insertAdjacentHTML('beforeend', generateCard(i));
       }
-      page++;
-      document.getElementById('status-bar').textContent = `✓ Connected — showing latest ${40 + 10 * page} items`;
+      itemCount += 10;
+      document.getElementById('status-bar').textContent = `✓ Connected — showing latest ${itemCount} items`;
+      applyFilter(activeFilter);
     });
 
     // Compose

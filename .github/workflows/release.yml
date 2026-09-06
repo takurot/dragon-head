@@ -61,6 +61,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: dragon-head-mcp-windows-x64.exe
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            artifact: dragon-head-mcp-windows-arm64.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -197,6 +200,7 @@ jobs:
             "dragon-head-mcp-linux-x64:linux-x64:dragon-head-mcp"
             "dragon-head-mcp-linux-arm64:linux-arm64:dragon-head-mcp"
             "dragon-head-mcp-windows-x64.exe:win32-x64:dragon-head-mcp.exe"
+            "dragon-head-mcp-windows-arm64.exe:win32-arm64:dragon-head-mcp.exe"
           )
 
           for entry in "${PLATFORMS[@]}"; do

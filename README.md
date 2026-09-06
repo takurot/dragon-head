@@ -73,6 +73,7 @@ Download the binary for your platform from the
 | Linux x86-64 | `dragon-head-mcp-linux-x64` |
 | Linux arm64 | `dragon-head-mcp-linux-arm64` |
 | Windows x86-64 | `dragon-head-mcp-windows-x64.exe` |
+| Windows ARM64 | `dragon-head-mcp-windows-arm64.exe` |
 
 Each release includes a `.sha256` checksum file. Verify before running:
 
