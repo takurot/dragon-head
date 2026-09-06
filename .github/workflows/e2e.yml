@@ -86,8 +86,8 @@ jobs:
       with:
         name: e2e-failures
         path: |
-          *.png
-          *.log
+          **/*.png
+          **/*.log
 
   mcp-binary-e2e:
     runs-on: ubuntu-latest
@@ -109,8 +109,8 @@ jobs:
       with:
         name: mcp-binary-e2e-failures
         path: |
-          *.png
-          *.log
+          **/*.png
+          **/*.log
 
   evaluation-bench-full:
     runs-on: ubuntu-latest
@@ -176,9 +176,20 @@ jobs:
         case "$EVAL_RESULT" in failure|cancelled) FAILED="${FAILED}- evaluation-bench-full (${EVAL_RESULT})\n" ;; esac
 
         BODY_FILE=$(mktemp)
+        trap 'rm -f "$BODY_FILE"' EXIT
         printf '**Run:** %s\n**Date:** %s\n\n**Failed/cancelled gates:**\n' \
           "$RUN_URL" "$(date -u '+%Y-%m-%d %H:%M UTC')" > "$BODY_FILE"
         printf '%b' "$FAILED" >> "$BODY_FILE"
+
+        # gh issue create --label errors out if the label doesn't exist in
+        # the repo (unlike --label on `issue list`, which just matches
+        # nothing) — ensure it exists first so a deleted/never-created label
+        # doesn't silently break the one thing this job exists to do.
+        # --force makes this idempotent (updates color/description if the
+        # label is already there instead of erroring).
+        gh label create nightly-failure --repo "$REPO" \
+          --color "d73a4a" --description "Filed by the nightly E2E/NFR workflow" \
+          --force
 
         EXISTING=$(gh issue list --repo "$REPO" --label nightly-failure --state open --json number --jq '.[0].number // empty')
         if [ -n "$EXISTING" ]; then
