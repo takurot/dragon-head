@@ -82,8 +82,12 @@ export function resolveBrowseAuth(opts: BrowseClientOptions = {}): ResolvedAuth 
           source: 'state-file',
         };
       }
-    } catch {
-      // fall through to error
+    } catch (err) {
+      // Surface the parse failure instead of silently falling through to
+      // the generic "cannot find daemon port + token" error, which would
+      // otherwise look identical to "no state file exists at all".
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`browse-client: ignoring unreadable state file ${stateFile}: ${message}\n`);
     }
   }
 
@@ -92,6 +96,13 @@ export function resolveBrowseAuth(opts: BrowseClientOptions = {}): ResolvedAuth 
     '(sets GSTACK_PORT + GSTACK_SKILL_TOKEN) or run from a project with a live daemon ' +
     '(.gstack/browse.json must exist).'
   );
+}
+
+/** Parse BROWSE_TAB into a tab id, or undefined if unset/non-numeric (never NaN). */
+function parseOptionalTabId(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const parsed = parseInt(raw, 10);
+  return isNaN(parsed) ? undefined : parsed;
 }
 
 function defaultStateFile(): string | null {
@@ -132,7 +143,7 @@ export class BrowseClient {
     const auth = resolveBrowseAuth(opts);
     this.port = auth.port;
     this.token = auth.token;
-    this.tabId = opts.tabId ?? (process.env.BROWSE_TAB ? parseInt(process.env.BROWSE_TAB, 10) : undefined);
+    this.tabId = opts.tabId ?? parseOptionalTabId(process.env.BROWSE_TAB);
     this.timeoutMs = opts.timeoutMs ?? 30_000;
   }
 
@@ -161,7 +172,9 @@ export class BrowseClient {
       if (err.name === 'TimeoutError' || err.name === 'AbortError') {
         throw new BrowseClientError(`browse-client: command "${cmd}" timed out after ${this.timeoutMs}ms`);
       }
-      if (err.code === 'ECONNREFUSED') {
+      // Modern fetch (undici/Bun) wraps the underlying socket error in
+      // `.cause` rather than exposing `.code` directly on the TypeError.
+      if (err.code === 'ECONNREFUSED' || err.cause?.code === 'ECONNREFUSED') {
         throw new BrowseClientError(`browse-client: daemon not running on port ${this.port}`);
       }
       throw new BrowseClientError(`browse-client: ${err.message ?? err}`);

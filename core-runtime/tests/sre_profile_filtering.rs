@@ -182,8 +182,24 @@ fn test_interactive_allows_js_and_images() -> anyhow::Result<()> {
         "Interactive must allow <img>"
     );
     assert!(
+        roles.contains(&"svg".to_string()),
+        "Interactive must allow <svg>"
+    );
+    assert!(
         roles.contains(&"style".to_string()),
         "Interactive must allow <style>"
+    );
+    assert!(
+        roles.contains(&"video".to_string()),
+        "Interactive must allow <video>"
+    );
+    assert!(
+        roles.contains(&"iframe".to_string()),
+        "Interactive must allow <iframe>"
+    );
+    assert!(
+        roles.contains(&"canvas".to_string()),
+        "Interactive must allow <canvas>"
     );
 
     // Text content must remain

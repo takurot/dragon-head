@@ -37,3 +37,21 @@ final-status-level = "fail"
 
 # Never stop early in CI — capture the full failure picture.
 fail-fast = false
+
+# ── Per-test overrides ──────────────────────────────────────────────────────
+# NOTE: overrides are also profile-specific and do NOT inherit — repeat in
+# both profiles, same as the scalar fields above.
+
+# test_repro_unstable_keys_on_sibling_insertion (ISSUE-272) prints an
+# eprintln! when it skips itself for lack of a Chrome/Chromium binary.
+# nextest discards stdout/stderr for a passing test by default (this
+# skip-via-early-Ok(()) reports as an ordinary pass), which would make that
+# skip invisible in exactly the CI/local runs it's meant to be seen in.
+# success-output = "immediate" always shows this one test's output.
+[[profile.default.overrides]]
+filter = 'test(test_repro_unstable_keys_on_sibling_insertion)'
+success-output = "immediate"
+
+[[profile.ci.overrides]]
+filter = 'test(test_repro_unstable_keys_on_sibling_insertion)'
+success-output = "immediate"

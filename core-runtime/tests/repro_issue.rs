@@ -4,6 +4,10 @@ use core_runtime::BrowserClient;
 #[test]
 fn test_repro_unstable_keys_on_sibling_insertion() -> anyhow::Result<()> {
     if test_bench_support::should_skip_browser_tests() {
+        eprintln!(
+            "test_repro_unstable_keys_on_sibling_insertion: skipped — no Chrome/Chromium found \
+             (set CHROME_PATH or install Chrome to run this test)"
+        );
         return Ok(());
     }
 

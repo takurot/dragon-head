@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { reductionPct, costUsd, GPT4O_COST_PER_MILLION, type PlaywrightMetrics } from './metrics.js';
+import { argValue } from './cli-args.js';
 
 export interface DragonHeadApproachMetrics {
   avg_tokens: number;
@@ -69,22 +70,21 @@ export function buildComparisonMarkdown(
 // CLI entry point
 if (process.argv[1]?.endsWith('compare.ts') || process.argv[1]?.endsWith('compare.js')) {
   const args = process.argv.slice(2);
-  const pwArg = args.find((a) => a.startsWith('--playwright='));
-  const dhArg = args.find((a) => a.startsWith('--dragon-head='));
-  const outputArg = args.find((a) => a.startsWith('--output='));
+  const pwPath = argValue(args, '--playwright');
+  const dhPath = argValue(args, '--dragon-head');
 
-  if (!pwArg || !dhArg) {
+  if (!pwPath || !dhPath) {
     console.error(
       'Usage: tsx src/compare.ts --playwright=<path> --dragon-head=<path> [--output=<path>]',
     );
     process.exit(1);
   }
 
-  const pwData: PlaywrightMetrics[] = JSON.parse(readFileSync(pwArg.split('=')[1]!, 'utf8'));
-  const dhData: DragonHeadMetrics[] = JSON.parse(readFileSync(dhArg.split('=')[1]!, 'utf8'));
+  const pwData: PlaywrightMetrics[] = JSON.parse(readFileSync(pwPath, 'utf8'));
+  const dhData: DragonHeadMetrics[] = JSON.parse(readFileSync(dhPath, 'utf8'));
   const md = buildComparisonMarkdown(pwData, dhData);
 
-  const outputPath = outputArg?.split('=')[1] ?? 'comparison-report.md';
+  const outputPath = argValue(args, '--output') ?? 'comparison-report.md';
   const dir = dirname(outputPath);
   if (dir && dir !== '.') mkdirSync(dir, { recursive: true });
   writeFileSync(outputPath, md);
