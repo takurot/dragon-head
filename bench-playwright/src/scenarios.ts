@@ -9,7 +9,28 @@ const fixturesDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'fixt
 // "baseline compatibility" the description below refers to). Overridable
 // for environments where reaching the public internet during a benchmark
 // run isn't desirable.
-const EXTERNAL_BASELINE_URL = process.env.BENCH_EXTERNAL_URL ?? 'https://example.com';
+//
+// The override is validated, not just substituted: measureUrl() catches
+// page.goto() failures per-run rather than propagating them, so an
+// empty/whitespace/malformed BENCH_EXTERNAL_URL wouldn't fail loudly — it
+// would silently produce a scenario with all-zero, all-failed metrics that
+// still looks like a normal (successful, exit-0) benchmark result.
+const DEFAULT_EXTERNAL_BASELINE_URL = 'https://example.com';
+
+export function resolveExternalBaselineUrl(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_EXTERNAL_BASELINE_URL;
+  try {
+    return new URL(trimmed).href;
+  } catch {
+    console.error(
+      `BENCH_EXTERNAL_URL="${raw}" is not a valid URL; falling back to ${DEFAULT_EXTERNAL_BASELINE_URL}`,
+    );
+    return DEFAULT_EXTERNAL_BASELINE_URL;
+  }
+}
+
+const EXTERNAL_BASELINE_URL = resolveExternalBaselineUrl(process.env.BENCH_EXTERNAL_URL);
 
 export interface Scenario {
   name: string;

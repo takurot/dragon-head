@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, realpathSync } from 'fs';
 import { dirname } from 'path';
-import { pathToFileURL } from 'url';
+import { fileURLToPath } from 'url';
 import { reductionPct, costUsd, GPT4O_COST_PER_MILLION, type PlaywrightMetrics } from './metrics.js';
 import { argValue } from './cli-args.js';
 
@@ -85,12 +85,29 @@ export function buildComparisonMarkdown(
   return lines.join('\n');
 }
 
-// CLI entry point. Compares this module's URL against the invoked script's
-// path (the standard ESM idiom for "is this the entry module", replacing
-// CommonJS's `require.main === module`) rather than `endsWith('compare.ts')`
-// — a fragile check that breaks under a symlink, a renamed copy, or any
+// CLI entry point. Compares this module's real (symlink-resolved) path
+// against the invoked script's real path — the ESM idiom for "is this the
+// entry module", replacing CommonJS's `require.main === module` — rather
+// than `endsWith('compare.ts')`, which breaks under a renamed copy or any
 // invocation path that doesn't literally end in that filename.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+//
+// realpathSync on both sides (not just import.meta.url) matters: Node
+// resolves import.meta.url to the real target of a symlink, but leaves
+// process.argv[1] as the symlink path the user actually typed — comparing
+// one resolved and one not would silently skip this whole block (and the
+// CLI would exit 0 having done nothing) for exactly the symlink case this
+// fix exists to support.
+function isMainModule(): boolean {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(argv1);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   const args = process.argv.slice(2);
   const pwPath = argValue(args, '--playwright');
   const dhPath = argValue(args, '--dragon-head');
