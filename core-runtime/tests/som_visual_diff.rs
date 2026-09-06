@@ -19,13 +19,16 @@ use core_runtime::BrowserClient;
 // not a loosening (issue #281).
 const DIFF_THRESHOLD: f64 = 0.08;
 
-/// Screenshot dimensions are expected to be pixel-identical for the fixed
-/// fixture layout below across normal CI/local runs; a handful of pixels of
-/// slack absorbs sub-pixel DPI/anti-aliasing rounding some environments
-/// apply. Anything beyond that most likely indicates a real capture or
-/// layout regression, so it should fail loudly rather than being silently
-/// cropped away (issue #281).
-const MAX_DIMENSION_SLACK_PX: u32 = 4;
+/// `BrowserClient::new()` leaves the window size unset, so the captured
+/// screenshot's canvas is whatever viewport Chrome defaults to — unspecified
+/// and observed to differ across OS/Chrome builds (e.g. macOS 756x417 vs
+/// Linux CI 780x437 for the same fixture). Pinning the window size below
+/// (`new_with_window_size`) makes the capture deterministic, so a real
+/// dimension mismatch now reliably indicates a capture/layout regression
+/// rather than environment noise — only a couple of pixels of slack remain,
+/// for encoder-level rounding (issue #281; Codex review on PR #322).
+const FIXTURE_WINDOW_SIZE: (u32, u32) = (800, 600);
+const MAX_DIMENSION_SLACK_PX: u32 = 2;
 
 #[test]
 fn test_som_visual_regression_threshold() -> Result<()> {
@@ -33,7 +36,7 @@ fn test_som_visual_regression_threshold() -> Result<()> {
         return Ok(());
     }
 
-    let client = BrowserClient::new()?;
+    let client = BrowserClient::new_with_window_size(FIXTURE_WINDOW_SIZE.0, FIXTURE_WINDOW_SIZE.1)?;
     let page = client.new_page()?;
 
     let html = r#"
@@ -107,9 +110,10 @@ fn diff_ratio_and_image(baseline_png: &[u8], actual_png: &[u8]) -> Result<(f64, 
         || baseline_h.abs_diff(actual_h) > MAX_DIMENSION_SLACK_PX
     {
         anyhow::bail!(
-            "screenshot dimensions diverged by more than {MAX_DIMENSION_SLACK_PX}px slack: \
+            "screenshot dimensions diverged by more than {MAX_DIMENSION_SLACK_PX}px: \
              baseline=({baseline_w},{baseline_h}), actual=({actual_w},{actual_h}) — \
-             likely a real capture/layout regression rather than DPI rounding"
+             the window size is pinned via new_with_window_size, so this most likely \
+             indicates a real capture/layout regression"
         );
     }
     let width = baseline_w.min(actual_w);
@@ -120,10 +124,10 @@ fn diff_ratio_and_image(baseline_png: &[u8], actual_png: &[u8]) -> Result<(f64, 
         );
     }
 
-    // Within the allowed slack, different environments can still produce
-    // slightly different screenshot canvas sizes (DPI/anti-aliasing
-    // rounding). Compare the common top-left viewport area to keep
-    // regression checks stable.
+    // With the window size pinned (see FIXTURE_WINDOW_SIZE above), the only
+    // expected size variance is a pixel or two of encoder-level rounding.
+    // Compare the common top-left viewport area to keep regression checks
+    // stable against that.
     let baseline = image::imageops::crop_imm(&baseline_decoded, 0, 0, width, height).to_image();
     let actual = image::imageops::crop_imm(&actual_decoded, 0, 0, width, height).to_image();
     let mut diff = RgbaImage::new(width, height);
