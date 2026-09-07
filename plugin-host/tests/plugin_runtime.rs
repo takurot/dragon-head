@@ -248,7 +248,7 @@ fn test_on_state_echoes_input() {
     let package = build_and_sign_package(
         vec![ExtensionPoint::OnState],
         vec![Capability::ReadState],
-        wasm.clone(),
+        wasm,
         &signing_key,
         &key_id,
     );
@@ -310,7 +310,7 @@ fn test_before_act_returns_allow_true() {
     let package = build_and_sign_package(
         vec![ExtensionPoint::BeforeAct],
         vec![],
-        wasm.clone(),
+        wasm,
         &signing_key,
         &key_id,
     );
@@ -338,7 +338,7 @@ fn test_on_state_blocked_without_read_state_capability() {
     let package = build_and_sign_package(
         vec![ExtensionPoint::OnState],
         vec![], // <-- no ReadState
-        wasm.clone(),
+        wasm,
         &signing_key,
         &key_id,
     );
@@ -400,7 +400,7 @@ fn test_before_act_malformed_output_returns_invalid_output() {
     let package = build_and_sign_package(
         vec![ExtensionPoint::BeforeAct],
         vec![],
-        wasm.clone(),
+        wasm,
         &signing_key,
         &key_id,
     );
@@ -560,20 +560,27 @@ fn test_second_load_hits_module_cache() {
     );
 
     let host = PluginHost::new(registry);
-    host.load_plugin(&package).expect("first load must succeed");
 
-    let t = std::time::Instant::now();
+    // Compare the cached (second) load against the compile-from-scratch
+    // (first) load *relatively*, not against an absolute millisecond
+    // constant — an absolute threshold is flaky under CI noise (a loaded
+    // runner can make even a cache hit take >50ms in wall-clock terms).
+    // The cache should still make the second load dramatically faster than
+    // the first regardless of overall machine speed (issue #284).
+    let first_start = std::time::Instant::now();
+    host.load_plugin(&package).expect("first load must succeed");
+    let first_elapsed = first_start.elapsed();
+
+    let second_start = std::time::Instant::now();
     let loaded2 = host
         .load_plugin(&package)
         .expect("second load must succeed");
-    let elapsed = t.elapsed();
+    let second_elapsed = second_start.elapsed();
 
-    // Second load should be fast because the module is returned from cache.
-    // 50ms is generous enough for any CI runner (pure lock + hash lookup).
     assert!(
-        elapsed.as_millis() < 50,
-        "second load took {}ms, expected < 50ms (cache miss?)",
-        elapsed.as_millis()
+        second_elapsed.as_nanos().saturating_mul(3) < first_elapsed.as_nanos().max(1),
+        "second (cached) load ({second_elapsed:?}) was not at least 3x faster than \
+         the first (compiling) load ({first_elapsed:?}) — cache miss?"
     );
 
     // Verify the cached plugin still executes correctly.
