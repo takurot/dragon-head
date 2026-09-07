@@ -62,37 +62,37 @@ fn test_minimal_blocks_all_media_and_js() -> anyhow::Result<()> {
 
     // Minimal MUST block: script, style, img, video, svg, iframe, canvas
     assert!(
-        !roles.contains(&"script".to_string()),
+        !roles.iter().any(|r| r == "script"),
         "Minimal must block <script>"
     );
     assert!(
-        !roles.contains(&"style".to_string()),
+        !roles.iter().any(|r| r == "style"),
         "Minimal must block <style>"
     );
     assert!(
-        !roles.contains(&"img".to_string()),
+        !roles.iter().any(|r| r == "img"),
         "Minimal must block <img>"
     );
     assert!(
-        !roles.contains(&"video".to_string()),
+        !roles.iter().any(|r| r == "video"),
         "Minimal must block <video>"
     );
     assert!(
-        !roles.contains(&"svg".to_string()),
+        !roles.iter().any(|r| r == "svg"),
         "Minimal must block <svg>"
     );
     assert!(
-        !roles.contains(&"iframe".to_string()),
+        !roles.iter().any(|r| r == "iframe"),
         "Minimal must block <iframe>"
     );
     assert!(
-        !roles.contains(&"canvas".to_string()),
+        !roles.iter().any(|r| r == "canvas"),
         "Minimal must block <canvas>"
     );
 
     // Minimal MUST keep: h1, p, text
-    assert!(roles.contains(&"h1".to_string()), "Minimal must keep <h1>");
-    assert!(roles.contains(&"p".to_string()), "Minimal must keep <p>");
+    assert!(roles.iter().any(|r| r == "h1"), "Minimal must keep <h1>");
+    assert!(roles.iter().any(|r| r == "p"), "Minimal must keep <p>");
 
     // role="presentation" must be excluded
     let json = serde_json::to_string(state.root())?;
@@ -120,39 +120,41 @@ fn test_visual_allows_images_blocks_js() -> anyhow::Result<()> {
     let roles = get_all_roles(&state);
 
     // Visual MUST allow: img, svg (for SoM generation)
-    assert!(
-        roles.contains(&"img".to_string()),
-        "Visual must allow <img>"
-    );
-    assert!(
-        roles.contains(&"svg".to_string()),
-        "Visual must allow <svg>"
-    );
+    assert!(roles.iter().any(|r| r == "img"), "Visual must allow <img>");
+    assert!(roles.iter().any(|r| r == "svg"), "Visual must allow <svg>");
 
     // Visual MUST block: script, style, video, iframe, canvas
     assert!(
-        !roles.contains(&"script".to_string()),
+        !roles.iter().any(|r| r == "script"),
         "Visual must block <script>"
     );
     assert!(
-        !roles.contains(&"style".to_string()),
+        !roles.iter().any(|r| r == "style"),
         "Visual must block <style>"
     );
     assert!(
-        !roles.contains(&"video".to_string()),
+        !roles.iter().any(|r| r == "video"),
         "Visual must block <video>"
     );
     assert!(
-        !roles.contains(&"iframe".to_string()),
+        !roles.iter().any(|r| r == "iframe"),
         "Visual must block <iframe>"
     );
     assert!(
-        !roles.contains(&"canvas".to_string()),
+        !roles.iter().any(|r| r == "canvas"),
         "Visual must block <canvas>"
     );
 
     // Text content must remain
-    assert!(roles.contains(&"h1".to_string()), "Visual must keep <h1>");
+    assert!(roles.iter().any(|r| r == "h1"), "Visual must keep <h1>");
+
+    // role="presentation" must be excluded, matching Minimal and Interactive
+    // (issue #282 — this assertion was missing from the Visual profile test).
+    let json = serde_json::to_string(state.root())?;
+    assert!(
+        !json.contains("Ad Banner"),
+        "Visual must exclude role=presentation content"
+    );
 
     Ok(())
 }
@@ -174,43 +176,40 @@ fn test_interactive_allows_js_and_images() -> anyhow::Result<()> {
 
     // Interactive MUST allow: script, img, svg, style, video, iframe, canvas
     assert!(
-        roles.contains(&"script".to_string()),
+        roles.iter().any(|r| r == "script"),
         "Interactive must allow <script>"
     );
     assert!(
-        roles.contains(&"img".to_string()),
+        roles.iter().any(|r| r == "img"),
         "Interactive must allow <img>"
     );
     assert!(
-        roles.contains(&"svg".to_string()),
+        roles.iter().any(|r| r == "svg"),
         "Interactive must allow <svg>"
     );
     assert!(
-        roles.contains(&"style".to_string()),
+        roles.iter().any(|r| r == "style"),
         "Interactive must allow <style>"
     );
     assert!(
-        roles.contains(&"video".to_string()),
+        roles.iter().any(|r| r == "video"),
         "Interactive must allow <video>"
     );
     assert!(
-        roles.contains(&"iframe".to_string()),
+        roles.iter().any(|r| r == "iframe"),
         "Interactive must allow <iframe>"
     );
     assert!(
-        roles.contains(&"canvas".to_string()),
+        roles.iter().any(|r| r == "canvas"),
         "Interactive must allow <canvas>"
     );
 
     // Text content must remain
     assert!(
-        roles.contains(&"h1".to_string()),
+        roles.iter().any(|r| r == "h1"),
         "Interactive must keep <h1>"
     );
-    assert!(
-        roles.contains(&"p".to_string()),
-        "Interactive must keep <p>"
-    );
+    assert!(roles.iter().any(|r| r == "p"), "Interactive must keep <p>");
 
     // role="presentation" is still excluded (ads)
     let json = serde_json::to_string(state.root())?;
