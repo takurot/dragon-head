@@ -110,9 +110,14 @@ fn scenario_visual_image_content_contract() -> Result<Value> {
     let content = response["result"]["content"]
         .as_array()
         .context("content array")?;
-    let decoded = STANDARD.decode(content[1]["data"].as_str().context("image data")?)?;
+    // Fail with a clear message instead of panicking on an out-of-bounds
+    // index if the server returns fewer than 2 content blocks (issue #283).
+    let image_block = content
+        .get(1)
+        .with_context(|| format!("expected >=2 content blocks, got {}", content.len()))?;
+    let decoded = STANDARD.decode(image_block["data"].as_str().context("image data")?)?;
     assert_eq!(decoded, png);
-    assert_eq!(content[1]["mimeType"], "image/png");
+    assert_eq!(image_block["mimeType"], "image/png");
     assert_eq!(
         response["result"]["structuredContent"]["image_sha256"],
         hex::encode(Sha256::digest(&decoded))
@@ -120,7 +125,7 @@ fn scenario_visual_image_content_contract() -> Result<Value> {
 
     Ok(json!({
         "content_blocks": content.len(),
-        "mime_type": content[1]["mimeType"]
+        "mime_type": image_block["mimeType"]
     }))
 }
 
@@ -274,8 +279,6 @@ fn scenario_hitl_flow() -> Result<Value> {
 /// Verifies that CoreRuntimeBackend seeds previous_semantic_state on a Full delivery,
 /// so a subsequent Delta call on the same unchanged page returns `type: no_change`.
 fn scenario_delta_delivery_full_seeds_baseline() -> Result<Value> {
-    use mcp_server::PlanTier;
-
     let client = BrowserClient::new()?;
     let page = client.new_page()?;
 
@@ -396,11 +399,16 @@ impl McpBackend for MockBackend {
     }
 
     fn get_visual(&mut self, _arguments: Value) -> Result<Value> {
+        // A valid SHA-256 hex digest (64 hex chars) even in the no-image
+        // fallback case — "abc" wasn't a well-formed hash and could mask a
+        // consumer that fails to validate digest shape (issue #283). This
+        // is simply the digest of an empty byte string, used only as a
+        // structurally-valid placeholder when no image was configured.
         let image_sha256 = self
             .visual_image
             .as_deref()
             .map(|image| hex::encode(Sha256::digest(image)))
-            .unwrap_or_else(|| "abc".to_string());
+            .unwrap_or_else(|| hex::encode(Sha256::digest(b"")));
         Ok(json!({"image_sha256": image_sha256}))
     }
 
