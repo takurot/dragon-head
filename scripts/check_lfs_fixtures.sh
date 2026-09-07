@@ -46,10 +46,21 @@ while IFS= read -r -d '' file; do
   # into a shell variable first — an LFS pointer is a few dozen bytes, but a
   # *mis-tracked raw binary* (exactly the failure case this script exists to
   # catch) can be megabytes, and we only ever need its first two lines.
+  #
+  # `|| true` on each pipeline is required, not cosmetic: with `pipefail`
+  # active, `head -n 2` closing its read end early (as it does on a
+  # multi-megabyte binary — precisely the adversarial input this script
+  # targets) sends `git cat-file -p` a SIGPIPE, so the pipeline's exit
+  # status is `cat-file`'s 141, not `head`'s 0. Without `|| true`, `set -e`
+  # aborts the whole script right here with no diagnostic — before the
+  # file-specific error message a few lines below ever gets a chance to
+  # print. `git cat-file -e` above already confirmed the object exists, so
+  # this can't silently mask a real "object not found" error the way the
+  # old code's blanket `2>/dev/null || true` did (issue #285 follow-up).
   if git cat-file -e "HEAD:${file}" 2>/dev/null; then
-    header="$(git cat-file -p "HEAD:${file}" | head -n 2)"
+    header="$(git cat-file -p "HEAD:${file}" | head -n 2)" || true
   elif git cat-file -e ":${file}" 2>/dev/null; then
-    header="$(git cat-file -p ":${file}" | head -n 2)"
+    header="$(git cat-file -p ":${file}" | head -n 2)" || true
   else
     echo "error: '${file}' resolves to filter=lfs but has no readable blob in HEAD or the index" >&2
     status=1

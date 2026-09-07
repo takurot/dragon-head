@@ -56,11 +56,17 @@ fi
 
 IGNORE_REGEX='(tests/|test\.rs$)'
 
+# `--profile` here is nextest's own flag (cargo llvm-cov passes anything
+# after its own [OPTIONS] straight through to `cargo nextest run`), not a
+# cargo-llvm-cov flag — verified via `cargo nextest run --help`.
+#
+# Built as an array and expanded with the `${arr[@]+"${arr[@]}"}` idiom
+# (not the plain `"${PROFILE_ARGS[@]}"` form) because `set -u` on bash 3.2
+# (macOS's system /bin/bash) treats expanding an empty array as an unbound
+# variable — the plain form crashes this script's default (no-flags)
+# invocation on stock macOS. Reported by review on PR #326.
 PROFILE_ARGS=()
 if [ -n "$PROFILE" ]; then
-  # `--profile` here is nextest's own flag (cargo llvm-cov passes anything
-  # after its own [OPTIONS] straight through to `cargo nextest run`), not a
-  # cargo-llvm-cov flag — verified via `cargo nextest run --help`.
   PROFILE_ARGS=(--profile "$PROFILE")
 fi
 
@@ -69,7 +75,7 @@ cargo llvm-cov nextest \
   --workspace \
   --no-report \
   --ignore-filename-regex "$IGNORE_REGEX" \
-  "${PROFILE_ARGS[@]}"
+  ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}
 
 echo ""
 echo "==> Coverage summary:"

@@ -102,18 +102,20 @@ for src in "${json_files[@]}"; do
     fi
 done
 
-if [[ "${#skipped_without_force[@]}" -gt 0 && "${#to_write[@]}" -eq 0 ]]; then
-    echo "" >&2
-    echo "error: ${#skipped_without_force[@]} existing baseline file(s) differ from the new metrics; nothing written." >&2
-    echo "Review the differences above, then rerun with --force to update them." >&2
-    exit 1
-fi
+# Clean up a same-directory temp file left behind if `cp`/`mv` below fails
+# partway through the batch (issue #285 follow-up: nothing corrupts the
+# already-written baseline files, but a stray *.tmp.$$ would otherwise sit
+# around until manually noticed).
+trap 'rm -f "${BASELINE_DIR}"/*.tmp.$$' EXIT
 
-# Pass 3: write every approved file to a same-directory temp path first,
-# then `mv` each into place. `mv` within one filesystem is atomic, so even
-# if a later file in the batch fails to copy, every file written so far is
-# either fully the old baseline or fully the new one — never a partially
-# written/truncated file (issue #285: "batch update non-atomic").
+# Pass 3: write every approved file (new files, plus changed ones when
+# --force was given) to a same-directory temp path first, then `mv` each
+# into place. `mv` within one filesystem is atomic, so even if a later file
+# in the batch fails to copy, every file written so far is either fully the
+# old baseline or fully the new one — never a partially written/truncated
+# file (issue #285: "batch update non-atomic"). New files are always safe
+# to write (there's nothing to overwrite), so they're applied even when
+# some other file was skipped for lack of --force.
 written_count=0
 for src in "${to_write[@]}"; do
     filename="$(basename "${src}")"
@@ -126,4 +128,14 @@ for src in "${to_write[@]}"; do
 done
 
 echo ""
-echo "Baseline: ${written_count} file(s) written, ${unchanged_count} unchanged, ${#skipped_without_force[@]} skipped (needs --force), from ${METRICS_DIR}"
+echo "Baseline: ${written_count} file(s) written (${new_count} new), ${unchanged_count} unchanged, ${#skipped_without_force[@]} skipped (needs --force), from ${METRICS_DIR}"
+
+# Exit non-zero whenever anything was left un-applied — a caller that only
+# checks the exit code (a CI step, a follow-up `git add nfr-baseline/`)
+# must be able to tell a partial run from a fully-applied one, even when
+# some brand-new files were written successfully alongside the skips
+# (issue #285 follow-up).
+if [[ "${#skipped_without_force[@]}" -gt 0 ]]; then
+    echo "Review the 'would overwrite' warnings above, then rerun with --force to apply them." >&2
+    exit 1
+fi
