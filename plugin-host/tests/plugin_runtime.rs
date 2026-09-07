@@ -546,7 +546,8 @@ fn test_connector_blocked_without_network_out() {
     );
 }
 
-/// 9. Loading the same wasm bytes twice hits the module cache (second load < 5ms).
+/// 9. Loading the same wasm bytes twice hits the module cache (second load is
+///    at least 3x faster than the first, compiling, load).
 #[test]
 fn test_second_load_hits_module_cache() {
     let (registry, signing_key, key_id) = make_registry_and_key();
