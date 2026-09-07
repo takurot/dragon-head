@@ -43,10 +43,22 @@ fn test_ask_human_hitl_flow_with_policy_gate() -> anyhow::Result<()> {
         }),
     )?;
 
-    let target_id = state["interactive_elements"][0]["id"]
-        .as_i64()
-        .expect("target id");
-    let stable_key = state["interactive_elements"][0]["stable_key"]
+    // Locate the purchase button by role+name rather than a hardcoded [0]
+    // index, so this doesn't silently start targeting the wrong element if
+    // the fixture HTML gains another interactive element (issue #283).
+    let purchase_button = state["interactive_elements"]
+        .as_array()
+        .expect("interactive_elements array")
+        .iter()
+        .find(|element| {
+            element["role"] == json!("button")
+                && element["name"]
+                    .as_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("purchase"))
+        })
+        .expect("purchase button not found in interactive_elements");
+    let target_id = purchase_button["id"].as_i64().expect("target id");
+    let stable_key = purchase_button["stable_key"]
         .as_str()
         .expect("stable key")
         .to_string();
@@ -61,6 +73,23 @@ fn test_ask_human_hitl_flow_with_policy_gate() -> anyhow::Result<()> {
     )?;
 
     assert_eq!(first_act["status"], json!("requires_human_approval"));
+
+    // Verify the click was actually blocked, not just that the response
+    // reported it as pending — without this, a policy-gate bug that let
+    // the action through anyway (while still returning the
+    // "requires_human_approval" status) would go undetected here and only
+    // surface, ambiguously, in the final post-approval assertion below
+    // (issue #283).
+    let clicked_before_approval = server
+        .backend_mut()
+        .page()
+        .evaluate_script("document.body.dataset.clicked")?
+        .value
+        .and_then(|v| v.as_str().map(ToOwned::to_owned));
+    assert_eq!(
+        clicked_before_approval, None,
+        "click must be blocked pending human approval, not executed early"
+    );
 
     let approval = server.call_tool(
         "ask_human",

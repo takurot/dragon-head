@@ -260,10 +260,19 @@ impl McpBackend for SemanticMockBackend {
         }
 
         // Delta delivery: compute diff relative to previous state.
+        // Fall back to hashing the state's own serialized content when
+        // `state_hash` is absent from metadata — using the call counter
+        // (varies per call) for one side and a fixed literal for the other
+        // meant two calls with genuinely unchanged content could never
+        // compare equal, always producing a spurious "delta" instead of
+        // "no_change" (issue #283). Both sides must derive their fallback
+        // the same way so identical content actually compares equal.
+        let content_fallback_hash =
+            |state: &Value| -> String { serde_json::to_string(state).unwrap_or_default() };
         let current_hash = current["metadata"]["state_hash"]
             .as_str()
             .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("hash-{}", self.call_count));
+            .unwrap_or_else(|| content_fallback_hash(&current));
 
         let response = match self.previous_state.take() {
             None => {
@@ -274,7 +283,7 @@ impl McpBackend for SemanticMockBackend {
                 let base_hash = prev["metadata"]["state_hash"]
                     .as_str()
                     .map(|s| s.to_string())
-                    .unwrap_or_else(|| "prev-hash".to_string());
+                    .unwrap_or_else(|| content_fallback_hash(&prev));
 
                 if base_hash == current_hash {
                     self.previous_state = Some(current);
@@ -381,7 +390,7 @@ fn test_mcp_contract_all_tools_are_callable() {
     ] {
         let result = server
             .call_tool(name, arguments)
-            .unwrap_or_else(|_| panic!("tool call failed for {name}"));
+            .unwrap_or_else(|error| panic!("tool call failed for {name}: {error}"));
         assert_eq!(result["ok"], json!(true));
         assert_eq!(result["tool"], json!(name));
     }
