@@ -38,10 +38,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run TTFT long benchmark gate
       run: cargo test -p core-runtime --test async_pipeline test_async_pipeline_ttft_benchmark_long_gate -- --ignored
     - name: Run NFR latency benchmark (full)
@@ -69,10 +67,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run full e2e suite
       env:
         CHROME_INSTALLED: "true"
@@ -95,14 +91,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run MCP binary E2E tests (require Chrome)
-      env:
-        CHROME_PATH: /usr/bin/chromium-browser
-      run: cargo test -p mcp-server --test mcp_binary_e2e -- --ignored --nocapture
+      run: CHROME_PATH="$(command -v google-chrome)" cargo test -p mcp-server --test mcp_binary_e2e -- --ignored --nocapture
     - name: Upload failure artifacts
       if: failure()
       uses: actions/upload-artifact@v4
@@ -123,10 +115,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    - name: Verify Chrome is available
+      run: google-chrome --version
     - name: Run core-runtime evaluation bench
       run: cargo test -p core-runtime --test comprehensive_evaluation -- --nocapture
     - name: Run mcp-server evaluation bench
