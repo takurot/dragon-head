@@ -95,6 +95,49 @@ Artifacts to verify:
 
 ## 5. npm verification
 
+> **New platform package? Read this first.** `release.yml`'s npm jobs publish via
+> **OIDC trusted publishing** (`id-token: write`, no long-lived `NPM_TOKEN`). Trusted
+> publishing is configured *per package* on npmjs.com, and that configuration screen
+> only exists once the package has been published at least once — so a package name
+> that has **never been published before** (e.g. a newly added platform target) will
+> fail CI with `npm error code ENEEDAUTH` on every attempt, because there's nothing
+> for the OIDC token to be trusted against yet. This is not a transient/flaky failure;
+> retrying the job will not help until the one-time manual step below is done.
+>
+> **One-time fix, before tagging a release that includes a brand-new platform package:**
+> 1. Publish it once yourself, from an authenticated (2FA-verified) local npm session:
+>    ```bash
+>    cd npm/platform/<new-platform>
+>    npm login   # if not already logged in
+>    npm publish --access public
+>    ```
+> 2. On npmjs.com, open that package → **Settings → Trusted Publisher → Add** and fill in:
+>    | Field | Value |
+>    |---|---|
+>    | Organization or user | `takurot` |
+>    | Repository | `dragon-head` |
+>    | Workflow filename | `release.yml` |
+>    | Environment name | *(leave blank — this workflow doesn't use `environment:`)* |
+>    | Label | optional, e.g. `release.yml (GitHub Actions)` |
+>    | "Allow npm publish" checkbox | **check it** — unchecked, OIDC auth still succeeds but the actual publish is rejected |
+>
+>    Sanity-check the values against an existing package's Trusted Publisher settings
+>    (e.g. `dragon-head-mcp-linux-x64`) if unsure.
+> 3. After that, CI publishes for that package work automatically like the others.
+>
+> If a release run fails with `ENEEDAUTH` for one package after the others already
+> published successfully, this is almost certainly the cause — do the one-time setup
+> above, then re-run just the failed job (`gh run rerun <run-id> --failed`); the
+> publish script's idempotent "already published, skipping" check means already-published
+> packages won't be touched again.
+>
+> **After a provenance-signed publish succeeds**, npm can take a few minutes before the
+> new version is queryable (`npm view <pkg>@<version>` may 404 briefly) — this is normal
+> registry propagation, not a failure. Poll rather than assume it failed:
+> ```bash
+> until npm view <pkg>@<version> version >/dev/null 2>&1; do sleep 20; done
+> ```
+
 - [ ] Confirm the `npm-publish-platforms` and `publish-npm-wrapper` CI jobs completed green.
 - [ ] Verify the wrapper package is live and at the correct version:
   ```bash
