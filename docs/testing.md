@@ -163,7 +163,7 @@ automatically files or updates a GitHub Issue labelled **`nightly-failure`**.
    CHROME_INSTALLED=true cargo test -p core-runtime --test session_management --verbose
 
    # MCP binary E2E
-   CHROME_PATH=/usr/bin/chromium-browser cargo test -p mcp-server --test mcp_binary_e2e -- --ignored --nocapture
+   CHROME_PATH="$(command -v google-chrome)" cargo test -p mcp-server --test mcp_binary_e2e -- --ignored --nocapture
 
    # PR-required shipped-binary stdio smoke only
    CHROME_PATH="$(command -v google-chrome)" cargo test -p mcp-server --test mcp_binary_e2e test_mcp_binary_stdio_smoke -- --ignored --exact --nocapture
