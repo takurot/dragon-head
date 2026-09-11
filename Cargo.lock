@@ -1796,10 +1796,12 @@ name = "mcp-server"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "axum",
  "base64",
  "core-runtime",
  "escargot",
  "hex",
+ "hitl-bridge",
  "json-patch",
  "jsonschema",
  "libc",
@@ -1813,6 +1815,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "toml",
+ "tracing",
  "urlencoding",
 ]
 

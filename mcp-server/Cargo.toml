@@ -10,6 +10,7 @@ description = "Stdio MCP server binary (dragon-head-mcp) exposing get_state/act/
 anyhow = { workspace = true }
 base64 = "0.22"
 core-runtime = { path = "../core-runtime" }
+hitl-bridge = { path = "../hitl-bridge" }
 json-patch = "4.2"
 libc = "0.2"
 serde = { workspace = true }
@@ -21,6 +22,9 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 toml = { workspace = true }
 jsonschema = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+axum = "0.7"
 
 [[bin]]
 name = "dragon-head-mcp"
