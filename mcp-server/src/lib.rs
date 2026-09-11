@@ -1148,6 +1148,19 @@ impl CoreRuntimeBackend {
         self.speculative.clear_action_cursor();
     }
 
+    /// Treats a `run_skill` execution that performed at least one successful `act` step as an
+    /// opaque mutation boundary (ISSUE-301): `PageSkillRuntime::act` mutates the live page
+    /// directly, outside of `CoreRuntimeBackend::act`'s bookkeeping, so `state_cache`,
+    /// `previous_semantic_state`, and the speculative action/prediction cursors can no longer be
+    /// trusted to describe the current page. A multi-action skill also has no single
+    /// `ActionSignature` describing its combined effect, so the same conservative invalidation
+    /// applied on navigation is applied here rather than attempting to track it. This must run
+    /// even when the skill run ultimately fails, as long as at least one `act` step already
+    /// succeeded, so a partial-success skill cannot leave stale state behind.
+    fn invalidate_after_opaque_skill_mutation(&mut self) {
+        self.reset_navigation_state();
+    }
+
     pub fn register_extraction_rule(&mut self, name: &str, value: &Value) -> Result<()> {
         self.schema_registry
             .register(name, value)
@@ -1783,7 +1796,15 @@ impl McpBackend for CoreRuntimeBackend {
             .run(&skill, &mut runtime)
             .context("run_skill execution failed");
         // Always capture the delta so acts that ran before a failure are not silently lost.
-        self.last_skill_delta = runtime.into_usage_delta();
+        let delta = runtime.into_usage_delta();
+        self.last_skill_delta = delta.clone();
+        // ISSUE-301: any successful `act` step mutated the live page outside of
+        // `CoreRuntimeBackend::act`'s bookkeeping. Invalidate before propagating `run_result`'s
+        // error so a skill that fails partway through (after a successful action) still
+        // discards the now-stale state/speculative bookkeeping.
+        if delta.actions_executed > 0 {
+            self.invalidate_after_opaque_skill_mutation();
+        }
         let report = run_result?;
 
         Ok(json!({
