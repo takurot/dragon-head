@@ -3,6 +3,7 @@ pub mod doctor;
 pub mod dto;
 pub mod hitl;
 pub mod metering;
+pub mod plugins;
 pub(crate) mod protocol;
 
 use anyhow::{Context, Result};

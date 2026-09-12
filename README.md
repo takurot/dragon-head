@@ -196,6 +196,18 @@ durability = "flush"  # "flush" (default) or "sync"
 # JSON files containing one SkillDefinition each. Relative paths resolve from
 # the directory containing this config.toml; absolute paths remain absolute.
 files = ["skills/checkout.json", "/opt/dragon-head/skills/search.json"]
+
+# Locally configured, signed Wasm plugins — see docs/plugins.md for the full contract
+# (signature verification, operational limits, and why config.toml write access is
+# equivalent to plugin-code-execution access).
+[[plugin_trust_keys]]
+id = "vendor-key-1"
+public_key_hex = "5f2c...64-hex-char-ed25519-public-key"
+
+[[plugins]]
+manifest = "plugins/example/manifest.json"
+wasm = "plugins/example/plugin.wasm"
+enabled = true
 ```
 
 ### Precedence

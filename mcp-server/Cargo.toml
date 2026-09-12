@@ -31,9 +31,11 @@ name = "dragon-head-mcp"
 path = "src/main.rs"
 
 [dev-dependencies]
+ed25519-dalek = { workspace = true }
 escargot = "0.5"
 json-patch = "4.2"
 tempfile = "3.10"
 tokio = { workspace = true }
 urlencoding = "2.1"
+wat = "1.240"
 test-bench-support = { path = "../test-bench-support" }
