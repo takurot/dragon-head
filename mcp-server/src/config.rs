@@ -61,6 +61,11 @@ pub const MAX_ADDITIONAL_PHRASE_BYTES: usize = 512;
 pub const MAX_ADDITIONAL_PHRASES_BYTES: usize = 8 * 1024;
 pub const MAX_SKILL_FILES: usize = 64;
 pub const MAX_SKILL_FILE_BYTES: usize = 1024 * 1024;
+/// Bounds combined `manifest`/`wasm` bytes read per `--doctor`/startup run to a modest ceiling
+/// (16 entries * up to ~2 MiB wasm + 64 KiB manifest each ≈ 33 MiB worst case).
+pub const MAX_PLUGINS: usize = 16;
+pub const MAX_PLUGIN_MANIFEST_BYTES: usize = 64 * 1024;
+pub const MAX_PLUGIN_WASM_BYTES: usize = 2 * 1024 * 1024;
 
 /// Raw `config.toml` contents.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -78,6 +83,12 @@ pub struct FileConfig {
     pub skills: SkillsFileConfig,
     #[serde(default)]
     pub hitl_bridge: HitlBridgeFileConfig,
+    /// Ed25519 trust roots for `[[plugins]]` signature verification (ISSUE-303).
+    #[serde(default)]
+    pub plugin_trust_keys: Vec<PluginTrustKeyFileConfig>,
+    /// Locally configured signed Wasm plugins (ISSUE-303). See `docs/plugins.md`.
+    #[serde(default)]
+    pub plugins: Vec<PluginEntryFileConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -198,26 +209,61 @@ pub enum ConfigError {
     HitlBridgeMissingCredential { name: &'static str },
     #[error("invalid {ENV_HITL_BRIDGE_POLL_INTERVAL_MS} '{0}' (expected a positive integer)")]
     InvalidHitlBridgePollIntervalMs(String),
+    #[error("too many configured plugins (maximum {max})")]
+    TooManyPlugins { max: usize },
+    #[error("invalid plugin_trust_keys entry '{id}': {reason}")]
+    InvalidPluginTrustKey { id: String, reason: String },
+    #[error("duplicate plugin_trust_keys id '{id}'")]
+    DuplicatePluginTrustKeyId { id: String },
+    #[error("failed to read plugin manifest {path}: {source}")]
+    PluginManifestIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("plugin manifest {path} is not a regular file")]
+    PluginManifestNotRegular { path: PathBuf },
+    #[error("plugin manifest {path} exceeds {max_bytes} bytes")]
+    PluginManifestTooLarge { path: PathBuf, max_bytes: usize },
+    #[error("failed to parse plugin manifest {path} as JSON: {source}")]
+    PluginManifestJson {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("failed to read plugin wasm module {path}: {source}")]
+    PluginWasmIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("plugin wasm module {path} is not a regular file")]
+    PluginWasmNotRegular { path: PathBuf },
+    #[error("plugin wasm module {path} exceeds {max_bytes} bytes")]
+    PluginWasmTooLarge { path: PathBuf, max_bytes: usize },
 }
 
+/// Opens `path` for reading without blocking on special files (FIFOs in particular) — see
+/// `binary_doctor_and_startup_reject_fifo_without_blocking` in `mcp-server/tests/mcp_binary_e2e.rs`
+/// for the regression this guards against. Shared by every config-file-referenced file kind
+/// (skills, and — ISSUE-303 — plugin manifests/wasm modules): a config-writable directory must
+/// never be able to hang startup by pointing a configured path at a FIFO.
 #[cfg(unix)]
-fn open_regular_skill_file(path: &Path) -> Result<(File, std::fs::Metadata), ConfigError> {
+fn open_nonblocking(path: &Path) -> std::io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
-
-    let file = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
         .open(path)
-        .map_err(|source| ConfigError::SkillFileIo {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    regular_skill_file_metadata(path, file)
 }
 
 #[cfg(not(unix))]
+fn open_nonblocking(path: &Path) -> std::io::Result<File> {
+    File::open(path)
+}
+
 fn open_regular_skill_file(path: &Path) -> Result<(File, std::fs::Metadata), ConfigError> {
-    let file = File::open(path).map_err(|source| ConfigError::SkillFileIo {
+    let file = open_nonblocking(path).map_err(|source| ConfigError::SkillFileIo {
         path: path.to_path_buf(),
         source,
     })?;
@@ -326,12 +372,7 @@ pub fn load_configured_skills(
     let mut names = HashMap::<String, PathBuf>::new();
 
     for configured_path in files {
-        let configured_path = Path::new(configured_path);
-        let path = if configured_path.is_absolute() {
-            configured_path.to_path_buf()
-        } else {
-            config_dir.join(configured_path)
-        };
+        let path = resolve_config_relative_path(config_dir, configured_path);
 
         let (file, metadata) = open_regular_skill_file(&path)?;
         if metadata.len() > MAX_SKILL_FILE_BYTES as u64 {
@@ -379,6 +420,149 @@ pub fn load_configured_skills(
     Ok(skills)
 }
 
+fn resolve_config_relative_path(config_dir: &Path, configured_path: &str) -> PathBuf {
+    let configured_path = Path::new(configured_path);
+    if configured_path.is_absolute() {
+        configured_path.to_path_buf()
+    } else {
+        config_dir.join(configured_path)
+    }
+}
+
+/// Reads `path` with the same bounded-I/O discipline as skill files: a non-blocking open (so a
+/// FIFO can never hang startup), a regular-file check, and a hard byte cap enforced both via
+/// `Read::take` and a final length check (`Read::take` alone would silently truncate an
+/// oversized file rather than rejecting it).
+fn read_bounded_regular_file<E>(
+    path: &Path,
+    max_bytes: usize,
+    io_err: impl Fn(std::io::Error) -> E,
+    not_regular_err: impl Fn() -> E,
+    too_large_err: impl Fn() -> E,
+) -> Result<Vec<u8>, E> {
+    let file = open_nonblocking(path).map_err(&io_err)?;
+    let metadata = file.metadata().map_err(&io_err)?;
+    if !metadata.file_type().is_file() {
+        return Err(not_regular_err());
+    }
+    if metadata.len() > max_bytes as u64 {
+        return Err(too_large_err());
+    }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take((max_bytes + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(&io_err)?;
+    if bytes.len() > max_bytes {
+        return Err(too_large_err());
+    }
+    Ok(bytes)
+}
+
+/// A locally configured, *enabled* plugin resolved into an unverified `plugin_host::PluginPackage`
+/// (ISSUE-303). Signature/manifest verification happens downstream in
+/// `plugins::build_plugin_hook_config`, via `plugin_host::PluginHost::load_plugin` — this type
+/// only carries file-resolution results plus the originating manifest path (for diagnostics).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfiguredPlugin {
+    pub manifest_path: PathBuf,
+    pub package: plugin_host::PluginPackage,
+}
+
+/// Loads the ed25519 trust-key registry and every *enabled* configured plugin's manifest +
+/// Wasm bytes (ISSUE-303). See `docs/plugins.md`.
+///
+/// A `[[plugins]]` entry with `enabled = false` is skipped **before any file I/O**: its
+/// `manifest`/`wasm` paths are never opened, so a disabled entry's misconfiguration (missing
+/// file, oversized module, malformed JSON) never blocks startup or `--doctor`. This function
+/// does not verify signatures or compile Wasm — see `plugins::build_plugin_hook_config` for that.
+pub fn load_configured_plugins(
+    config_path: Option<&Path>,
+    file_config: Option<&FileConfig>,
+) -> Result<(plugin_host::KeyRegistry, Vec<ConfiguredPlugin>), ConfigError> {
+    let empty = FileConfig::default();
+    let fc = file_config.unwrap_or(&empty);
+
+    let mut key_registry = plugin_host::KeyRegistry::default();
+    let mut seen_key_ids = HashSet::new();
+    for key in &fc.plugin_trust_keys {
+        if !seen_key_ids.insert(key.id.clone()) {
+            return Err(ConfigError::DuplicatePluginTrustKeyId { id: key.id.clone() });
+        }
+        key_registry
+            .register_hex_ed25519(&key.id, &key.public_key_hex)
+            .map_err(|err| ConfigError::InvalidPluginTrustKey {
+                id: key.id.clone(),
+                reason: err.to_string(),
+            })?;
+    }
+
+    if fc.plugins.len() > MAX_PLUGINS {
+        return Err(ConfigError::TooManyPlugins { max: MAX_PLUGINS });
+    }
+
+    let config_dir = config_path
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new("."));
+    let mut configured = Vec::new();
+
+    for entry in &fc.plugins {
+        if !entry.enabled {
+            continue;
+        }
+
+        let manifest_path = resolve_config_relative_path(config_dir, &entry.manifest);
+        let wasm_path = resolve_config_relative_path(config_dir, &entry.wasm);
+
+        let manifest_bytes = read_bounded_regular_file(
+            &manifest_path,
+            MAX_PLUGIN_MANIFEST_BYTES,
+            |source| ConfigError::PluginManifestIo {
+                path: manifest_path.clone(),
+                source,
+            },
+            || ConfigError::PluginManifestNotRegular {
+                path: manifest_path.clone(),
+            },
+            || ConfigError::PluginManifestTooLarge {
+                path: manifest_path.clone(),
+                max_bytes: MAX_PLUGIN_MANIFEST_BYTES,
+            },
+        )?;
+        let manifest: plugin_host::PluginManifest = serde_json::from_slice(&manifest_bytes)
+            .map_err(|source| ConfigError::PluginManifestJson {
+                path: manifest_path.clone(),
+                source,
+            })?;
+
+        let wasm_module = read_bounded_regular_file(
+            &wasm_path,
+            MAX_PLUGIN_WASM_BYTES,
+            |source| ConfigError::PluginWasmIo {
+                path: wasm_path.clone(),
+                source,
+            },
+            || ConfigError::PluginWasmNotRegular {
+                path: wasm_path.clone(),
+            },
+            || ConfigError::PluginWasmTooLarge {
+                path: wasm_path.clone(),
+                max_bytes: MAX_PLUGIN_WASM_BYTES,
+            },
+        )?;
+
+        configured.push(ConfiguredPlugin {
+            manifest_path,
+            package: plugin_host::PluginPackage {
+                manifest,
+                wasm_module,
+            },
+        });
+    }
+
+    Ok((key_registry, configured))
+}
+
 /// Effective configuration after merging `file_config` with environment-variable overrides.
 /// Environment variables always win.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -409,6 +593,41 @@ pub struct HitlBridgeConfig {
     pub slack_channel: String,
     pub audit_log: PathBuf,
     pub poll_interval_ms: u64,
+}
+
+/// One ed25519 trust root for verifying `[[plugins]]` signatures (ISSUE-303).
+///
+/// **Note**: `config.toml` write access is equivalent to plugin-code-execution access — anyone
+/// who can add a `plugin_trust_keys` entry can also supply a self-signed plugin that verifies
+/// against it. This is the same trust model `policy.file` already has for this server; treat
+/// `config.toml` with the same care you would treat a file that can run arbitrary Wasm. Unlike
+/// the HITL bridge's Slack credentials, these are ed25519 *public* keys, not secrets, so (unlike
+/// `SLACK_SIGNING_SECRET`/etc.) there is no env-var-only requirement for them.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct PluginTrustKeyFileConfig {
+    /// Identifier referenced by a plugin manifest's `signature.key_id`.
+    pub id: String,
+    /// Hex-encoded 32-byte ed25519 public key.
+    pub public_key_hex: String,
+}
+
+fn default_plugin_enabled() -> bool {
+    true
+}
+
+/// One locally configured signed Wasm plugin (ISSUE-303). See `docs/plugins.md`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PluginEntryFileConfig {
+    /// Path to a JSON file deserializing to `plugin_host::PluginManifest`. Relative paths
+    /// resolve against `config.toml`'s own parent directory.
+    pub manifest: String,
+    /// Path to the plugin's compiled Wasm module. Relative paths resolve the same way.
+    pub wasm: String,
+    /// When `false`, this entry's `manifest`/`wasm` files are never opened or verified —
+    /// disabling a plugin fully removes it from the startup path rather than merely
+    /// deactivating it. Defaults to `true`.
+    #[serde(default = "default_plugin_enabled")]
+    pub enabled: bool,
 }
 
 impl std::fmt::Debug for HitlBridgeConfig {
@@ -709,6 +928,8 @@ durability = "sync"
                 },
                 skills: SkillsFileConfig::default(),
                 hitl_bridge: HitlBridgeFileConfig::default(),
+                plugin_trust_keys: Vec::new(),
+                plugins: Vec::new(),
             }
         );
     }
@@ -987,6 +1208,315 @@ durability = "sync"
         assert!(error.to_string().contains("skill.fifo"));
     }
 
+    // --- load_configured_plugins ---
+
+    fn signed_test_manifest(
+        plugin_id: &str,
+        entry_points: Vec<plugin_host::ExtensionPoint>,
+        capabilities: Vec<plugin_host::Capability>,
+        wasm_module: &[u8],
+        signing_key: &ed25519_dalek::SigningKey,
+        key_id: &str,
+    ) -> plugin_host::PluginManifest {
+        use ed25519_dalek::Signer;
+
+        let mut manifest = plugin_host::PluginManifest {
+            plugin_id: plugin_id.to_string(),
+            version: "0.1.0".to_string(),
+            entry_points,
+            capabilities,
+            signature: None,
+            sbom: plugin_host::SbomDocument {
+                format: "cyclonedx-1.5".to_string(),
+                components: vec![plugin_host::SbomComponent {
+                    name: "config-test-fixture".to_string(),
+                    version: "0.1.0".to_string(),
+                    license: Some("MIT".to_string()),
+                }],
+            },
+        };
+        let payload = plugin_host::signature_payload(&manifest, wasm_module).unwrap();
+        let signature = signing_key.sign(&payload);
+        manifest.signature = Some(plugin_host::SignatureBlock {
+            key_id: key_id.to_string(),
+            signature_hex: hex::encode(signature.to_bytes()),
+        });
+        manifest
+    }
+
+    /// Minimal valid Wasm module (no exports) — enough to exercise `config.rs`'s file-reading
+    /// path without needing a real plugin body; extension-point/export checks happen downstream
+    /// in `plugin_host::PluginHost::load_plugin`, not in `load_configured_plugins`.
+    fn empty_wasm_module() -> Vec<u8> {
+        wat::parse_str("(module)").unwrap()
+    }
+
+    fn write_plugin_fixture(
+        dir: &Path,
+        name: &str,
+        manifest: &plugin_host::PluginManifest,
+        wasm_module: &[u8],
+    ) -> (String, String) {
+        let manifest_rel = format!("{name}-manifest.json");
+        let wasm_rel = format!("{name}.wasm");
+        std::fs::write(
+            dir.join(&manifest_rel),
+            serde_json::to_vec(manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.join(&wasm_rel), wasm_module).unwrap();
+        (manifest_rel, wasm_rel)
+    }
+
+    fn test_signing_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
+    }
+
+    #[test]
+    fn configured_plugins_resolve_relative_paths_and_build_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let signing_key = test_signing_key();
+        let wasm = empty_wasm_module();
+        let manifest = signed_test_manifest(
+            "config-test.plugin",
+            vec![plugin_host::ExtensionPoint::OnState],
+            vec![plugin_host::Capability::ReadState],
+            &wasm,
+            &signing_key,
+            "test-key",
+        );
+        let (manifest_rel, wasm_rel) = write_plugin_fixture(dir.path(), "p", &manifest, &wasm);
+
+        let config = FileConfig {
+            plugin_trust_keys: vec![PluginTrustKeyFileConfig {
+                id: "test-key".to_string(),
+                public_key_hex: hex::encode(signing_key.verifying_key().to_bytes()),
+            }],
+            plugins: vec![PluginEntryFileConfig {
+                manifest: manifest_rel,
+                wasm: wasm_rel,
+                enabled: true,
+            }],
+            ..Default::default()
+        };
+
+        let (_registry, configured) =
+            load_configured_plugins(Some(&config_path), Some(&config)).unwrap();
+
+        assert_eq!(configured.len(), 1);
+        assert_eq!(configured[0].package.manifest, manifest);
+        assert_eq!(configured[0].package.wasm_module, wasm);
+        assert_eq!(
+            configured[0].manifest_path,
+            dir.path().join("p-manifest.json")
+        );
+    }
+
+    #[test]
+    fn configured_plugins_skip_disabled_entries_without_reading_files() {
+        // Both paths point at files that do not exist: if `load_configured_plugins` opened them
+        // anyway, this would fail with an Io error instead of returning an empty, successful
+        // result — proving the `enabled` check happens strictly before any file I/O.
+        let config = FileConfig {
+            plugins: vec![PluginEntryFileConfig {
+                manifest: "does-not-exist-manifest.json".to_string(),
+                wasm: "does-not-exist.wasm".to_string(),
+                enabled: false,
+            }],
+            ..Default::default()
+        };
+
+        let (_registry, configured) = load_configured_plugins(None, Some(&config)).unwrap();
+
+        assert!(configured.is_empty());
+    }
+
+    #[test]
+    fn configured_plugins_reject_too_many_entries_before_opening_them() {
+        let config = FileConfig {
+            plugins: (0..=MAX_PLUGINS)
+                .map(|index| PluginEntryFileConfig {
+                    manifest: format!("missing-{index}-manifest.json"),
+                    wasm: format!("missing-{index}.wasm"),
+                    enabled: true,
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        let error = load_configured_plugins(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::TooManyPlugins { .. }));
+    }
+
+    #[test]
+    fn configured_plugins_reject_oversized_manifest_without_parsing_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("oversized-manifest.json");
+        let secret = "oversized-manifest-secret-token";
+        std::fs::write(
+            &manifest_path,
+            format!("{}{}", secret, "x".repeat(MAX_PLUGIN_MANIFEST_BYTES)),
+        )
+        .unwrap();
+        let config = FileConfig {
+            plugins: vec![PluginEntryFileConfig {
+                manifest: manifest_path.display().to_string(),
+                wasm: "unused.wasm".to_string(),
+                enabled: true,
+            }],
+            ..Default::default()
+        };
+
+        let error = load_configured_plugins(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::PluginManifestTooLarge { .. }));
+        assert!(error.to_string().contains("oversized-manifest.json"));
+        assert!(!error.to_string().contains(secret));
+    }
+
+    #[test]
+    fn configured_plugins_reject_oversized_wasm_without_reading_manifest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let signing_key = test_signing_key();
+        let wasm = empty_wasm_module();
+        let manifest = signed_test_manifest(
+            "oversized-wasm.plugin",
+            vec![plugin_host::ExtensionPoint::OnState],
+            vec![plugin_host::Capability::ReadState],
+            &wasm,
+            &signing_key,
+            "test-key",
+        );
+        let manifest_path = dir.path().join("m.json");
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let wasm_path = dir.path().join("oversized.wasm");
+        std::fs::write(&wasm_path, vec![0u8; MAX_PLUGIN_WASM_BYTES + 1]).unwrap();
+        let config = FileConfig {
+            plugins: vec![PluginEntryFileConfig {
+                manifest: manifest_path.display().to_string(),
+                wasm: wasm_path.display().to_string(),
+                enabled: true,
+            }],
+            ..Default::default()
+        };
+
+        let error = load_configured_plugins(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::PluginWasmTooLarge { .. }));
+        assert!(error.to_string().contains("oversized.wasm"));
+    }
+
+    #[test]
+    fn configured_plugins_reject_malformed_manifest_json_without_disclosing_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("malformed.json");
+        let secret = "malformed-manifest-secret-token";
+        std::fs::write(&manifest_path, format!("{{ \"not\": \"valid, {secret}")).unwrap();
+        let config = FileConfig {
+            plugins: vec![PluginEntryFileConfig {
+                manifest: manifest_path.display().to_string(),
+                wasm: "unused.wasm".to_string(),
+                enabled: true,
+            }],
+            ..Default::default()
+        };
+
+        let error = load_configured_plugins(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::PluginManifestJson { .. }));
+        assert!(error.to_string().contains("malformed.json"));
+        assert!(!error.to_string().contains(secret));
+    }
+
+    #[test]
+    fn configured_plugins_reject_invalid_trust_key_hex() {
+        let config = FileConfig {
+            plugin_trust_keys: vec![PluginTrustKeyFileConfig {
+                id: "bad-key".to_string(),
+                public_key_hex: "not-hex".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let error = load_configured_plugins(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(error, ConfigError::InvalidPluginTrustKey { .. }));
+    }
+
+    #[test]
+    fn configured_plugins_reject_duplicate_trust_key_id() {
+        let config = FileConfig {
+            plugin_trust_keys: vec![
+                PluginTrustKeyFileConfig {
+                    id: "dup-key".to_string(),
+                    public_key_hex: hex::encode(test_signing_key().verifying_key().to_bytes()),
+                },
+                PluginTrustKeyFileConfig {
+                    id: "dup-key".to_string(),
+                    public_key_hex: hex::encode(
+                        ed25519_dalek::SigningKey::from_bytes(&[9u8; 32])
+                            .verifying_key()
+                            .to_bytes(),
+                    ),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let error = load_configured_plugins(None, Some(&config)).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::DuplicatePluginTrustKeyId { .. }
+        ));
+        assert!(error.to_string().contains("dup-key"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_plugins_reject_fifo_manifest_without_blocking() {
+        use std::{os::unix::ffi::OsStrExt, sync::mpsc, time::Duration};
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("plugin-manifest.fifo");
+        let path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `path` is a live, NUL-terminated CString and the mode is valid.
+        let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+        assert_eq!(
+            result,
+            0,
+            "mkfifo failed: {}",
+            std::io::Error::last_os_error()
+        );
+        let config = FileConfig {
+            plugins: vec![PluginEntryFileConfig {
+                manifest: fifo.display().to_string(),
+                wasm: "unused.wasm".to_string(),
+                enabled: true,
+            }],
+            ..Default::default()
+        };
+        let (sender, receiver) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            sender
+                .send(load_configured_plugins(None, Some(&config)))
+                .ok();
+        });
+
+        let result = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("FIFO validation blocked");
+        let error = result.unwrap_err();
+        assert!(matches!(
+            error,
+            ConfigError::PluginManifestNotRegular { .. }
+        ));
+        assert!(error.to_string().contains("plugin-manifest.fifo"));
+    }
+
     // --- resolve_config ---
 
     #[test]
@@ -1073,6 +1603,8 @@ durability = "sync"
             },
             skills: SkillsFileConfig::default(),
             hitl_bridge: HitlBridgeFileConfig::default(),
+            plugin_trust_keys: Vec::new(),
+            plugins: Vec::new(),
         };
         let resolved = resolve_config(Some(&fc), no_env).unwrap();
         assert_eq!(resolved.chrome_path, Some("/usr/bin/chromium".to_string()));
@@ -1109,6 +1641,8 @@ durability = "sync"
             },
             skills: SkillsFileConfig::default(),
             hitl_bridge: HitlBridgeFileConfig::default(),
+            plugin_trust_keys: Vec::new(),
+            plugins: Vec::new(),
         };
         let resolved = resolve_config(Some(&fc), |key| match key {
             "CHROME_PATH" => Some("/opt/chrome".to_string()),

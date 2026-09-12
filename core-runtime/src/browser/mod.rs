@@ -251,6 +251,21 @@ impl BrowserClient {
         Self::new_with_vault_and_path_and_hooks(vault, None, plugin_hooks)
     }
 
+    /// Create a `BrowserClient` with both an explicit Chrome path and plugin hook integration
+    /// (ISSUE-303). `new_with_chrome_path` and `new_with_plugin_hooks` each cover one of these
+    /// two axes; production startup (`dragon-head-mcp`) needs both at once.
+    pub fn new_with_chrome_path_and_plugin_hooks(
+        chrome_path: Option<String>,
+        plugin_hooks: PluginHookConfig,
+    ) -> Result<Self> {
+        use rand::RngCore;
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
+        let vault = Arc::new(LocalSessionVault::new(kms));
+        Self::new_with_vault_and_path_and_hooks(vault, chrome_path, plugin_hooks)
+    }
+
     pub fn new_with_chrome_path(chrome_path: Option<String>) -> Result<Self> {
         use rand::RngCore;
         let mut key = [0u8; 32];

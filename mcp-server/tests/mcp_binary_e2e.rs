@@ -760,6 +760,204 @@ fn binary_doctor_fails_for_invalid_injection_mode_config() -> anyhow::Result<()>
 }
 
 // ---------------------------------------------------------------------------
+// --doctor + config.toml plugin tests (ISSUE-303, fast — no Chrome required)
+// ---------------------------------------------------------------------------
+
+fn write_plugin_manifest_json(
+    path: &std::path::Path,
+    plugin_id: &str,
+    entry_points: &[&str],
+    capabilities: &[&str],
+    signature: Option<(&str, &str)>,
+) {
+    let mut manifest = json!({
+        "plugin_id": plugin_id,
+        "version": "0.1.0",
+        "entry_points": entry_points,
+        "capabilities": capabilities,
+        "sbom": {
+            "format": "cyclonedx-1.5",
+            "components": [{"name": "binary-e2e-fixture", "version": "0.1.0", "license": "MIT"}]
+        }
+    });
+    if let Some((key_id, signature_hex)) = signature {
+        manifest["signature"] = json!({"key_id": key_id, "signature_hex": signature_hex});
+    }
+    std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+}
+
+/// A minimal Wasm module exporting `on_state` as an identity transform: copies the input bytes
+/// unchanged to the output buffer and records the length. Good enough for both a "plugin loads
+/// and wires" doctor check and (once instantiated) a real state-transform smoke test.
+fn identity_on_state_wasm() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+            (memory (export "memory") 1)
+            (func (export "on_state")
+                  (param $in_ptr i32) (param $in_len i32)
+                  (param $out_ptr i32) (param $out_len_ptr i32)
+                (local $i i32)
+                (local.set $i (i32.const 0))
+                (block $break
+                    (loop $loop
+                        (br_if $break (i32.ge_u (local.get $i) (local.get $in_len)))
+                        (i32.store8
+                            (i32.add (local.get $out_ptr) (local.get $i))
+                            (i32.load8_u (i32.add (local.get $in_ptr) (local.get $i))))
+                        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                        (br $loop)))
+                (i32.store (local.get $out_len_ptr) (local.get $in_len))
+            )
+        )"#,
+    )
+    .unwrap()
+}
+
+#[test]
+fn binary_doctor_and_startup_reject_unsigned_plugin_without_disclosure() -> anyhow::Result<()> {
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+
+    let secret = "unsigned-plugin-secret-manifest-id";
+    write_plugin_manifest_json(
+        &dragon_head_dir.join("plugin-manifest.json"),
+        secret,
+        &["on_state"],
+        &["read_state"],
+        None, // unsigned
+    );
+    std::fs::write(
+        dragon_head_dir.join("plugin.wasm"),
+        identity_on_state_wasm(),
+    )?;
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        "[[plugins]]\nmanifest = \"plugin-manifest.json\"\nwasm = \"plugin.wasm\"\n",
+    )?;
+
+    for args in [&["--doctor"][..], &[][..]] {
+        let out = Command::new(&bin)
+            .args(args)
+            .env("XDG_CONFIG_HOME", dir.path())
+            .output()?;
+
+        assert!(!out.status.success());
+        if args.is_empty() {
+            assert!(out.stdout.is_empty(), "stdout must remain JSON-RPC clean");
+        } else {
+            assert!(String::from_utf8_lossy(&out.stdout).contains("✗ Config file"));
+        }
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(combined.contains("plugin-manifest.json"), "{combined}");
+        assert!(!combined.contains(secret), "{combined}");
+        assert!(!combined.contains("ready, listening"), "{combined}");
+    }
+    Ok(())
+}
+
+#[test]
+fn binary_doctor_and_startup_reject_disabled_but_still_misconfigured_config() -> anyhow::Result<()>
+{
+    // `enabled = false` must exempt the entry from ANY file I/O — pointing it at files that
+    // don't exist on disk at all must not fail startup or --doctor.
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        "[[plugins]]\nmanifest = \"does-not-exist-manifest.json\"\n\
+         wasm = \"does-not-exist.wasm\"\nenabled = false\n",
+    )?;
+
+    let out = Command::new(&bin)
+        .arg("--doctor")
+        .env("XDG_CONFIG_HOME", dir.path())
+        .output()?;
+
+    assert!(
+        out.status.success(),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("✗ Config file"));
+    Ok(())
+}
+
+#[test]
+fn binary_doctor_reports_wired_hook_counts_for_a_valid_signed_plugin() -> anyhow::Result<()> {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+    let dragon_head_dir = dir.path().join("dragon-head");
+    std::fs::create_dir_all(&dragon_head_dir)?;
+
+    let signing_key = SigningKey::from_bytes(&[42u8; 32]);
+    let wasm = identity_on_state_wasm();
+    let manifest = plugin_host::PluginManifest {
+        plugin_id: "binary-e2e.plugin".to_string(),
+        version: "0.1.0".to_string(),
+        entry_points: vec![plugin_host::ExtensionPoint::OnState],
+        capabilities: vec![plugin_host::Capability::ReadState],
+        signature: None,
+        sbom: plugin_host::SbomDocument {
+            format: "cyclonedx-1.5".to_string(),
+            components: vec![plugin_host::SbomComponent {
+                name: "binary-e2e-fixture".to_string(),
+                version: "0.1.0".to_string(),
+                license: Some("MIT".to_string()),
+            }],
+        },
+    };
+    let payload = plugin_host::signature_payload(&manifest, &wasm)?;
+    let signature_hex = hex::encode(signing_key.sign(&payload).to_bytes());
+    let mut signed_manifest = manifest;
+    signed_manifest.signature = Some(plugin_host::SignatureBlock {
+        key_id: "binary-e2e-key".to_string(),
+        signature_hex,
+    });
+
+    std::fs::write(
+        dragon_head_dir.join("plugin-manifest.json"),
+        serde_json::to_vec(&signed_manifest)?,
+    )?;
+    std::fs::write(dragon_head_dir.join("plugin.wasm"), &wasm)?;
+    std::fs::write(
+        dragon_head_dir.join("config.toml"),
+        format!(
+            "[[plugin_trust_keys]]\nid = \"binary-e2e-key\"\npublic_key_hex = \"{}\"\n\n\
+             [[plugins]]\nmanifest = \"plugin-manifest.json\"\nwasm = \"plugin.wasm\"\n",
+            hex::encode(signing_key.verifying_key().to_bytes())
+        ),
+    )?;
+
+    let out = Command::new(&bin)
+        .arg("--doctor")
+        .env("XDG_CONFIG_HOME", dir.path())
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "stdout: {stdout}, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("plugins.state_hooks=1"),
+        "stdout should report the wired OnState hook: {stdout}"
+    );
+    assert!(stdout.contains("plugins.policy_hooks=0"), "{stdout}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Heavy binary E2E tests — spawn the real binary with Chrome
 //
 // These are marked #[ignore] because Chrome startup takes 30-60s per test,

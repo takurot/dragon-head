@@ -100,6 +100,16 @@ fn main() -> anyhow::Result<()> {
         .context("failed to resolve dragon-head-mcp configuration")?;
     let skills = config::load_configured_skills(config_path.as_deref(), file_config.as_ref())
         .context("failed to load configured skills")?;
+    let (plugin_key_registry, configured_plugins) =
+        config::load_configured_plugins(config_path.as_deref(), file_config.as_ref())
+            .context("failed to load configured plugins")?;
+    // `_plugin_host` must outlive every call any wired plugin hook makes: it owns the Wasmtime
+    // epoch-interruption thread that enforces each Wasm call's wall-clock timeout budget (see
+    // `plugins::build_plugin_hook_config`'s doc comment). Keep it bound here, in `main`'s own
+    // scope, for the rest of the process's life — never move it into a narrower scope.
+    let (plugin_hooks, _plugin_host) =
+        mcp_server::plugins::build_plugin_hook_config(plugin_key_registry, configured_plugins)
+            .context("failed to wire configured plugins")?;
 
     if resolved.injection_mode != PromptInjectionMode::ReportOnly {
         eprintln!(
@@ -125,7 +135,10 @@ fn main() -> anyhow::Result<()> {
     let audit_logger = AuditLogger::from_env_with(audit_lookup);
 
     eprintln!("dragon-head-mcp: starting...");
-    let client = BrowserClient::new_with_chrome_path(resolved.chrome_path.clone())?;
+    let client = BrowserClient::new_with_chrome_path_and_plugin_hooks(
+        resolved.chrome_path.clone(),
+        plugin_hooks,
+    )?;
     let page = client.new_page_with_audit_logger(audit_logger)?;
 
     let mut backend = CoreRuntimeBackend::new_with_client(client, page);

@@ -101,11 +101,19 @@ fn validate_resolved_paths(resolved: &config::ResolvedConfig) -> Result<(), Stri
 /// environment-only misconfiguration (e.g. an invalid `PROMPT_INJECTION_MODE` or a nonexistent
 /// `CHROME_PATH`) is caught here too — the same settings `main.rs` resolves at startup.
 ///
+/// This also fully loads and wires any configured plugins (ISSUE-303) via
+/// [`config::load_configured_plugins`] and [`crate::plugins::build_plugin_hook_config`], so a
+/// misconfigured, unsigned, or mistrusted plugin fails `--doctor` before it would fail normal
+/// startup. **Side effect**: this instantiates a live Wasm store for every wired plugin (see
+/// `build_plugin_hook_config`'s doc comment) — `--doctor` is not a pure read-only check when
+/// plugins are configured.
+///
 /// - No `$XDG_CONFIG_HOME`/`$HOME`, or `config.toml` not found -> informational (defaults apply)
 ///   as long as the resolved environment configuration is valid.
 /// - `config.toml` present but unreadable/unparsable -> **fatal** (`passed: false`).
 /// - Resolved configuration (file + env) is invalid, or `chrome_path`/`policy.file` would fail
 ///   at startup -> **fatal** (`passed: false`).
+/// - A configured plugin fails to load/verify or wires zero hooks -> **fatal** (`passed: false`).
 /// - Otherwise -> informational, detail includes a resolved-settings summary.
 fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, String, bool) {
     let path = config::default_config_path_with(&lookup);
@@ -137,10 +145,26 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
         Err(err) => return (false, format!("{label} — {err}"), false),
     };
 
+    let (plugin_key_registry, configured_plugins) =
+        match config::load_configured_plugins(path.as_deref(), file_config.as_ref()) {
+            Ok(v) => v,
+            Err(err) => return (false, format!("{label} — {err}"), false),
+        };
+    // `--doctor` never calls a hook after this point, so it's fine to let `_plugin_host` (and
+    // its epoch-interruption thread) drop at the end of this function — unlike `main.rs`, which
+    // must keep it alive for the process's lifetime (see `plugins::build_plugin_hook_config`'s
+    // doc comment).
+    let (plugin_hooks, _plugin_host) =
+        match crate::plugins::build_plugin_hook_config(plugin_key_registry, configured_plugins) {
+            Ok(result) => result,
+            Err(err) => return (false, format!("{label} — {err}"), false),
+        };
+
     let summary = format!(
         "chrome_path={}, prompt_injection.mode={:?}, \
          prompt_injection.additional_phrases={}, policy.file={}, \
-         navigation.allow_private_network={}, skills.loaded={}, supported_env=[{}]",
+         navigation.allow_private_network={}, skills.loaded={}, \
+         plugins.state_hooks={}, plugins.policy_hooks={}, supported_env=[{}]",
         resolved.chrome_path.as_deref().unwrap_or("<unset>"),
         resolved.injection_mode,
         resolved.injection_additional_phrases.len(),
@@ -151,6 +175,8 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
             .unwrap_or_else(|| "<unset>".to_string()),
         resolved.navigation_allow_private_network,
         skills.len(),
+        plugin_hooks.state_plugins.len(),
+        plugin_hooks.policy_plugins.len(),
         config::HONORED_CONFIG_ENV_VARS.join(","),
     );
 
