@@ -85,10 +85,19 @@ pub enum PluginWiringError {
 /// (there is currently no such path — `--doctor` intentionally calls this same function so that
 /// "adapter construction succeeds" is actually exercised before normal startup, per ISSUE-303's
 /// acceptance criteria) should be aware of this.
+///
+/// **Caller must keep the returned `PluginHost` alive** for as long as the wired
+/// `PluginHookConfig` is in use. `PluginHost` owns the Wasmtime engine's `EpochDriver` background
+/// thread, which is what makes each Wasm call's ~50 ms wall-clock interruption budget actually
+/// fire — dropping every `PluginHost` handle stops that thread, silently disabling epoch-based
+/// interruption for every runtime built from it (a looping plugin would then only be stopped by
+/// the much larger fuel budget, `plugin-host/src/lib.rs`'s `FUEL_PER_CALL`). `PluginHost` is
+/// cheaply `Clone` (an `Arc` around the engine/epoch driver), so this is a `main.rs`-level "bind
+/// it and never drop it" concern, not an expensive one.
 pub fn build_plugin_hook_config(
     key_registry: KeyRegistry,
     configured: Vec<ConfiguredPlugin>,
-) -> Result<PluginHookConfig, PluginWiringError> {
+) -> Result<(PluginHookConfig, PluginHost), PluginWiringError> {
     let host = PluginHost::new(key_registry);
     let mut config = PluginHookConfig::default();
     let mut first_manifest_paths: HashMap<String, PathBuf> = HashMap::new();
@@ -154,7 +163,7 @@ pub fn build_plugin_hook_config(
         }
     }
 
-    Ok(config)
+    Ok((config, host))
 }
 
 #[cfg(test)]
@@ -292,7 +301,9 @@ mod tests {
 
     /// `PluginHookConfig` has no `Debug` impl (it holds trait objects), so
     /// `Result::unwrap_err` can't be used directly on `build_plugin_hook_config`'s result.
-    fn expect_err(result: Result<PluginHookConfig, PluginWiringError>) -> PluginWiringError {
+    fn expect_err(
+        result: Result<(PluginHookConfig, PluginHost), PluginWiringError>,
+    ) -> PluginWiringError {
         match result {
             Ok(_) => panic!("expected an error, got Ok"),
             Err(err) => err,
@@ -312,7 +323,7 @@ mod tests {
             "k1",
         );
 
-        let config = build_plugin_hook_config(
+        let (config, _host) = build_plugin_hook_config(
             registry,
             vec![ConfiguredPlugin {
                 manifest_path: dummy_manifest_path(),
@@ -351,7 +362,7 @@ mod tests {
             "k2",
         );
 
-        let config = build_plugin_hook_config(
+        let (config, _host) = build_plugin_hook_config(
             registry,
             vec![ConfiguredPlugin {
                 manifest_path: dummy_manifest_path(),
@@ -484,7 +495,7 @@ mod tests {
             "k5",
         );
 
-        let config = build_plugin_hook_config(
+        let (config, _host) = build_plugin_hook_config(
             registry,
             vec![ConfiguredPlugin {
                 manifest_path: dummy_manifest_path(),
@@ -539,7 +550,7 @@ mod tests {
 
     #[test]
     fn no_configured_plugins_produces_default_empty_config() {
-        let config = build_plugin_hook_config(KeyRegistry::default(), vec![]).unwrap();
+        let (config, _host) = build_plugin_hook_config(KeyRegistry::default(), vec![]).unwrap();
         assert_eq!(config.state_plugins.len(), 0);
         assert_eq!(config.policy_plugins.len(), 0);
     }

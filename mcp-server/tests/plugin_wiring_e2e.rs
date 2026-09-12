@@ -91,7 +91,9 @@ fn echo_state_block_act_wasm() -> Vec<u8> {
 /// files it references) declaring both `OnState` and `BeforeAct`, then runs the exact
 /// `config::load_configured_plugins` -> `plugins::build_plugin_hook_config` composition `main.rs`
 /// performs at startup.
-fn build_hooks_from_config_toml(dir: &std::path::Path) -> core_runtime::PluginHookConfig {
+fn build_hooks_from_config_toml(
+    dir: &std::path::Path,
+) -> (core_runtime::PluginHookConfig, plugin_host::PluginHost) {
     let signing_key = SigningKey::from_bytes(&[77u8; 32]);
     let wasm = echo_state_block_act_wasm();
     let manifest = PluginManifest {
@@ -146,7 +148,7 @@ fn config_driven_plugin_transforms_state_and_is_audited() {
     }
 
     let dir = tempfile::tempdir().unwrap();
-    let plugin_hooks = build_hooks_from_config_toml(dir.path());
+    let (plugin_hooks, _plugin_host) = build_hooks_from_config_toml(dir.path());
     assert_eq!(plugin_hooks.state_plugins.len(), 1);
     assert_eq!(plugin_hooks.policy_plugins.len(), 1);
 
@@ -190,7 +192,7 @@ fn config_driven_plugin_vetoes_action_and_is_audited() {
     }
 
     let dir = tempfile::tempdir().unwrap();
-    let plugin_hooks = build_hooks_from_config_toml(dir.path());
+    let (plugin_hooks, _plugin_host) = build_hooks_from_config_toml(dir.path());
 
     let client =
         BrowserClient::new_with_chrome_path_and_plugin_hooks(None, plugin_hooks).expect("browser");

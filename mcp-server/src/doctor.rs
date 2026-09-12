@@ -150,9 +150,13 @@ fn config_file_detail_with(lookup: impl Fn(&str) -> Option<String>) -> (bool, St
             Ok(v) => v,
             Err(err) => return (false, format!("{label} — {err}"), false),
         };
-    let plugin_hooks =
+    // `--doctor` never calls a hook after this point, so it's fine to let `_plugin_host` (and
+    // its epoch-interruption thread) drop at the end of this function — unlike `main.rs`, which
+    // must keep it alive for the process's lifetime (see `plugins::build_plugin_hook_config`'s
+    // doc comment).
+    let (plugin_hooks, _plugin_host) =
         match crate::plugins::build_plugin_hook_config(plugin_key_registry, configured_plugins) {
-            Ok(hooks) => hooks,
+            Ok(result) => result,
             Err(err) => return (false, format!("{label} — {err}"), false),
         };
 
