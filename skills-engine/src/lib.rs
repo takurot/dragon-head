@@ -168,11 +168,27 @@ pub enum SkillRunStatus {
     Handoff,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `outputs` is a snapshot of `SkillExecutionContext::extracted` at the moment this report was
+/// built (ISSUE-304) — the values every `extract` step produced up to that point. It is present
+/// on every `Ok` result (`Completed`, `Failed`, and `Handoff`), including a *partial* set of
+/// outputs when a skill fails or hands off partway through: values extracted before the
+/// failure/handoff point are still returned, by design (later steps and the MCP caller can see
+/// exactly what was captured before things went wrong). `Eq` is intentionally not derived here
+/// (unlike the rest of this type) because `serde_json::Value`, inside `outputs`, only implements
+/// `PartialEq`.
+///
+/// `outputs` is **not** available when `SkillEngine::run` returns `Err(SkillEngineError)` —
+/// definition-time validation failure or the `OperationLimitExceeded` circuit breaker — since
+/// `SkillExecutionContext` is owned internally by `run` and dropped along with the error. Both
+/// of those error paths indicate the skill's own definition is invalid (validation runs before
+/// any step executes) or it ran away (the 1024-operation safety valve), not a normal in-page
+/// failure a caller would want partial output from.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SkillRunReport {
     pub status: SkillRunStatus,
     pub trace: Vec<OperationTrace>,
     pub message: Option<String>,
+    pub outputs: HashMap<String, Value>,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -313,6 +329,7 @@ impl SkillEngine {
                             status: SkillRunStatus::Handoff,
                             trace,
                             message: Some("handoff step reached".to_string()),
+                            outputs: context.extracted.clone(),
                         });
                     }
 
@@ -356,6 +373,7 @@ impl SkillEngine {
                         status: SkillRunStatus::Failed,
                         trace,
                         message: Some(reason),
+                        outputs: context.extracted.clone(),
                     });
                 }
                 OperationOutcome::Handoff { reason } => {
@@ -363,6 +381,7 @@ impl SkillEngine {
                         status: SkillRunStatus::Handoff,
                         trace,
                         message: Some(reason),
+                        outputs: context.extracted.clone(),
                     });
                 }
             }
@@ -372,6 +391,7 @@ impl SkillEngine {
             status: SkillRunStatus::Completed,
             trace,
             message: None,
+            outputs: context.extracted,
         })
     }
 
