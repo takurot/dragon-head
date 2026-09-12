@@ -1223,6 +1223,7 @@ durability = "sync"
         let mut manifest = plugin_host::PluginManifest {
             plugin_id: plugin_id.to_string(),
             version: "0.1.0".to_string(),
+            abi_version: plugin_host::CURRENT_ABI_VERSION,
             entry_points,
             capabilities,
             signature: None,

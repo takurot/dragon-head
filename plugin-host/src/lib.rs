@@ -66,10 +66,27 @@ pub struct SbomDocument {
     pub components: Vec<SbomComponent>,
 }
 
+/// The host↔plugin ABI version this build of `plugin-host` implements: the `on_state`/
+/// `before_act` calling convention (payload envelope, size caps — see `MAX_INPUT_SIZE`/
+/// `MAX_OUTPUT_SIZE` below — and capability semantics). Bump this whenever that contract changes
+/// in a way an old plugin binary could not safely continue operating against (ISSUE-208).
+pub const CURRENT_ABI_VERSION: u32 = 1;
+/// Inclusive range of ABI versions this host accepts. `load_plugin` rejects any manifest whose
+/// `abi_version` falls outside this range at load time — a plugin built against an
+/// incompatible/unversioned ABI must never fail opaquely at call time.
+pub const MIN_SUPPORTED_ABI_VERSION: u32 = 1;
+pub const MAX_SUPPORTED_ABI_VERSION: u32 = CURRENT_ABI_VERSION;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginManifest {
     pub plugin_id: String,
     pub version: String,
+    /// The host↔plugin ABI version this plugin was built against (ISSUE-208). Defaults to `0`
+    /// (an explicitly *unsupported* sentinel, not `CURRENT_ABI_VERSION`) when absent from a
+    /// manifest — an unversioned manifest predates this field and must be rejected with a clear
+    /// `PluginError::UnsupportedAbiVersion`, not silently assumed compatible.
+    #[serde(default)]
+    pub abi_version: u32,
     pub entry_points: Vec<ExtensionPoint>,
     pub capabilities: Vec<Capability>,
     #[serde(default)]
@@ -87,6 +104,11 @@ pub struct PluginPackage {
 pub enum PluginError {
     #[error("plugin manifest validation failed: {message}")]
     ManifestValidation { message: String },
+    #[error(
+        "plugin abi_version {got} is not supported by this host (supported range: \
+         {min}..={max}); rebuild the plugin against a supported ABI version"
+    )]
+    UnsupportedAbiVersion { got: u32, min: u32, max: u32 },
     #[error("unsigned plugin is not allowed")]
     UnsignedPlugin,
     #[error("unknown signing key: {key_id}")]
@@ -129,6 +151,10 @@ pub enum PluginError {
 struct SignaturePayload<'a> {
     plugin_id: &'a str,
     version: &'a str,
+    // Binds `abi_version` into the signed payload (ISSUE-208) so tampering with it after signing
+    // — e.g. downgrading it to slip past a host that only checks the unsigned manifest field —
+    // invalidates the signature, the same way tampering with `capabilities` already does.
+    abi_version: u32,
     entry_points: &'a [ExtensionPoint],
     capabilities: &'a [Capability],
     sbom: &'a SbomDocument,
@@ -142,6 +168,7 @@ pub fn signature_payload(
     let payload = SignaturePayload {
         plugin_id: &manifest.plugin_id,
         version: &manifest.version,
+        abi_version: manifest.abi_version,
         entry_points: &manifest.entry_points,
         capabilities: &manifest.capabilities,
         sbom: &manifest.sbom,
@@ -657,6 +684,17 @@ fn validate_manifest(manifest: &PluginManifest) -> Result<(), PluginError> {
         });
     }
 
+    // ISSUE-208: reject an incompatible/unversioned ABI before any signature or Wasm work, so an
+    // old plugin binary is cleanly rejected at load time rather than failing opaquely at call
+    // time once the host↔plugin calling convention has moved on.
+    if !(MIN_SUPPORTED_ABI_VERSION..=MAX_SUPPORTED_ABI_VERSION).contains(&manifest.abi_version) {
+        return Err(PluginError::UnsupportedAbiVersion {
+            got: manifest.abi_version,
+            min: MIN_SUPPORTED_ABI_VERSION,
+            max: MAX_SUPPORTED_ABI_VERSION,
+        });
+    }
+
     if manifest.entry_points.is_empty() {
         return Err(PluginError::ManifestValidation {
             message: "at least one extension point must be declared".to_string(),
@@ -699,6 +737,100 @@ fn validate_sbom(sbom: &SbomDocument) -> Result<(), PluginError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn manifest_with_abi_version(abi_version: u32) -> PluginManifest {
+        PluginManifest {
+            plugin_id: "abi.test.plugin".to_string(),
+            version: "0.1.0".to_string(),
+            abi_version,
+            entry_points: vec![ExtensionPoint::OnState],
+            capabilities: vec![Capability::ReadState],
+            signature: None,
+            sbom: SbomDocument {
+                format: "cyclonedx-1.5".to_string(),
+                components: vec![SbomComponent {
+                    name: "abi-test-fixture".to_string(),
+                    version: "0.1.0".to_string(),
+                    license: Some("MIT".to_string()),
+                }],
+            },
+        }
+    }
+
+    // --- ISSUE-208: abi_version load-time rejection ---
+
+    #[test]
+    fn validate_manifest_accepts_current_abi_version() {
+        let manifest = manifest_with_abi_version(CURRENT_ABI_VERSION);
+        assert!(validate_manifest(&manifest).is_ok());
+    }
+
+    #[test]
+    fn validate_manifest_rejects_unversioned_manifest_default() {
+        // `abi_version` defaults to 0 via `#[serde(default)]` when absent from JSON — an
+        // unversioned/legacy manifest must be rejected the same way an explicitly out-of-range
+        // one is, not silently treated as `CURRENT_ABI_VERSION`.
+        let manifest = manifest_with_abi_version(0);
+        let err = validate_manifest(&manifest).unwrap_err();
+        assert!(matches!(
+            err,
+            PluginError::UnsupportedAbiVersion {
+                got: 0,
+                min: MIN_SUPPORTED_ABI_VERSION,
+                max: MAX_SUPPORTED_ABI_VERSION,
+            }
+        ));
+        assert!(
+            err.to_string()
+                .contains(&MIN_SUPPORTED_ABI_VERSION.to_string())
+        );
+        assert!(
+            err.to_string()
+                .contains(&MAX_SUPPORTED_ABI_VERSION.to_string())
+        );
+    }
+
+    #[test]
+    fn validate_manifest_rejects_future_abi_version() {
+        let future = MAX_SUPPORTED_ABI_VERSION + 1;
+        let manifest = manifest_with_abi_version(future);
+        let err = validate_manifest(&manifest).unwrap_err();
+        assert!(matches!(
+            err,
+            PluginError::UnsupportedAbiVersion { got, .. } if got == future
+        ));
+    }
+
+    #[test]
+    fn load_plugin_rejects_unversioned_manifest_before_any_signature_or_wasm_work() {
+        // The ABI check must happen in `validate_manifest`, before `verify_signature`/module
+        // compilation — an unsigned, unversioned manifest should fail with
+        // `UnsupportedAbiVersion`, not `UnsignedPlugin` (which would imply the ABI check never
+        // ran, or ran too late to matter).
+        let host = PluginHost::default();
+        let package = PluginPackage {
+            manifest: manifest_with_abi_version(0),
+            wasm_module: wat::parse_str("(module)").unwrap(),
+        };
+        let err = host.load_plugin(&package).unwrap_err();
+        assert!(matches!(
+            err,
+            PluginError::UnsupportedAbiVersion { got: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn abi_version_is_bound_into_the_signature_payload() {
+        // Tampering with `abi_version` after signing must change the signed payload bytes, the
+        // same way tampering with `capabilities` already does — otherwise a signature could be
+        // replayed across a downgraded/upgraded `abi_version`.
+        let wasm = wat::parse_str("(module)").unwrap();
+        let base = manifest_with_abi_version(1);
+        let tampered = manifest_with_abi_version(2);
+        let base_payload = signature_payload(&base, &wasm).unwrap();
+        let tampered_payload = signature_payload(&tampered, &wasm).unwrap();
+        assert_ne!(base_payload, tampered_payload);
+    }
 
     #[test]
     fn poisoned_module_cache_is_rebuilt_and_remains_usable() {

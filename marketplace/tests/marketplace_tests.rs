@@ -24,6 +24,7 @@ fn sample_pack() -> DomainPack {
             manifest: PluginManifest {
                 plugin_id: "com.example.plugin".to_string(),
                 version: "1.0.0".to_string(),
+                abi_version: plugin_host::CURRENT_ABI_VERSION,
                 entry_points: vec![ExtensionPoint::OnState],
                 capabilities: vec![Capability::ReadState],
                 signature: None,

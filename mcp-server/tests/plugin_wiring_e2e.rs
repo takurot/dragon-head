@@ -99,6 +99,7 @@ fn build_hooks_from_config_toml(
     let manifest = PluginManifest {
         plugin_id: "e2e-composition.plugin".to_string(),
         version: "0.1.0".to_string(),
+        abi_version: plugin_host::CURRENT_ABI_VERSION,
         entry_points: vec![ExtensionPoint::OnState, ExtensionPoint::BeforeAct],
         capabilities: vec![Capability::ReadState],
         signature: None,

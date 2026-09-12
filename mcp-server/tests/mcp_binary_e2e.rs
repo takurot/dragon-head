@@ -904,6 +904,7 @@ fn binary_doctor_reports_wired_hook_counts_for_a_valid_signed_plugin() -> anyhow
     let manifest = plugin_host::PluginManifest {
         plugin_id: "binary-e2e.plugin".to_string(),
         version: "0.1.0".to_string(),
+        abi_version: plugin_host::CURRENT_ABI_VERSION,
         entry_points: vec![plugin_host::ExtensionPoint::OnState],
         capabilities: vec![plugin_host::Capability::ReadState],
         signature: None,
