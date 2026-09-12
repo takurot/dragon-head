@@ -26,6 +26,17 @@ pub const ENV_AUDIT_DURABILITY: &str = "AUDIT_DURABILITY";
 /// Historical name retained for compatibility; audit events are mirrored to stderr.
 pub const ENV_AUDIT_LOG_STDERR_MIRROR: &str = "AUDIT_LOG_STDOUT";
 
+/// Enables the embedded HITL Slack bridge (ISSUE-302). See `docs/hitl-slack-bridge.md`.
+pub const ENV_HITL_BRIDGE_ENABLED: &str = "HITL_BRIDGE_ENABLED";
+pub const ENV_HITL_BRIDGE_BIND_ADDR: &str = "HITL_BRIDGE_BIND_ADDR";
+pub const ENV_HITL_BRIDGE_AUDIT_LOG: &str = "HITL_BRIDGE_AUDIT_LOG";
+pub const ENV_HITL_BRIDGE_POLL_INTERVAL_MS: &str = "HITL_BRIDGE_POLL_INTERVAL_MS";
+/// Shared with the standalone `dragon-head-hitl-bridge` binary's own CLI env vars, so the same
+/// Slack app credentials work in either deployment mode.
+pub const ENV_SLACK_SIGNING_SECRET: &str = "SLACK_SIGNING_SECRET";
+pub const ENV_SLACK_BOT_TOKEN: &str = "SLACK_BOT_TOKEN";
+pub const ENV_SLACK_CHANNEL: &str = "SLACK_CHANNEL";
+
 pub const HONORED_CONFIG_ENV_VARS: &[&str] = &[
     ENV_CHROME_PATH,
     ENV_PROMPT_INJECTION_MODE,
@@ -36,6 +47,13 @@ pub const HONORED_CONFIG_ENV_VARS: &[&str] = &[
     ENV_AUDIT_LOG_MAX_BYTES,
     ENV_AUDIT_DURABILITY,
     ENV_AUDIT_LOG_STDERR_MIRROR,
+    ENV_HITL_BRIDGE_ENABLED,
+    ENV_HITL_BRIDGE_BIND_ADDR,
+    ENV_HITL_BRIDGE_AUDIT_LOG,
+    ENV_HITL_BRIDGE_POLL_INTERVAL_MS,
+    ENV_SLACK_SIGNING_SECRET,
+    ENV_SLACK_BOT_TOKEN,
+    ENV_SLACK_CHANNEL,
 ];
 
 pub const MAX_ADDITIONAL_PHRASES: usize = 64;
@@ -58,6 +76,8 @@ pub struct FileConfig {
     pub audit: AuditFileConfig,
     #[serde(default)]
     pub skills: SkillsFileConfig,
+    #[serde(default)]
+    pub hitl_bridge: HitlBridgeFileConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -97,6 +117,23 @@ pub struct SkillsFileConfig {
     /// JSON files containing one `SkillDefinition` each.
     #[serde(default)]
     pub files: Vec<String>,
+}
+
+/// Config for the embedded HITL Slack bridge (ISSUE-302). Slack credentials
+/// (signing secret, bot token, channel) are deliberately not accepted here — only via
+/// `SLACK_SIGNING_SECRET`/`SLACK_BOT_TOKEN`/`SLACK_CHANNEL` env vars — so they never land in a
+/// checked-in `config.toml`.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct HitlBridgeFileConfig {
+    /// Starts the embedded bridge alongside the stdio MCP server.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Address the Slack interactivity webhook server binds to. Defaults to `0.0.0.0:8787`.
+    pub bind_addr: Option<String>,
+    /// Path to the append-only NDJSON audit trail file. Defaults to `hitl-bridge-audit.ndjson`.
+    pub audit_log: Option<String>,
+    /// How often to poll the shared session for new pending approval requests. Defaults to 1000.
+    pub poll_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -152,6 +189,15 @@ pub enum ConfigError {
     InvalidSkillDefinition { path: PathBuf, reason: String },
     #[error("duplicate skill name in {path}; first defined in {first_path}")]
     DuplicateSkillName { path: PathBuf, first_path: PathBuf },
+    #[error("invalid {ENV_HITL_BRIDGE_ENABLED} (expected exactly 'true' or 'false')")]
+    InvalidHitlBridgeEnabled,
+    #[error(
+        "hitl_bridge is enabled but {name} is not set; the embedded HITL bridge requires \
+         SLACK_SIGNING_SECRET, SLACK_BOT_TOKEN, and SLACK_CHANNEL"
+    )]
+    HitlBridgeMissingCredential { name: &'static str },
+    #[error("invalid {ENV_HITL_BRIDGE_POLL_INTERVAL_MS} '{0}' (expected a positive integer)")]
+    InvalidHitlBridgePollIntervalMs(String),
 }
 
 #[cfg(unix)]
@@ -345,6 +391,37 @@ pub struct ResolvedConfig {
     pub audit_max_bytes: Option<u64>,
     pub audit_durability: Option<String>,
     pub navigation_allow_private_network: bool,
+    /// `Some` iff the embedded HITL Slack bridge (ISSUE-302) should be started alongside the
+    /// stdio MCP server, sharing this process's `PageSession`.
+    pub hitl_bridge: Option<HitlBridgeConfig>,
+}
+
+/// Resolved settings for the embedded HITL Slack bridge (ISSUE-302).
+///
+/// `Debug` is implemented manually (rather than derived) so that logging or panicking on this
+/// value — today or in a future change — can never print `slack_signing_secret`/
+/// `slack_bot_token` verbatim.
+#[derive(Clone, PartialEq)]
+pub struct HitlBridgeConfig {
+    pub bind_addr: String,
+    pub slack_signing_secret: String,
+    pub slack_bot_token: String,
+    pub slack_channel: String,
+    pub audit_log: PathBuf,
+    pub poll_interval_ms: u64,
+}
+
+impl std::fmt::Debug for HitlBridgeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HitlBridgeConfig")
+            .field("bind_addr", &self.bind_addr)
+            .field("slack_signing_secret", &"<redacted>")
+            .field("slack_bot_token", &"<redacted>")
+            .field("slack_channel", &self.slack_channel)
+            .field("audit_log", &self.audit_log)
+            .field("poll_interval_ms", &self.poll_interval_ms)
+            .finish()
+    }
 }
 
 /// Merges `file_config` (`None` means "no config file present, use defaults") with
@@ -410,6 +487,63 @@ pub fn resolve_config(
         }
     }
 
+    // Every var is looked up unconditionally (even when hitl_bridge ends up disabled) so that
+    // `HONORED_CONFIG_ENV_VARS` accurately reflects every env var `resolve_config` consults,
+    // matching the pattern used for the other config sections above.
+    let hitl_bridge_enabled_raw = lookup(ENV_HITL_BRIDGE_ENABLED);
+    let slack_signing_secret = lookup(ENV_SLACK_SIGNING_SECRET);
+    let slack_bot_token = lookup(ENV_SLACK_BOT_TOKEN);
+    let slack_channel = lookup(ENV_SLACK_CHANNEL);
+    let hitl_bind_addr = lookup(ENV_HITL_BRIDGE_BIND_ADDR);
+    let hitl_audit_log = lookup(ENV_HITL_BRIDGE_AUDIT_LOG);
+    let hitl_poll_interval_ms_raw = lookup(ENV_HITL_BRIDGE_POLL_INTERVAL_MS);
+
+    let hitl_bridge_enabled = match hitl_bridge_enabled_raw {
+        Some(raw) => match raw.as_str() {
+            "true" => true,
+            "false" => false,
+            _ => return Err(ConfigError::InvalidHitlBridgeEnabled),
+        },
+        None => fc.hitl_bridge.enabled,
+    };
+
+    let hitl_bridge = if hitl_bridge_enabled {
+        let slack_signing_secret =
+            slack_signing_secret.ok_or(ConfigError::HitlBridgeMissingCredential {
+                name: ENV_SLACK_SIGNING_SECRET,
+            })?;
+        let slack_bot_token = slack_bot_token.ok_or(ConfigError::HitlBridgeMissingCredential {
+            name: ENV_SLACK_BOT_TOKEN,
+        })?;
+        let slack_channel = slack_channel.ok_or(ConfigError::HitlBridgeMissingCredential {
+            name: ENV_SLACK_CHANNEL,
+        })?;
+        let bind_addr = hitl_bind_addr
+            .or_else(|| fc.hitl_bridge.bind_addr.clone())
+            .unwrap_or_else(|| "0.0.0.0:8787".to_string());
+        let audit_log = hitl_audit_log
+            .or_else(|| fc.hitl_bridge.audit_log.clone())
+            .unwrap_or_else(|| "hitl-bridge-audit.ndjson".to_string());
+        let poll_interval_ms = match hitl_poll_interval_ms_raw {
+            Some(raw) => raw
+                .parse::<u64>()
+                .ok()
+                .filter(|ms| *ms > 0)
+                .ok_or(ConfigError::InvalidHitlBridgePollIntervalMs(raw))?,
+            None => fc.hitl_bridge.poll_interval_ms.unwrap_or(1000),
+        };
+        Some(HitlBridgeConfig {
+            bind_addr,
+            slack_signing_secret,
+            slack_bot_token,
+            slack_channel,
+            audit_log: PathBuf::from(audit_log),
+            poll_interval_ms,
+        })
+    } else {
+        None
+    };
+
     Ok(ResolvedConfig {
         chrome_path,
         injection_mode,
@@ -419,6 +553,7 @@ pub fn resolve_config(
         audit_max_bytes,
         audit_durability,
         navigation_allow_private_network,
+        hitl_bridge,
     })
 }
 
@@ -573,6 +708,7 @@ durability = "sync"
                     durability: Some("sync".to_string()),
                 },
                 skills: SkillsFileConfig::default(),
+                hitl_bridge: HitlBridgeFileConfig::default(),
             }
         );
     }
@@ -867,6 +1003,7 @@ durability = "sync"
                 audit_max_bytes: None,
                 audit_durability: None,
                 navigation_allow_private_network: false,
+                hitl_bridge: None,
             }
         );
     }
@@ -935,6 +1072,7 @@ durability = "sync"
                 durability: Some("sync".to_string()),
             },
             skills: SkillsFileConfig::default(),
+            hitl_bridge: HitlBridgeFileConfig::default(),
         };
         let resolved = resolve_config(Some(&fc), no_env).unwrap();
         assert_eq!(resolved.chrome_path, Some("/usr/bin/chromium".to_string()));
@@ -970,6 +1108,7 @@ durability = "sync"
                 durability: Some("sync".to_string()),
             },
             skills: SkillsFileConfig::default(),
+            hitl_bridge: HitlBridgeFileConfig::default(),
         };
         let resolved = resolve_config(Some(&fc), |key| match key {
             "CHROME_PATH" => Some("/opt/chrome".to_string()),
@@ -994,6 +1133,126 @@ durability = "sync"
         assert_eq!(resolved.audit_log_dir, Some("/tmp/audit".to_string()));
         assert_eq!(resolved.audit_max_bytes, Some(4096));
         assert_eq!(resolved.audit_durability, Some("flush".to_string()));
+    }
+
+    // --- hitl_bridge (ISSUE-302) ---
+
+    #[test]
+    fn resolve_config_hitl_bridge_disabled_by_default() {
+        let resolved = resolve_config(None, no_env).unwrap();
+        assert_eq!(resolved.hitl_bridge, None);
+    }
+
+    #[test]
+    fn resolve_config_hitl_bridge_enabled_without_slack_credentials_errors() {
+        let err = resolve_config(None, |key| {
+            (key == ENV_HITL_BRIDGE_ENABLED).then(|| "true".to_string())
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ConfigError::HitlBridgeMissingCredential {
+                name: ENV_SLACK_SIGNING_SECRET
+            }
+        ));
+    }
+
+    #[test]
+    fn resolve_config_hitl_bridge_enabled_with_credentials_uses_defaults() {
+        let resolved = resolve_config(None, |key| match key {
+            "HITL_BRIDGE_ENABLED" => Some("true".to_string()),
+            "SLACK_SIGNING_SECRET" => Some("secret".to_string()),
+            "SLACK_BOT_TOKEN" => Some("xoxb-token".to_string()),
+            "SLACK_CHANNEL" => Some("C123".to_string()),
+            _ => None,
+        })
+        .unwrap();
+
+        let hitl = resolved.hitl_bridge.expect("hitl_bridge must be enabled");
+        assert_eq!(hitl.bind_addr, "0.0.0.0:8787");
+        assert_eq!(hitl.slack_signing_secret, "secret");
+        assert_eq!(hitl.slack_bot_token, "xoxb-token");
+        assert_eq!(hitl.slack_channel, "C123");
+        assert_eq!(hitl.audit_log, PathBuf::from("hitl-bridge-audit.ndjson"));
+        assert_eq!(hitl.poll_interval_ms, 1000);
+    }
+
+    #[test]
+    fn hitl_bridge_config_debug_redacts_slack_secrets() {
+        let hitl = HitlBridgeConfig {
+            bind_addr: "0.0.0.0:8787".to_string(),
+            slack_signing_secret: "top-secret-signing-value".to_string(),
+            slack_bot_token: "xoxb-top-secret-token".to_string(),
+            slack_channel: "C123".to_string(),
+            audit_log: PathBuf::from("hitl-bridge-audit.ndjson"),
+            poll_interval_ms: 1000,
+        };
+
+        let debug_output = format!("{hitl:?}");
+
+        assert!(!debug_output.contains("top-secret-signing-value"));
+        assert!(!debug_output.contains("xoxb-top-secret-token"));
+        assert!(debug_output.contains("<redacted>"));
+        // Non-secret fields must still be visible for debugging.
+        assert!(debug_output.contains("0.0.0.0:8787"));
+        assert!(debug_output.contains("C123"));
+    }
+
+    #[test]
+    fn resolve_config_hitl_bridge_env_overrides_file_and_defaults() {
+        let fc = FileConfig {
+            hitl_bridge: HitlBridgeFileConfig {
+                enabled: true,
+                bind_addr: Some("127.0.0.1:9000".to_string()),
+                audit_log: Some("/var/log/hitl.ndjson".to_string()),
+                poll_interval_ms: Some(500),
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolve_config(Some(&fc), |key| match key {
+            "SLACK_SIGNING_SECRET" => Some("secret".to_string()),
+            "SLACK_BOT_TOKEN" => Some("xoxb-token".to_string()),
+            "SLACK_CHANNEL" => Some("C123".to_string()),
+            "HITL_BRIDGE_BIND_ADDR" => Some("0.0.0.0:9999".to_string()),
+            "HITL_BRIDGE_POLL_INTERVAL_MS" => Some("2000".to_string()),
+            _ => None,
+        })
+        .unwrap();
+
+        let hitl = resolved.hitl_bridge.expect("hitl_bridge must be enabled");
+        assert_eq!(hitl.bind_addr, "0.0.0.0:9999");
+        assert_eq!(hitl.audit_log, PathBuf::from("/var/log/hitl.ndjson"));
+        assert_eq!(hitl.poll_interval_ms, 2000);
+    }
+
+    #[test]
+    fn resolve_config_hitl_bridge_invalid_enabled_value_is_rejected() {
+        let err = resolve_config(None, |key| {
+            (key == ENV_HITL_BRIDGE_ENABLED).then(|| "maybe".to_string())
+        })
+        .unwrap_err();
+
+        assert!(matches!(err, ConfigError::InvalidHitlBridgeEnabled));
+    }
+
+    #[test]
+    fn resolve_config_hitl_bridge_invalid_poll_interval_is_rejected() {
+        let err = resolve_config(None, |key| match key {
+            "HITL_BRIDGE_ENABLED" => Some("true".to_string()),
+            "SLACK_SIGNING_SECRET" => Some("secret".to_string()),
+            "SLACK_BOT_TOKEN" => Some("xoxb-token".to_string()),
+            "SLACK_CHANNEL" => Some("C123".to_string()),
+            "HITL_BRIDGE_POLL_INTERVAL_MS" => Some("0".to_string()),
+            _ => None,
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ConfigError::InvalidHitlBridgePollIntervalMs(ref value) if value == "0"
+        ));
     }
 
     #[test]

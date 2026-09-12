@@ -144,6 +144,15 @@ fn main() -> anyhow::Result<()> {
     for skill in skills {
         backend.register_skill(skill);
     }
+
+    if let Some(hitl_config) = &resolved.hitl_bridge {
+        eprintln!(
+            "dragon-head-mcp: starting embedded HITL bridge on {}",
+            hitl_config.bind_addr
+        );
+        mcp_server::hitl::spawn_embedded_bridge(backend.page_handle(), hitl_config);
+    }
+
     let mut server = McpServer::new(backend);
     eprintln!("dragon-head-mcp: ready, listening on stdio");
 

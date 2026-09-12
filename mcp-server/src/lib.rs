@@ -1,6 +1,7 @@
 pub mod config;
 pub mod doctor;
 pub mod dto;
+pub mod hitl;
 pub mod metering;
 pub(crate) mod protocol;
 
@@ -990,7 +991,9 @@ const RESTART_RATE_LIMIT_MAX: usize = 3;
 const RESTART_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
 pub struct CoreRuntimeBackend {
-    page: PageSession,
+    /// Shared so an embedded HITL bridge (ISSUE-302) can observe and resolve the exact same
+    /// pending policy approvals as this backend, via [`CoreRuntimeBackend::page_handle`].
+    page: Arc<PageSession>,
     state_cache: Option<ExternalSemanticState>,
     previous_semantic_state: Option<SemanticState>,
     skill_engine: SkillEngine,
@@ -1064,7 +1067,7 @@ pub struct CoreRuntimeBackend {
 impl CoreRuntimeBackend {
     pub fn new(page: PageSession) -> Self {
         Self {
-            page,
+            page: Arc::new(page),
             state_cache: None,
             previous_semantic_state: None,
             skill_engine: SkillEngine::new(),
@@ -1169,6 +1172,22 @@ impl CoreRuntimeBackend {
 
     pub fn page(&self) -> &PageSession {
         &self.page
+    }
+
+    /// Returns a cloned handle to the exact `PageSession` this backend acts on.
+    ///
+    /// `PageSession`'s policy-approval methods (`pending_policy_approval`,
+    /// `approve_pending_policy_action`, `reject_pending_policy_action`) take `&self` and are
+    /// safe to call from another thread, so this lets an in-process HITL bridge
+    /// (ISSUE-302) observe and resolve the same pending approvals as this backend's own
+    /// `ask_human`, instead of independently opening an unrelated `PageSession`.
+    ///
+    /// Note: [`CoreRuntimeBackend::handle_browser_disconnect`] replaces `self.page` with a
+    /// freshly relaunched session after a Chrome crash (ISSUE-149); a handle obtained before
+    /// that point keeps referring to the old, now-defunct session rather than following the
+    /// restart.
+    pub fn page_handle(&self) -> Arc<PageSession> {
+        Arc::clone(&self.page)
     }
 
     pub fn register_skill(&mut self, skill: SkillDefinition) {
@@ -1935,7 +1954,7 @@ impl McpBackend for CoreRuntimeBackend {
                 .map_err(|err| format!("failed to reapply policy rules after restart: {err}"))?;
         }
 
-        self.page = new_page;
+        self.page = Arc::new(new_page);
         self.state_cache = None;
         self.previous_semantic_state = None;
         self.previous_state_verified = true;

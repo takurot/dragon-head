@@ -212,6 +212,13 @@ files = ["skills/checkout.json", "/opt/dragon-head/skills/search.json"]
 | Audit max bytes | `AUDIT_LOG_MAX_BYTES` | `audit.max_bytes` |
 | Audit durability | `AUDIT_DURABILITY` | `audit.durability` |
 | Audit stdout mirroring | `AUDIT_LOG_STDOUT` | none |
+| Embedded HITL bridge enabled | `HITL_BRIDGE_ENABLED` | `hitl_bridge.enabled` |
+| Embedded HITL bridge bind address | `HITL_BRIDGE_BIND_ADDR` | `hitl_bridge.bind_addr` |
+| Embedded HITL bridge audit log | `HITL_BRIDGE_AUDIT_LOG` | `hitl_bridge.audit_log` |
+| Embedded HITL bridge poll interval (ms) | `HITL_BRIDGE_POLL_INTERVAL_MS` | `hitl_bridge.poll_interval_ms` |
+| Slack signing secret | `SLACK_SIGNING_SECRET` | none (secret; env only) |
+| Slack bot token | `SLACK_BOT_TOKEN` | none (secret; env only) |
+| Slack channel | `SLACK_CHANNEL` | none (env only) |
 <!-- config-env-contract:end -->
 
 `PROMPT_INJECTION_ADDITIONAL_PHRASES` must be a JSON array of strings, for
@@ -230,6 +237,12 @@ values fail configuration without echoing their contents. The default blocks
 loopback, private, link-local, and other non-global navigation destinations.
 Enable it only for trusted local deployments and tests. This application-level
 switch does not replace OS/container network isolation or deployment egress controls.
+
+Setting `HITL_BRIDGE_ENABLED=true` starts the reference Slack HITL bridge inside this
+process, sharing its `PageSession` (see [`docs/hitl-slack-bridge.md`](docs/hitl-slack-bridge.md)
+for the supported deployment topology). `SLACK_SIGNING_SECRET`, `SLACK_BOT_TOKEN`, and
+`SLACK_CHANNEL` are required in that case and are only ever read from the environment —
+never from `config.toml` — so Slack credentials never land in a checked-in file.
 
 Run `dragon-head-mcp --doctor` to validate the config file and list every
 supported configuration environment variable. A malformed file or invalid env
