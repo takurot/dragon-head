@@ -1810,12 +1810,18 @@ impl McpBackend for CoreRuntimeBackend {
             }));
         };
 
-        let mut runtime = PageSkillRuntime::new(&self.page, &args.params);
+        let mut runtime =
+            PageSkillRuntime::new(&self.page, &args.params, &self.injection_sanitizer);
         let run_result = self
             .skill_engine
             .run(&skill, &mut runtime)
             .context("run_skill execution failed");
-        // Always capture the delta so acts that ran before a failure are not silently lost.
+        // Always capture the delta (and, ISSUE-304, the accumulated security flags) so acts/
+        // extracts that ran before a failure are not silently lost — same reasoning as the
+        // delta capture already here (see the comment below), applied to `security_flags` too:
+        // `into_usage_delta` consumes `runtime`, so anything else needed from it must be taken
+        // first.
+        let security_flags = std::mem::take(&mut runtime.security_flags);
         let delta = runtime.into_usage_delta();
         self.last_skill_delta = delta.clone();
         // ISSUE-301: any successful `act` step mutated the live page outside of
@@ -1827,9 +1833,32 @@ impl McpBackend for CoreRuntimeBackend {
         }
         let report = run_result?;
 
+        // ISSUE-304: `report.outputs` already went through `injection_sanitizer` at the point
+        // each value entered `ctx.extracted` (see `PageSkillRuntime::extract`) — apply PII
+        // redaction here, at the external response boundary, matching the `extract` MCP tool's
+        // own sanitize-then-redact order for page-derived content.
+        let outputs: Value = report
+            .outputs
+            .into_iter()
+            .map(|(key, value)| (key, core_runtime::privacy::global().redact_json(&value)))
+            .collect::<serde_json::Map<String, Value>>()
+            .into();
+        // `message` needs the same PII redaction (Codex review): a `verify` step whose
+        // `expected` came from `{{extracted.*}}` embeds both the extracted expected text and the
+        // actual page text it was compared against directly into this failure message (see
+        // `PageSession::verify_text`'s error) — unlike `outputs`, this text never passes through
+        // `injection_sanitizer` either, so redact it here rather than widen `extract`'s
+        // sanitization contract onto every step-failure message in this change.
+        let message = report
+            .message
+            .as_deref()
+            .map(|message| core_runtime::privacy::global().redact_text(message));
+
         Ok(json!({
             "status": skill_run_status_name(report.status),
-            "message": report.message,
+            "message": message,
+            "outputs": outputs,
+            "security_flags": security_flags,
             "trace": report
                 .trace
                 .into_iter()
@@ -2000,21 +2029,33 @@ impl McpBackend for CoreRuntimeBackend {
 struct PageSkillRuntime<'a> {
     page: &'a PageSession,
     params: &'a Value,
+    injection_sanitizer: &'a PromptInjectionSanitizer,
     actions_executed: u64,
     /// Reserved for when a `get_visual` skill step type is introduced; not yet incremented.
     visual_captures: u64,
     /// Reserved for when a skill-internal HITL step type is introduced; not yet incremented.
     hitl_events: u64,
+    /// Prompt-injection security flags accumulated from every `extract` step's sanitization
+    /// (ISSUE-304) — surfaced in `run_skill`'s response alongside `outputs` so a caller can tell
+    /// sanitized-but-still-suspicious page content apart from ordinary text, the same signal
+    /// the top-level `extract` MCP tool already gives.
+    security_flags: Vec<String>,
 }
 
 impl<'a> PageSkillRuntime<'a> {
-    fn new(page: &'a PageSession, params: &'a Value) -> Self {
+    fn new(
+        page: &'a PageSession,
+        params: &'a Value,
+        injection_sanitizer: &'a PromptInjectionSanitizer,
+    ) -> Self {
         Self {
             page,
             params,
+            injection_sanitizer,
             actions_executed: 0,
             visual_captures: 0,
             hitl_events: 0,
+            security_flags: Vec::new(),
         }
     }
 
@@ -2027,13 +2068,26 @@ impl<'a> PageSkillRuntime<'a> {
     }
 }
 
+/// Resolves `template` inside a `resolve_template` call and returns early with
+/// `OperationOutcome::Failure` on error — `resolve_template` returns `Result` (ISSUE-304), but
+/// every `SkillRuntime` trait method here returns `OperationOutcome` directly and so can't use
+/// `?`.
+macro_rules! resolve_or_fail {
+    ($template:expr, $params:expr, $ctx:expr, $slot:expr) => {
+        match resolve_template($template, $params, $ctx, $slot) {
+            Ok(value) => value,
+            Err(reason) => return OperationOutcome::Failure { reason },
+        }
+    };
+}
+
 impl SkillRuntime for PageSkillRuntime<'_> {
     fn locate(
         &mut self,
         step: &LocateStep,
-        _ctx: &mut skills_engine::SkillExecutionContext,
+        ctx: &mut skills_engine::SkillExecutionContext,
     ) -> OperationOutcome {
-        let query = resolve_param(&step.query, self.params);
+        let query = resolve_or_fail!(&step.query, self.params, ctx, TemplateSlot::Control);
         if let Some(id) = parse_target_id(&query) {
             return match self.page.capture_semantic_state(LoadProfile::Interactive) {
                 Ok(state) => {
@@ -2079,10 +2133,13 @@ impl SkillRuntime for PageSkillRuntime<'_> {
     fn verify(
         &mut self,
         step: &VerifyStep,
-        _ctx: &mut skills_engine::SkillExecutionContext,
+        ctx: &mut skills_engine::SkillExecutionContext,
     ) -> OperationOutcome {
-        let target = resolve_param(&step.target, self.params);
-        let expected = resolve_param(&step.expected, self.params);
+        let target = resolve_or_fail!(&step.target, self.params, ctx, TemplateSlot::Control);
+        // `expected` is compared against page text, not used to choose a target/selector, so an
+        // extracted value is safe here (e.g. verifying a confirmation banner echoes an id a
+        // prior step extracted).
+        let expected = resolve_or_fail!(&step.expected, self.params, ctx, TemplateSlot::Data);
         if let Some(id) = parse_target_id(&target) {
             let stable_key = parse_target_stable_key(&target);
             return match self.page.verify_text(id, stable_key.as_deref(), &expected) {
@@ -2121,14 +2178,17 @@ impl SkillRuntime for PageSkillRuntime<'_> {
     fn act(
         &mut self,
         step: &ActStep,
-        _ctx: &mut skills_engine::SkillExecutionContext,
+        ctx: &mut skills_engine::SkillExecutionContext,
     ) -> OperationOutcome {
-        let target = resolve_param(&step.target, self.params);
-        let action = resolve_param(&step.action, self.params);
-        let value = step
-            .value
-            .as_deref()
-            .map(|raw| resolve_param(raw, self.params));
+        // `target`/`action` choose *what element* and *which verb* execute — page content must
+        // never control either, so both reject `{{extracted.*}}` (ISSUE-304 review). Only
+        // `value` (the data typed/selected) may come from an extraction.
+        let target = resolve_or_fail!(&step.target, self.params, ctx, TemplateSlot::Control);
+        let action = resolve_or_fail!(&step.action, self.params, ctx, TemplateSlot::Control);
+        let value = match step.value.as_deref() {
+            Some(raw) => Some(resolve_or_fail!(raw, self.params, ctx, TemplateSlot::Data)),
+            None => None,
+        };
 
         let target_id = parse_target_id(&target);
         let target_stable_key = parse_target_stable_key(&target);
@@ -2152,9 +2212,9 @@ impl SkillRuntime for PageSkillRuntime<'_> {
     fn wait(
         &mut self,
         step: &WaitStep,
-        _ctx: &mut skills_engine::SkillExecutionContext,
+        ctx: &mut skills_engine::SkillExecutionContext,
     ) -> OperationOutcome {
-        let condition = resolve_param(&step.condition, self.params);
+        let condition = resolve_or_fail!(&step.condition, self.params, ctx, TemplateSlot::Control);
         if let Some(intent) = condition.strip_prefix("intent:") {
             return match self
                 .page
@@ -2190,7 +2250,7 @@ impl SkillRuntime for PageSkillRuntime<'_> {
         step: &ExtractStep,
         ctx: &mut skills_engine::SkillExecutionContext,
     ) -> OperationOutcome {
-        let selector = resolve_param(&step.selector, self.params);
+        let selector = resolve_or_fail!(&step.selector, self.params, ctx, TemplateSlot::Control);
         let script = format!(
             "(() => {{ const el = document.querySelector({}); return el ? (el.innerText || el.textContent || '').trim() : null; }})()",
             serde_json::to_string(&selector).unwrap_or_else(|_| "\"\"".to_string())
@@ -2198,10 +2258,21 @@ impl SkillRuntime for PageSkillRuntime<'_> {
 
         match self.page.evaluate_script(&script) {
             Ok(object) => {
-                ctx.extracted.insert(
-                    step.key.clone(),
-                    object.value.unwrap_or_else(|| Value::String(String::new())),
-                );
+                // A missing element stores `Value::Null`, distinct from a successful-but-empty
+                // extraction (an empty string) — see `resolve_extracted_scalar`, which rejects
+                // `Null` when a later template references `{{extracted.<key>}}`, so a failed
+                // extraction fails that step loudly instead of silently typing an empty value
+                // (ISSUE-304 review).
+                let raw = object.value.unwrap_or(Value::Null);
+                // Extracted content is untrusted page content (ISSUE-304 review): sanitize it
+                // here, at the point it enters `ctx.extracted`, so *every* later consumer — a
+                // template substitution into another step, or `run_skill`'s `outputs` — sees the
+                // sanitized form. Sanitizing only at the `run_skill` output boundary would leave
+                // the far more dangerous path (an unsanitized extracted value flowing into a
+                // later `act`) unprotected.
+                let (sanitized, flags) = self.injection_sanitizer.sanitize_json_value(raw);
+                self.security_flags.extend(flags);
+                ctx.extracted.insert(step.key.clone(), sanitized);
                 OperationOutcome::Success
             }
             Err(err) => OperationOutcome::Failure {
@@ -2211,24 +2282,87 @@ impl SkillRuntime for PageSkillRuntime<'_> {
     }
 }
 
-fn resolve_param(template: &str, params: &Value) -> String {
+/// Whether a template's resolved value is used as *data* or as *control* (ISSUE-304).
+#[derive(Clone, Copy)]
+enum TemplateSlot {
+    /// The resolved value is data: typed text, a comparison string. A page-derived
+    /// `{{extracted.*}}` value is acceptable here.
+    Data,
+    /// The resolved value chooses *what* to act on or *how* — a target, a selector, an action
+    /// verb, a wait condition. Page content must never be allowed to control these, so
+    /// `{{extracted.*}}` is rejected here even though the syntax is otherwise valid.
+    Control,
+}
+
+/// Resolves a skill step's `{{...}}` template against `params` (the `run_skill` invocation
+/// arguments) and/or `ctx.extracted` (values produced by prior `extract` steps), per ISSUE-304.
+///
+/// Three distinct forms, deliberately non-overlapping so there is never a precedence question:
+/// - `{{params.KEY}}` — an invocation parameter. Missing or non-scalar (`KEY` not present, or
+///   not a string/number/bool) is an `Err` — unlike the legacy form below, nothing here existed
+///   before ISSUE-304, so there is no backward-compatibility reason to resolve it silently.
+/// - `{{extracted.KEY}}` — a value a prior `extract` step produced. Rejected outright (`Err`) in
+///   a `TemplateSlot::Control` position. In a `TemplateSlot::Data` position: missing (no such key
+///   extracted yet, or ever) or non-scalar (in particular `Value::Null`, which is how a
+///   selector-miss extraction is stored — see `PageSkillRuntime::extract`) is also an `Err`, so a
+///   failed/absent extraction fails the referencing step loudly instead of silently substituting
+///   an empty string or the literal text `null`.
+/// - Bare `{{KEY}}` (no `params.`/`extracted.` prefix) — the original, pre-ISSUE-304 behavior,
+///   kept byte-for-byte compatible: resolves against `params` only, and a miss or non-scalar
+///   value falls back to returning the literal template text unchanged (e.g.
+///   `examples/sample_skill.json`'s `"value": "{{email}}"` must keep working exactly as before).
+///
+/// Text that isn't wrapped in `{{...}}` at all is returned unchanged, always `Ok`.
+fn resolve_template(
+    template: &str,
+    params: &Value,
+    ctx: &skills_engine::SkillExecutionContext,
+    slot: TemplateSlot,
+) -> Result<String, String> {
     let trimmed = template.trim();
-    if let Some(key) = trimmed
+    let Some(inner) = trimmed
         .strip_prefix("{{")
         .and_then(|rest| rest.strip_suffix("}}"))
         .map(str::trim)
-    {
-        if let Some(value) = params.get(key) {
-            if let Some(value) = value.as_str() {
-                return value.to_string();
-            }
-            if value.is_number() || value.is_boolean() {
-                return value.to_string();
-            }
-        }
+    else {
+        return Ok(template.to_string());
+    };
+
+    if let Some(key) = inner.strip_prefix("params.").map(str::trim) {
+        return resolve_scalar(params.get(key))
+            .ok_or_else(|| format!("skill template references undefined params.{key}"));
     }
 
-    template.to_string()
+    if let Some(key) = inner.strip_prefix("extracted.").map(str::trim) {
+        if matches!(slot, TemplateSlot::Control) {
+            return Err(format!(
+                "template {{{{extracted.{key}}}}} is not allowed here — this field selects an \
+                 action/target/selector and must not be derived from extracted page content"
+            ));
+        }
+        return resolve_scalar(ctx.extracted.get(key)).ok_or_else(|| {
+            format!(
+                "skill template references undefined or non-scalar extracted.{key} — either no \
+                 prior extract step produced this key, it runs later in execution order, or the \
+                 extraction found no matching element (stored as null)"
+            )
+        });
+    }
+
+    Ok(resolve_scalar(params.get(inner)).unwrap_or_else(|| template.to_string()))
+}
+
+/// A string/number/bool value stringifies; anything else (missing, `null`, array, object) is
+/// `None` — templates only ever substitute scalar values.
+fn resolve_scalar(value: Option<&Value>) -> Option<String> {
+    let value = value?;
+    if let Some(s) = value.as_str() {
+        return Some(s.to_string());
+    }
+    if value.is_number() || value.is_boolean() {
+        return Some(value.to_string());
+    }
+    None
 }
 
 fn parse_target_id(target: &str) -> Option<i64> {
@@ -2743,6 +2877,150 @@ mod tests {
             err.to_string(),
             "get_visual capture is not a valid PNG image"
         );
+    }
+
+    // --- resolve_template (ISSUE-304) ---
+    //
+    // Pure-function coverage that doesn't need a browser gate — `resolve_template` touches
+    // neither `PageSession` nor Chrome, so these run unconditionally in CI.
+
+    fn ctx_with(entries: &[(&str, Value)]) -> skills_engine::SkillExecutionContext {
+        let mut ctx = skills_engine::SkillExecutionContext::default();
+        for (key, value) in entries {
+            ctx.extracted.insert((*key).to_string(), value.clone());
+        }
+        ctx
+    }
+
+    #[test]
+    fn resolve_template_plain_text_passes_through_unchanged() {
+        let ctx = skills_engine::SkillExecutionContext::default();
+        assert_eq!(
+            resolve_template("not a template", &json!({}), &ctx, TemplateSlot::Data).unwrap(),
+            "not a template"
+        );
+    }
+
+    #[test]
+    fn resolve_template_legacy_bare_key_resolves_from_params() {
+        let ctx = skills_engine::SkillExecutionContext::default();
+        let params = json!({"email": "user@example.com"});
+        assert_eq!(
+            resolve_template("{{email}}", &params, &ctx, TemplateSlot::Data).unwrap(),
+            "user@example.com"
+        );
+    }
+
+    #[test]
+    fn resolve_template_legacy_bare_key_falls_back_to_literal_when_missing() {
+        // Backward compatibility (ISSUE-304): this exact permissive behavior predates the
+        // params./extracted. namespaces and must not change for any existing skill relying on it.
+        let ctx = skills_engine::SkillExecutionContext::default();
+        assert_eq!(
+            resolve_template("{{missing}}", &json!({}), &ctx, TemplateSlot::Data).unwrap(),
+            "{{missing}}"
+        );
+    }
+
+    #[test]
+    fn resolve_template_params_namespace_resolves() {
+        let ctx = skills_engine::SkillExecutionContext::default();
+        let params = json!({"email": "user@example.com"});
+        assert_eq!(
+            resolve_template("{{params.email}}", &params, &ctx, TemplateSlot::Data).unwrap(),
+            "user@example.com"
+        );
+    }
+
+    #[test]
+    fn resolve_template_params_namespace_fails_hard_when_missing() {
+        // Unlike the legacy bare form, `params.*` is brand-new syntax with no compatibility
+        // burden — a miss must fail the step, not silently type the literal template text into
+        // a form field.
+        let ctx = skills_engine::SkillExecutionContext::default();
+        let err = resolve_template("{{params.missing}}", &json!({}), &ctx, TemplateSlot::Data)
+            .unwrap_err();
+        assert!(err.contains("params.missing"), "{err}");
+    }
+
+    #[test]
+    fn resolve_template_extracted_namespace_resolves_in_data_slot() {
+        let ctx = ctx_with(&[("order_id", json!("ORD-1234"))]);
+        assert_eq!(
+            resolve_template(
+                "{{extracted.order_id}}",
+                &json!({}),
+                &ctx,
+                TemplateSlot::Data
+            )
+            .unwrap(),
+            "ORD-1234"
+        );
+    }
+
+    #[test]
+    fn resolve_template_extracted_namespace_resolves_numbers_and_bools() {
+        let ctx = ctx_with(&[("count", json!(3)), ("ok", json!(true))]);
+        assert_eq!(
+            resolve_template("{{extracted.count}}", &json!({}), &ctx, TemplateSlot::Data).unwrap(),
+            "3"
+        );
+        assert_eq!(
+            resolve_template("{{extracted.ok}}", &json!({}), &ctx, TemplateSlot::Data).unwrap(),
+            "true"
+        );
+    }
+
+    #[test]
+    fn resolve_template_extracted_namespace_fails_when_key_never_produced() {
+        let ctx = skills_engine::SkillExecutionContext::default();
+        let err = resolve_template(
+            "{{extracted.order_id}}",
+            &json!({}),
+            &ctx,
+            TemplateSlot::Data,
+        )
+        .unwrap_err();
+        assert!(err.contains("extracted.order_id"), "{err}");
+    }
+
+    #[test]
+    fn resolve_template_extracted_namespace_fails_on_null_selector_miss() {
+        // `PageSkillRuntime::extract` stores `Value::Null` for a selector that matched no
+        // element (ISSUE-304 review) — a template referencing that key must fail loudly, not
+        // silently substitute the text "null" or an empty string.
+        let ctx = ctx_with(&[("missing_el", Value::Null)]);
+        let err = resolve_template(
+            "{{extracted.missing_el}}",
+            &json!({}),
+            &ctx,
+            TemplateSlot::Data,
+        )
+        .unwrap_err();
+        assert!(err.contains("extracted.missing_el"), "{err}");
+    }
+
+    #[test]
+    fn resolve_template_extracted_namespace_fails_on_non_scalar_value() {
+        let ctx = ctx_with(&[("obj", json!({"nested": true}))]);
+        let err = resolve_template("{{extracted.obj}}", &json!({}), &ctx, TemplateSlot::Data)
+            .unwrap_err();
+        assert!(err.contains("extracted.obj"), "{err}");
+    }
+
+    #[test]
+    fn resolve_template_extracted_namespace_rejected_in_control_slot() {
+        // Page content must never choose an action's verb/target/selector (ISSUE-304 review) —
+        // rejected even though `order_id` is a perfectly valid scalar extracted value.
+        let ctx = ctx_with(&[("order_id", json!("ORD-1234"))]);
+        let err = resolve_template(
+            "{{extracted.order_id}}",
+            &json!({}),
+            &ctx,
+            TemplateSlot::Control,
+        )
+        .unwrap_err();
+        assert!(err.contains("extracted.order_id"), "{err}");
     }
 
     fn make_node(id: i64, children: Vec<SemanticNode>) -> SemanticNode {
@@ -4357,7 +4635,11 @@ mod tests {
             .expect("navigate");
 
         let params = json!({});
-        let mut runtime = PageSkillRuntime::new(&page, &params);
+        let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
+            mode: PromptInjectionMode::ReportOnly,
+            ..Default::default()
+        });
+        let mut runtime = PageSkillRuntime::new(&page, &params, &sanitizer);
         let mut ctx = skills_engine::SkillExecutionContext::default();
         let outcome = runtime.verify(&verify_step("stable_key:not-present", "hello"), &mut ctx);
         assert!(
@@ -4378,7 +4660,11 @@ mod tests {
             .expect("navigate");
 
         let params = json!({});
-        let mut runtime = PageSkillRuntime::new(&page, &params);
+        let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
+            mode: PromptInjectionMode::ReportOnly,
+            ..Default::default()
+        });
+        let mut runtime = PageSkillRuntime::new(&page, &params, &sanitizer);
         let mut ctx = skills_engine::SkillExecutionContext::default();
         let outcome = runtime.verify(&verify_step("body", "hello"), &mut ctx);
         assert!(
@@ -4408,7 +4694,11 @@ mod tests {
             .expect("button should have a stable_key");
 
         let params = json!({});
-        let mut runtime = PageSkillRuntime::new(&page, &params);
+        let sanitizer = PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
+            mode: PromptInjectionMode::ReportOnly,
+            ..Default::default()
+        });
+        let mut runtime = PageSkillRuntime::new(&page, &params, &sanitizer);
         let mut ctx = skills_engine::SkillExecutionContext::default();
         let target = format!("stable_key:{stable_key}");
         let outcome = runtime.verify(&verify_step(&target, "Click me"), &mut ctx);
