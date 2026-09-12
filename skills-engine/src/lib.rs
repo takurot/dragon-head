@@ -173,9 +173,7 @@ pub enum SkillRunStatus {
 /// on every `Ok` result (`Completed`, `Failed`, and `Handoff`), including a *partial* set of
 /// outputs when a skill fails or hands off partway through: values extracted before the
 /// failure/handoff point are still returned, by design (later steps and the MCP caller can see
-/// exactly what was captured before things went wrong). `Eq` is intentionally not derived here
-/// (unlike the rest of this type) because `serde_json::Value`, inside `outputs`, only implements
-/// `PartialEq`.
+/// exactly what was captured before things went wrong).
 ///
 /// `outputs` is **not** available when `SkillEngine::run` returns `Err(SkillEngineError)` —
 /// definition-time validation failure or the `OperationLimitExceeded` circuit breaker — since
@@ -183,7 +181,7 @@ pub enum SkillRunStatus {
 /// of those error paths indicate the skill's own definition is invalid (validation runs before
 /// any step executes) or it ran away (the 1024-operation safety valve), not a normal in-page
 /// failure a caller would want partial output from.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillRunReport {
     pub status: SkillRunStatus,
     pub trace: Vec<OperationTrace>,

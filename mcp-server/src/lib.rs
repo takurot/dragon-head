@@ -1843,10 +1843,20 @@ impl McpBackend for CoreRuntimeBackend {
             .map(|(key, value)| (key, core_runtime::privacy::global().redact_json(&value)))
             .collect::<serde_json::Map<String, Value>>()
             .into();
+        // `message` needs the same PII redaction (Codex review): a `verify` step whose
+        // `expected` came from `{{extracted.*}}` embeds both the extracted expected text and the
+        // actual page text it was compared against directly into this failure message (see
+        // `PageSession::verify_text`'s error) — unlike `outputs`, this text never passes through
+        // `injection_sanitizer` either, so redact it here rather than widen `extract`'s
+        // sanitization contract onto every step-failure message in this change.
+        let message = report
+            .message
+            .as_deref()
+            .map(|message| core_runtime::privacy::global().redact_text(message));
 
         Ok(json!({
             "status": skill_run_status_name(report.status),
-            "message": report.message,
+            "message": message,
             "outputs": outputs,
             "security_flags": security_flags,
             "trace": report

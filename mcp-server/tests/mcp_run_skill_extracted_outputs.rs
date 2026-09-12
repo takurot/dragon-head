@@ -365,3 +365,73 @@ fn selector_miss_stores_null_and_fails_a_later_reference() -> anyhow::Result<()>
 
     Ok(())
 }
+
+/// BUG REGRESSION (ISSUE-304, Codex review): a `verify` step whose `expected` came from
+/// `{{extracted.*}}` embeds both the extracted text and the actual page text directly into
+/// `PageSession::verify_text`'s error — unlike `outputs`, this failure `message` never passed
+/// through `injection_sanitizer`/PII redaction, so an extracted PII value could leak through
+/// `run_skill.message` on a verification mismatch even though `outputs` itself is redacted.
+#[test]
+fn extracted_pii_used_as_verify_expected_is_redacted_in_failure_message() -> anyhow::Result<()> {
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+    let html = r#"
+        <html>
+            <body>
+                <div id="confirmation">agent@example.com</div>
+                <textarea id="target-field">READY</textarea>
+            </body>
+        </html>
+    "#;
+    let mut server = server_for_html(html)?;
+
+    let state = server.call_tool(
+        "get_state",
+        json!({"format": "json", "force_refresh": true}),
+    )?;
+    let target_id = state["interactive_elements"][0]["id"]
+        .as_i64()
+        .expect("target id");
+    let target = format!("id:{target_id}");
+
+    // The target's actual text is "READY", but `verify.expected` is the extracted email — the
+    // mismatch is what forces `PageSession::verify_text` to embed both strings in its error.
+    server.backend_mut().register_skill_json(&json!({
+        "schema_version": 1,
+        "name": "extract_pii_verify_mismatch",
+        "steps": [
+            {
+                "type": "extract",
+                "id": "extract_contact",
+                "key": "contact",
+                "selector": "#confirmation"
+            },
+            {
+                "type": "locate",
+                "id": "loc",
+                "query": target
+            },
+            {
+                "type": "verify",
+                "id": "ver",
+                "target": target,
+                "expected": "{{extracted.contact}}"
+            }
+        ]
+    }))?;
+
+    let run_result = server.call_tool(
+        "run_skill",
+        json!({"skill_name": "extract_pii_verify_mismatch"}),
+    )?;
+    assert_eq!(run_result["status"], json!("failed"), "{run_result}");
+    let message = run_result["message"].as_str().unwrap_or_default();
+    assert!(
+        !message.contains("agent@example.com"),
+        "raw email must not reach run_skill's message unredacted: {run_result}"
+    );
+    assert!(message.contains("***"), "{run_result}");
+
+    Ok(())
+}
