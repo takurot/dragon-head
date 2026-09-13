@@ -29,11 +29,22 @@ fn tool_call(n: u32) -> AuditEvent {
 /// Child-process body: enables AUDIT_LOG_STDOUT purely through the lookup
 /// closure passed to `from_env_with` (never through the real environment) and
 /// logs one event. Only runs when re-exec'd with `CHILD_MARKER_ENV` set.
+///
+/// ISSUE-206: the audit mirror now goes through `tracing::info!`, not a bare `eprintln!` — a
+/// `tracing` event is a no-op unless some subscriber is installed to consume it. This installs
+/// the same stderr-only subscriber `dragon-head-mcp`'s own `main.rs` installs (ISSUE-206), so
+/// this probe exercises the real production wiring rather than asserting on behavior `tracing`
+/// alone doesn't provide.
 #[test]
 fn audit_log_stdout_probe() {
     if std::env::var(CHILD_MARKER_ENV).is_err() {
         return; // Not the child invocation — no-op under a normal test run.
     }
+
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
+        .init();
 
     let logger = AuditLogger::from_env_with(|key| (key == "AUDIT_LOG_STDOUT").then(|| "1".into()));
     logger.log(tool_call(1));
@@ -54,12 +65,12 @@ fn audit_log_stdout_env_routes_to_stderr_not_real_stdout() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
-        !stdout.contains("[AUDIT]"),
+        !stdout.contains("audit event") && !stdout.contains("tool_1"),
         "AUDIT_LOG_STDOUT must never write to real stdout (JSON-RPC framing \
          channel); captured stdout: {stdout:?}"
     );
     assert!(
-        stderr.contains("[AUDIT]") && stderr.contains("tool_1"),
+        stderr.contains("audit event") && stderr.contains("tool_1"),
         "AUDIT_LOG_STDOUT (via the injected lookup closure passed to \
          from_env_with) must still emit events, just on stderr; captured \
          stderr: {stderr:?}"

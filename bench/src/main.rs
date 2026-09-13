@@ -39,7 +39,23 @@ struct Args {
     step_selectors: Option<Vec<String>>,
 }
 
+/// Installs a stderr-only `tracing` subscriber (ISSUE-206 follow-up, Codex review): without one,
+/// every `tracing::info!`/`warn!`/`error!` event `core-runtime` emits (audit mirroring, plugin
+/// hook decisions, policy blocks, etc.) is a silent no-op for this binary, the same gap that
+/// motivated the fix in `dragon-head-mcp`. `dragon-head-bench` has no stdout-framing constraint
+/// (it prints its own report to stdout), but keeping diagnostics on stderr still separates them
+/// from that report output. Verbosity via `RUST_LOG`, defaulting to `info`.
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .init();
+}
+
 fn main() -> anyhow::Result<()> {
+    init_tracing();
     let args = Args::parse();
 
     if !chrome_available() {

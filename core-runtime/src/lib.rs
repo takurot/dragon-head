@@ -1,8 +1,15 @@
 // ISSUE-254: `core-runtime` is reachable from the stdio `dragon-head-mcp` binary, which uses
 // stdout exclusively for line-delimited JSON-RPC framing. Any `println!`/`print!` here would
-// write directly into that stream and corrupt it for the client. `eprintln!` (stderr) remains
-// fine — this crate uses it extensively for audit/diagnostic output — only stdout is the hazard.
+// write directly into that stream and corrupt it for the client.
 #![warn(clippy::print_stdout)]
+
+// ISSUE-206: this crate's diagnostics (audit mirroring, policy/plugin-hook decisions, capture
+// failures, etc.) are emitted exclusively through `tracing::info!`/`warn!`/`error!`, not
+// `eprintln!` — a `tracing` event is a silent no-op unless the consuming binary installs a
+// subscriber. `dragon-head-mcp`, `dragon-head-bench`, and `dragon-head-hitl-bridge` each install
+// one (stderr-only for the first two, which must keep stdout clean for other reasons); any other
+// consumer of this crate — a different binary, a test, or an external application — must install
+// its own subscriber (e.g. `tracing_subscriber::fmt::init()`) to observe these events at all.
 
 pub mod audit;
 pub mod audit_replay;

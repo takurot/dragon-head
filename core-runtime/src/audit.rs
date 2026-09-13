@@ -156,8 +156,9 @@ impl AuditLogger {
         let max_bytes: u64 = lookup("AUDIT_LOG_MAX_BYTES")
             .and_then(|s| {
                 s.parse().ok().or_else(|| {
-                    eprintln!(
-                        "[AUDIT][WARN] AUDIT_LOG_MAX_BYTES='{s}' is not a valid integer; using 10 MiB default."
+                    tracing::warn!(
+                        value = %s,
+                        "AUDIT_LOG_MAX_BYTES is not a valid integer; using 10 MiB default"
                     );
                     None
                 })
@@ -172,8 +173,10 @@ impl AuditLogger {
         let sink = match RollingFileSink::new(&dir, "audit", max_bytes) {
             Ok(s) => s.with_durability(durability),
             Err(e) => {
-                eprintln!(
-                    "[AUDIT][ERROR] Failed to create persistent sink at '{dir}': {e}. Falling back to in-memory only."
+                tracing::error!(
+                    dir = %dir,
+                    error = %e,
+                    "failed to create persistent audit sink; falling back to in-memory only"
                 );
                 return Self::with_sinks_and_stdout(Vec::new(), None, stdout_enabled);
             }
@@ -217,9 +220,9 @@ impl AuditLogger {
                         match build_state_update_event(previous.as_deref(), current.as_ref()) {
                             Ok(event) => event,
                             Err(error) => {
-                                eprintln!(
-                                    "[AUDIT][ERROR] Failed to build state update event: {}",
-                                    error
+                                tracing::error!(
+                                    error = %error,
+                                    "failed to build audit state update event"
                                 );
                                 None
                             }
@@ -243,15 +246,17 @@ impl AuditLogger {
                 // Fan out to persistent sinks (RollingFileSink, WebhookSink, …).
                 for sink in &sinks {
                     if let Err(e) = sink.write(&sanitized) {
-                        eprintln!("[AUDIT][ERROR] Sink '{}' failed: {}", sink.name(), e);
+                        tracing::error!(sink = sink.name(), error = %e, "audit sink write failed");
                     }
                 }
 
                 if stdout_enabled {
                     if let Ok(json) = serde_json::to_string(&sanitized) {
                         // Never write to real stdout: dragon-head-mcp uses stdout for
-                        // JSON-RPC framing, so this would corrupt the protocol stream.
-                        eprintln!("[AUDIT] {}", json);
+                        // JSON-RPC framing, so this would corrupt the protocol stream. `tracing`
+                        // is initialized stderr-only (ISSUE-206) so this stays safe even though
+                        // it's no longer a literal `eprintln!`.
+                        tracing::info!(event = %json, "audit event");
                     }
                 }
             }
@@ -279,7 +284,7 @@ impl AuditLogger {
         push_recent_event(&self.recent_events, sanitized.clone(), MAX_RECENT_EVENTS);
 
         if let Err(e) = self.sender.send(AuditMessage::Event(sanitized)) {
-            eprintln!("[AUDIT][ERROR] Failed to send audit event: {}", e);
+            tracing::error!(error = %e, "failed to send audit event to audit channel");
         }
     }
 
@@ -292,9 +297,9 @@ impl AuditLogger {
             .sender
             .send(AuditMessage::StateUpdate { previous, current })
         {
-            eprintln!(
-                "[AUDIT][ERROR] Failed to send state update event: {}",
-                error
+            tracing::error!(
+                error = %error,
+                "failed to send state update event to audit channel"
             );
         }
     }

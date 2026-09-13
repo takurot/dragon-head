@@ -215,8 +215,8 @@ impl AuditSink for RollingFileSink {
 /// returns immediately, so it never blocks the audit worker thread.  A
 /// dedicated background thread drains the queue and performs the actual HTTP
 /// POST with linear back-off retries.  If the queue is full (SIEM unreachable
-/// for an extended period) excess events are dropped with an `eprintln!`
-/// warning — SIEM delivery is best-effort.
+/// for an extended period) excess events are dropped with a `tracing::warn!`
+/// event — SIEM delivery is best-effort.
 ///
 /// Plaintext HTTP is accepted only for literal loopback IP addresses, which
 /// supports local development without exposing audit data on the network.
@@ -263,9 +263,10 @@ impl WebhookSink {
                         post_once(&client, &url_for_thread, &body)
                     })
                 {
-                    eprintln!(
-                        "[AUDIT][ERROR] WebhookSink failed after {} attempt(s): {}",
-                        attempts, last_error
+                    tracing::error!(
+                        attempts,
+                        error = %last_error,
+                        "WebhookSink delivery failed after all retry attempts"
                     );
                 }
             }
@@ -282,7 +283,7 @@ impl WebhookSink {
 impl AuditSink for WebhookSink {
     /// Enqueues the event for delivery by the background thread.
     ///
-    /// Always returns `Ok(())` — delivery errors are logged via `eprintln!`
+    /// Always returns `Ok(())` — delivery errors are logged via `tracing::error!`/`warn!`
     /// on the background thread.  If the internal queue is full, the event is
     /// dropped (SIEM is best-effort).
     fn write(&self, event: &AuditEvent) -> Result<(), AuditSinkError> {
@@ -290,10 +291,10 @@ impl AuditSink for WebhookSink {
         match self.sender.try_send(body) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                eprintln!("[AUDIT][WARN] WebhookSink queue full — event dropped");
+                tracing::warn!("WebhookSink queue full — event dropped");
             }
             Err(TrySendError::Disconnected(_)) => {
-                eprintln!("[AUDIT][ERROR] WebhookSink background thread exited unexpectedly");
+                tracing::error!("WebhookSink background thread exited unexpectedly");
             }
         }
         Ok(())

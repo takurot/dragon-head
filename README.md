@@ -275,6 +275,23 @@ Sanitization](#security-prompt-injection-sanitization). The server prints a
 `[SECURITY][WARN]` message to stderr on startup when the resolved mode is not
 `report_only`.
 
+### Logging
+
+`dragon-head-mcp` logs via [`tracing`](https://docs.rs/tracing), written **exclusively to
+stderr** — never stdout, which is reserved for JSON-RPC framing. Control verbosity with
+`RUST_LOG` using standard `tracing_subscriber::EnvFilter` syntax:
+
+```bash
+RUST_LOG=debug dragon-head-mcp                       # everything at debug and above
+RUST_LOG=core_runtime=trace,mcp_server=info dragon-head-mcp  # per-module levels
+```
+
+Defaults to `info` when `RUST_LOG` is unset or fails to parse, matching prior behavior (the
+startup/shutdown lines and `[SECURITY][WARN]`/`[PLUGIN][WARN]`-style messages you already see).
+Audit, policy, and plugin-hook events emitted by `core-runtime` (previously ad-hoc `eprintln!`
+calls tagged `[AUDIT]`/`[PLUGIN][POLICY]`/etc.) now flow through `tracing` with structured
+fields, so they respect the same filter and can be routed/parsed like any other `tracing` event.
+
 ## MCP Client Setup
 
 Dragon Head runs as a stdio MCP server. Your MCP client starts the command,

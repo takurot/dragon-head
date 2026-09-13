@@ -1792,21 +1792,29 @@ impl PageSession {
                 guard.pop_front();
             }
         } else {
-            eprintln!("[ACTION][ERROR] Failed to lock structured action log buffer");
+            tracing::error!("failed to lock structured action log buffer");
         }
 
-        eprintln!(
-            "[ACTION][{}] {}",
-            level.to_uppercase(),
-            serde_json::json!({
-                "code": entry.code,
-                "action": entry.action,
-                "target_id": entry.target_id,
-                "stable_key": entry.stable_key,
-                "message": entry.message,
-                "timestamp": entry.timestamp
-            })
-        );
+        // `level` is caller-chosen ("error"/"warning" today) and `tracing`'s macros need a
+        // compile-time level, so dispatch explicitly rather than trying to make the level
+        // dynamic — an unrecognized value logs at `info` rather than being dropped.
+        macro_rules! log_action_event {
+            ($lvl:ident) => {
+                tracing::$lvl!(
+                    code = entry.code,
+                    action = entry.action,
+                    target_id = entry.target_id,
+                    stable_key = entry.stable_key.as_deref(),
+                    message = entry.message,
+                    "action log"
+                )
+            };
+        }
+        match level {
+            "error" => log_action_event!(error),
+            "warning" => log_action_event!(warn),
+            _ => log_action_event!(info),
+        }
     }
 
     fn enforce_policy(
@@ -1936,7 +1944,11 @@ impl PageSession {
             PolicyHookOutcome::Block { plugin_id, reason } => {
                 let rule_id = format!("plugin:{plugin_id}");
                 let reason_str = reason.as_deref().unwrap_or("blocked by plugin");
-                eprintln!("[PLUGIN][POLICY] Action blocked by plugin {plugin_id}: {reason_str}");
+                tracing::warn!(
+                    plugin_id,
+                    reason = reason_str,
+                    "action blocked by policy plugin"
+                );
                 Err(ActionError::Blocked { rule_id }.into())
             }
         }
@@ -2192,7 +2204,7 @@ impl PageSession {
         let state_json = match serde_json::to_string(state.root()) {
             Ok(json) => json,
             Err(err) => {
-                eprintln!("[PLUGIN][WARN] Failed to serialize state for plugin hooks: {err}");
+                tracing::warn!(error = %err, "failed to serialize state for plugin hooks");
                 return Ok(state);
             }
         };
@@ -2216,8 +2228,9 @@ impl PageSession {
                 Ok(new_state)
             }
             Err(err) => {
-                eprintln!(
-                    "[PLUGIN][WARN] State plugin produced invalid JSON, reverting to original: {err}"
+                tracing::warn!(
+                    error = %err,
+                    "state plugin produced invalid JSON, reverting to original"
                 );
                 Ok(state)
             }
@@ -2388,7 +2401,7 @@ impl PageSession {
 
     fn trigger_som_capture_best_effort(&self, trigger: SomTrigger) {
         if let Err(err) = self.capture_som(trigger) {
-            eprintln!("[WARN] SoM capture trigger failed ({trigger:?}): {err:#}");
+            tracing::warn!(?trigger, error = %format!("{err:#}"), "SoM capture trigger failed");
         }
     }
 

@@ -371,10 +371,10 @@ pub fn register_global_redactor(redactor: PiiRedactor) -> Result<(), PiiRedactor
     match GLOBAL_REDACTOR.set(redactor) {
         Ok(()) => Ok(()),
         Err(r) => {
-            eprintln!(
-                "[PRIVACY][WARN] register_global_redactor called after global() was already \
-                 initialised — domain-specific PII patterns will NOT take effect. \
-                 Call register_global_redactor before constructing AsyncPipeline or AuditLogger."
+            tracing::warn!(
+                "register_global_redactor called after global() was already initialised — \
+                 domain-specific PII patterns will NOT take effect. Call \
+                 register_global_redactor before constructing AsyncPipeline or AuditLogger."
             );
             Err(r)
         }
