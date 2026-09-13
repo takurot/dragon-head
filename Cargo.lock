@@ -445,6 +445,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "async-trait",
+ "core-runtime",
  "crossbeam-channel",
  "ed25519-dalek",
  "flatbuffers",

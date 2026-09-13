@@ -132,6 +132,14 @@ The Slack/Teams reference bridge has a separate audit trail controlled by its
 That default is suitable for one running MCP process, but it is not a durable
 cross-process credential store.
 
+**`dragon-head-mcp` itself never calls `save_to_vault`/`load_from_vault` today** — no MCP tool
+or session-lifecycle hook is wired up to them (ISSUE-210). Those two methods are gated behind
+`core-runtime`'s `session-vault-api` Cargo feature (off by default) specifically because they had
+no production caller; see [`session-vault.md`](session-vault.md) for the rationale and the open
+design questions a real caller still needs to answer. The rules below apply to an integrator who
+builds their own caller against that feature — they are not describing shipped
+`dragon-head-mcp` behavior.
+
 Operational rules:
 
 1. Treat vault data as secret material. Do not write decrypted session payloads

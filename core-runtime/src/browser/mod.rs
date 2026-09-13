@@ -34,12 +34,15 @@ use crate::{
     policy::{
         ApprovalScope, OutcomeProjection, PolicyAction, PolicyContext, PolicyEngine, PolicyRule,
     },
-    session_vault::{CookieData, LocalSessionVault, SessionData, SessionVault, SoftwareKms},
+    session_vault::{LocalSessionVault, SessionVault, SoftwareKms},
     sre::{
         normalize_dom_with_viewport, normalize_dom_with_viewport_and_refinement, LoadProfile,
         SemanticNode, SemanticState, SubtreeRefinementConfig, ViewportDimensions,
     },
 };
+// ISSUE-210: only used by the `session-vault-api`-gated save_to_vault/load_from_vault below.
+#[cfg(feature = "session-vault-api")]
+use crate::session_vault::{CookieData, SessionData};
 
 const DEFAULT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_TRANSIENT_ERROR_BACKOFF: Duration = Duration::from_millis(250);
@@ -233,7 +236,10 @@ impl BrowserClient {
         rand::rng().fill_bytes(&mut key);
         let kms = Box::new(SoftwareKms::new(key, "default-key".to_string()));
         let vault = Arc::new(LocalSessionVault::new(kms));
-        Self::new_with_vault(vault)
+        // Every BrowserClient needs *some* vault to satisfy PageSession's required field
+        // (ISSUE-210) — go through the private helper, not the public, feature-gated
+        // `new_with_vault`, so this constructor keeps working with `session-vault-api` off.
+        Self::new_with_vault_and_path(vault, None)
     }
 
     /// Create a `BrowserClient` with plugin hook integration.
@@ -288,6 +294,16 @@ impl BrowserClient {
         Self::new_with_vault_and_size(vault, width, height)
     }
 
+    /// Create a `BrowserClient` backed by a caller-supplied `SessionVault` (e.g. a durable,
+    /// KMS-backed implementation instead of the in-memory default — see
+    /// `docs/operations.md`'s "Session Vault key management procedure").
+    ///
+    /// Gated behind the `session-vault-api` feature (ISSUE-210): without
+    /// `save_to_vault`/`load_from_vault` (also gated) actually reading/writing through it, a
+    /// custom vault injected here has no observable effect, so this constructor is exactly the
+    /// kind of unreachable-without-a-caller surface the issue asks to gate. See
+    /// `docs/session-vault.md`.
+    #[cfg(feature = "session-vault-api")]
     pub fn new_with_vault(vault: Arc<dyn SessionVault>) -> Result<Self> {
         Self::new_with_vault_and_path(vault, None)
     }
@@ -612,6 +628,9 @@ pub struct PageSession {
     public_navigation_lock: Arc<Mutex<()>>,
     pub(crate) audit_logger: Arc<AuditLogger>,
     semantic_capture_cache: Arc<Mutex<SemanticCaptureCache>>,
+    // ISSUE-210: every BrowserClient constructs a real vault regardless (it's required
+    // plumbing, not optional), but nothing reads it back unless `session-vault-api` is enabled.
+    #[cfg_attr(not(feature = "session-vault-api"), allow(dead_code))]
     vault: Arc<dyn SessionVault>,
     plugin_hooks: Arc<PluginHookConfig>,
     /// Self-Healing Context Recovery cache (PR-21 / ISSUE-11).
@@ -912,6 +931,13 @@ impl PageSession {
     }
 
     /// Saves the current session (cookies) to the vault with the given session ID.
+    ///
+    /// Gated behind the `session-vault-api` feature (ISSUE-210): `dragon-head-mcp` has no
+    /// caller for this today, so it's opt-in rather than shipping as always-compiled,
+    /// untested-in-production public surface. Enable the feature (`--features
+    /// session-vault-api`) to use it from a library consumer or a future MCP tool/lifecycle
+    /// hook — see `docs/session-vault.md`.
+    #[cfg(feature = "session-vault-api")]
     pub async fn save_to_vault(&self, session_id: &str) -> Result<()> {
         let cookies = self.inner.get_cookies().context("Failed to get cookies")?;
         let cookie_data: Vec<CookieData> = cookies
@@ -944,6 +970,10 @@ impl PageSession {
     }
 
     /// Loads a session from the vault and restores cookies to the browser.
+    ///
+    /// Gated behind the `session-vault-api` feature (ISSUE-210) — see
+    /// [`save_to_vault`](Self::save_to_vault)'s doc comment for why.
+    #[cfg(feature = "session-vault-api")]
     pub async fn load_from_vault(&self, session_id: &str) -> Result<()> {
         use headless_chrome::protocol::cdp::Network::{CookiePriority, CookieSameSite};
 
