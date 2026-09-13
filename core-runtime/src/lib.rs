@@ -1,3 +1,9 @@
+// ISSUE-254: `core-runtime` is reachable from the stdio `dragon-head-mcp` binary, which uses
+// stdout exclusively for line-delimited JSON-RPC framing. Any `println!`/`print!` here would
+// write directly into that stream and corrupt it for the client. `eprintln!` (stderr) remains
+// fine — this crate uses it extensively for audit/diagnostic output — only stdout is the hazard.
+#![warn(clippy::print_stdout)]
+
 pub mod audit;
 pub mod audit_replay;
 pub mod audit_sink;

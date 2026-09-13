@@ -223,6 +223,9 @@ pub fn run_doctor() -> DoctorReport {
     }
 }
 
+/// `--doctor` runs before (and instead of) the stdio JSON-RPC session, so writing to stdout here
+/// is the intended human-facing CLI output, not a protocol-corruption risk (ISSUE-254).
+#[allow(clippy::print_stdout)]
 pub fn print_report(report: &DoctorReport) {
     println!("dragon-head-mcp doctor");
     for check in &report.checks {
