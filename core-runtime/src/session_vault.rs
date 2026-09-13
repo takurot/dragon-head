@@ -1,3 +1,13 @@
+//! Encrypted session (cookie) persistence and the KMS abstraction backing it.
+//!
+//! `PageSession::save_to_vault`/`load_from_vault` (in `crate::browser`), the actual read/write
+//! entry points into this module, are gated behind the `session-vault-api` Cargo feature
+//! (ISSUE-210) — `dragon-head-mcp` has no caller for them yet. See `docs/session-vault.md` for
+//! the full rationale and what a real caller would still need to design. The types and traits in
+//! this module itself (`SessionVault`, `KmsAdapter`, `LocalSessionVault`, `SoftwareKms`, …) are
+//! not gated: every `BrowserClient` constructs a real vault internally regardless of whether
+//! anything reads from it.
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

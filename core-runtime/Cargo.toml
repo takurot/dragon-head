@@ -6,6 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 description = "Chrome/CDP session, Semantic Rendering Engine, policy engine, audit log, and privacy/security primitives for dragon-head"
 
+# ISSUE-210: `PageSession::save_to_vault`/`load_from_vault` have no production caller (the
+# `dragon-head-mcp` binary never calls them) — gate them behind an explicit opt-in feature so
+# this doesn't ship as unused, untested-in-production public surface. The underlying
+# `SessionVault`/`KmsAdapter` machinery stays ungated: every `BrowserClient` constructs a
+# `LocalSessionVault` internally regardless (it's a required field, not optional overhead), so
+# gating it would need a larger constructor refactor than this issue's scope warrants — see
+# docs/session-vault.md for the full rationale and how to enable this for a real caller.
+[features]
+session-vault-api = []
+
 [dependencies]
 tokio = { workspace = true }
 anyhow = { workspace = true }
@@ -42,6 +52,11 @@ name = "policy_cookbook"
 path = "../examples/policy_cookbook.rs"
 
 [dev-dependencies]
+# Self-dependency enabling `session-vault-api` for this crate's own tests only (ISSUE-210) — the
+# documented Cargo idiom for a test-only feature: `cargo test -p core-runtime` exercises
+# save_to_vault/load_from_vault, but the feature stays off for any real consumer (dragon-head-mcp
+# included) unless explicitly requested.
+core-runtime = { path = ".", features = ["session-vault-api"] }
 urlencoding = "2.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 jsonschema = { workspace = true }
