@@ -256,6 +256,7 @@ dependencies = [
  "core-runtime",
  "serde_json",
  "tempfile",
+ "tracing-subscriber",
 ]
 
 [[package]]
