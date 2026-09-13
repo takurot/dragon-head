@@ -1,3 +1,9 @@
+// ISSUE-254: `dragon-head-mcp` uses stdout exclusively for line-delimited JSON-RPC framing. Any
+// `println!`/`print!` outside an explicitly allowed human-facing CLI path (`--doctor`; see
+// `doctor::print_report`) would write directly into that stream and corrupt it for the client.
+// `eprintln!` (stderr) remains fine and is used extensively for startup/diagnostic logging.
+#![warn(clippy::print_stdout)]
+
 pub mod config;
 pub mod doctor;
 pub mod dto;

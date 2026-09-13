@@ -1,3 +1,9 @@
+// ISSUE-254: `dragon-head-mcp` uses stdout exclusively for line-delimited JSON-RPC framing once
+// the stdio loop below starts. `--help`/`--version` print to stdout before that loop is ever
+// reached (each arm returns immediately) — allowed explicitly at each site — everything else in
+// this file must use `eprintln!`.
+#![warn(clippy::print_stdout)]
+
 use anyhow::Context;
 use core_runtime::audit::AuditLogger;
 use core_runtime::{
@@ -56,10 +62,14 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     match cli::parse_args(&args) {
+        // `Help`/`Version` both return before the stdio JSON-RPC loop starts (ISSUE-254): safe,
+        // one-shot human-facing CLI output, not a protocol-corruption risk.
+        #[allow(clippy::print_stdout)]
         cli::CliAction::Help => {
             println!("{}", cli::USAGE);
             return Ok(());
         }
+        #[allow(clippy::print_stdout)]
         cli::CliAction::Version => {
             println!("dragon-head-mcp {}", env!("CARGO_PKG_VERSION"));
             return Ok(());

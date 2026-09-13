@@ -1,3 +1,8 @@
+// `--init` runs before (and instead of) the stdio JSON-RPC session, so writing to stdout
+// throughout this module is the intended human-facing CLI output — a copy-paste config snippet —
+// not a protocol-corruption risk (ISSUE-254).
+#![allow(clippy::print_stdout)]
+
 pub const CLIENTS: &[&str] = &["claude-desktop", "claude-code", "codex", "generic"];
 
 /// Returns a copy-paste JSON config snippet for the given client, or None for unknown clients.
