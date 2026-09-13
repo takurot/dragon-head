@@ -58,7 +58,25 @@ fn read_capped_line<R: BufRead>(reader: &mut R, max_bytes: usize) -> io::Result<
     Ok(StdinLine::TooLong)
 }
 
+/// Installs a `tracing` subscriber writing exclusively to **stderr** (ISSUE-206). This is
+/// mandatory, not a style choice: `dragon-head-mcp` uses stdout exclusively for line-delimited
+/// JSON-RPC framing (see ISSUE-254), so a subscriber that ever wrote to stdout — `fmt::init()`'s
+/// own default — would corrupt the protocol stream for the client the moment anything logged.
+///
+/// Verbosity is controlled by `RUST_LOG` (standard `tracing_subscriber::EnvFilter` syntax, e.g.
+/// `RUST_LOG=debug` or `RUST_LOG=core_runtime=trace,mcp_server=info`), defaulting to `info` when
+/// unset or invalid so operators get today's level of detail without configuration.
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .init();
+}
+
 fn main() -> anyhow::Result<()> {
+    init_tracing();
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     match cli::parse_args(&args) {

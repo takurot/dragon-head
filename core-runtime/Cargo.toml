@@ -52,3 +52,4 @@ test-bench-support = { path = "../test-bench-support" }
 ed25519-dalek = { workspace = true }
 wat = "1.240"
 hex = { workspace = true }
+tracing-subscriber = { workspace = true }
