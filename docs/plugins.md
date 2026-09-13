@@ -27,9 +27,20 @@ enabled = true                                 # optional, defaults to true
 ```
 
 - `manifest` deserializes to `plugin_host::PluginManifest` — the same shape used by
-  `plugin-host`'s own tests (see `plugin-host/tests/`): `plugin_id`, `version`, `entry_points`
-  (`"on_state"` / `"before_act"` / `"connector"`), `capabilities` (`"read_state"` /
-  `"network_out"` / `"vault_access"`), a `signature` block, and an `sbom` document.
+  `plugin-host`'s own tests (see `plugin-host/tests/`): `plugin_id`, `version`, `abi_version`
+  (the host↔plugin calling-convention version this plugin was built against — see below),
+  `entry_points` (`"on_state"` / `"before_act"` / `"connector"`), `capabilities`
+  (`"read_state"` / `"network_out"` / `"vault_access"`), a `signature` block, and an `sbom`
+  document.
+- `abi_version` must fall within `plugin_host::MIN_SUPPORTED_ABI_VERSION..=
+  plugin_host::MAX_SUPPORTED_ABI_VERSION` (currently `1..=1`) or the plugin is rejected at load
+  time with `PluginError::UnsupportedAbiVersion`, which names the supported range — this is
+  deliberately a hard load-time failure, not a warning, so a plugin built against an
+  incompatible host↔plugin calling convention never fails opaquely at call time instead
+  (ISSUE-208). A manifest with no `abi_version` at all defaults to `0`, which is always outside
+  the supported range, so an unversioned/legacy manifest is rejected the same way. `abi_version`
+  is part of the signed payload (`signature_payload`), so tampering with it after signing
+  invalidates the signature like any other manifest field.
 - `wasm` is the plugin's compiled Wasm module bytes, referenced separately from the manifest so
   the manifest stays small and human-readable.
 - Both paths may be absolute or relative; relative paths resolve against `config.toml`'s own

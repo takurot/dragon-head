@@ -56,8 +56,16 @@ pub enum MarketplaceError {
 }
 
 const DOMAIN_PACK_SIGNATURE_DOMAIN: &str = "dragon-head.marketplace.domain-pack-signature";
-const DOMAIN_PACK_SIGNATURE_VERSION: u32 = 1;
-const DOMAIN_PACK_SIGNATURE_PREFIX: &str = "v1:";
+// v2 (ISSUE-208): added `abi_version` to the signed plugin manifest so a signed pack's author
+// signature covers the host↔plugin ABI compatibility field, not just the plugin's own version/
+// capabilities/sbom. v1's field order and encoding were a frozen wire protocol (see
+// `domain_pack_signature_payload`'s doc comment) — this is a genuine breaking change to that
+// protocol, not an in-place edit of it, hence the version bump rather than silently changing
+// what "v1" produces. There is no dual-version verification fallback: a "v1:"-prefixed signature
+// now fails with `UnsupportedSignatureVersion("v1")`, the same explicit rejection an unknown
+// future version already gets.
+const DOMAIN_PACK_SIGNATURE_VERSION: u32 = 2;
+const DOMAIN_PACK_SIGNATURE_PREFIX: &str = "v2:";
 
 #[derive(Serialize)]
 struct SignedMarketplaceMetadata<'a> {
@@ -79,6 +87,7 @@ struct SignedPlugin<'a> {
 struct SignedPluginManifestV1<'a> {
     plugin_id: &'a str,
     version: &'a str,
+    abi_version: u32,
     entry_points: Vec<&'static str>,
     capabilities: Vec<&'static str>,
     signature: Option<SignedPluginSignatureV1<'a>>,
@@ -250,10 +259,11 @@ fn signed_skill(skill: &SkillDefinition) -> SignedSkillDefinitionV1<'_> {
 
 /// Returns the exact versioned bytes that authors must sign for a domain pack.
 ///
-/// The fixed struct field order and serde JSON encoding are part of the v1
-/// signature protocol. Collection order is significant. The marketplace
-/// signature itself is intentionally excluded to avoid a recursive payload;
-/// every other execution- or compatibility-relevant field is included.
+/// The fixed struct field order and serde JSON encoding are part of the frozen
+/// `DOMAIN_PACK_SIGNATURE_VERSION` wire protocol (`v2` — see that constant's own doc comment for
+/// why `v1` isn't emitted anymore). Collection order is significant. The marketplace signature
+/// itself is intentionally excluded to avoid a recursive payload; every other execution- or
+/// compatibility-relevant field is included, including the plugin manifest's `abi_version`.
 pub fn domain_pack_signature_payload(pack: &DomainPack) -> Result<Vec<u8>, MarketplaceError> {
     let payload = DomainPackSignaturePayload {
         domain: DOMAIN_PACK_SIGNATURE_DOMAIN,
@@ -271,6 +281,7 @@ pub fn domain_pack_signature_payload(pack: &DomainPack) -> Result<Vec<u8>, Marke
                 manifest: SignedPluginManifestV1 {
                     plugin_id: &manifest.plugin_id,
                     version: &manifest.version,
+                    abi_version: manifest.abi_version,
                     entry_points: manifest
                         .entry_points
                         .iter()

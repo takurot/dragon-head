@@ -24,6 +24,7 @@ fn sample_pack() -> DomainPack {
             manifest: PluginManifest {
                 plugin_id: "com.example.plugin".to_string(),
                 version: "1.0.0".to_string(),
+                abi_version: plugin_host::CURRENT_ABI_VERSION,
                 entry_points: vec![ExtensionPoint::OnState],
                 capabilities: vec![Capability::ReadState],
                 signature: None,
@@ -95,10 +96,19 @@ fn legacy_and_unknown_signature_versions_are_rejected_without_fallback() {
         Err(marketplace::MarketplaceError::UnsupportedSignatureVersion(version)) if version == "legacy"
     ));
 
-    pack.metadata.signature = Some(format!("v2:{signature_hex}"));
+    // v1 is no longer emitted or accepted (ISSUE-208 bumped the signature protocol to v2 to add
+    // `abi_version`) — a "v1:"-prefixed signature must be rejected exactly like an unknown
+    // future version, not silently accepted as if it were still current.
+    pack.metadata.signature = Some(format!("v1:{signature_hex}"));
     assert!(matches!(
         verify_domain_pack(&pack, &pubkey_hex),
-        Err(marketplace::MarketplaceError::UnsupportedSignatureVersion(version)) if version == "v2"
+        Err(marketplace::MarketplaceError::UnsupportedSignatureVersion(version)) if version == "v1"
+    ));
+
+    pack.metadata.signature = Some(format!("v3:{signature_hex}"));
+    assert!(matches!(
+        verify_domain_pack(&pack, &pubkey_hex),
+        Err(marketplace::MarketplaceError::UnsupportedSignatureVersion(version)) if version == "v3"
     ));
 }
 
@@ -114,6 +124,11 @@ fn plugin_wasm_and_manifest_tampering_is_rejected() {
             .manifest
             .capabilities
             .push(Capability::NetworkOut);
+    });
+    // ISSUE-208 (Codex review): abi_version is compatibility-critical — a pack modified to claim
+    // a different host↔plugin ABI version must not retain its author's signature.
+    assert_tamper_rejected(sample_pack(), |pack| {
+        pack.plugin.as_mut().unwrap().manifest.abi_version += 1;
     });
     assert_tamper_rejected(sample_pack(), |pack| {
         pack.plugin.as_mut().unwrap().manifest.sbom.format = "tampered".to_string();
@@ -210,9 +225,11 @@ fn signature_payload_is_deterministic_versioned_and_excludes_signature() {
     signed.metadata.signature = Some("ignored".to_string());
     assert_eq!(first, domain_pack_signature_payload(&signed).unwrap());
 
+    // Golden hash of the canonical v2 payload bytes (ISSUE-208 bumped v1 -> v2 to add
+    // `abi_version`) — update this alongside any deliberate future change to the signed shape.
     assert_eq!(
         hex::encode(Sha256::digest(&first)),
-        "58016ba37767e0c3075934b47815b8f88f8d5cb25f5e974972369ad3dc6e9064"
+        "19810738bb5e77cd7df03a6863df9e39af737117adb2d35a5b85cbf749a587bb"
     );
 }
 

@@ -217,6 +217,7 @@ fn build_and_sign_package(
     let mut manifest = PluginManifest {
         plugin_id: "runtime.test.plugin".to_string(),
         version: "0.1.0".to_string(),
+        abi_version: plugin_host::CURRENT_ABI_VERSION,
         entry_points,
         capabilities,
         signature: None,
@@ -370,6 +371,7 @@ fn test_unsigned_plugin_rejected_at_load_time() {
     let manifest = PluginManifest {
         plugin_id: "unsigned.plugin".to_string(),
         version: "1.0.0".to_string(),
+        abi_version: plugin_host::CURRENT_ABI_VERSION,
         entry_points: vec![ExtensionPoint::OnState],
         capabilities: vec![Capability::ReadState],
         signature: None,

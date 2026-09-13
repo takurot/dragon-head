@@ -204,6 +204,7 @@ mod tests {
         let mut manifest = PluginManifest {
             plugin_id: plugin_id.to_string(),
             version: "0.1.0".to_string(),
+            abi_version: plugin_host::CURRENT_ABI_VERSION,
             entry_points,
             capabilities,
             signature: None,
@@ -385,6 +386,7 @@ mod tests {
         let manifest = PluginManifest {
             plugin_id: "unsigned.plugin".to_string(),
             version: "0.1.0".to_string(),
+            abi_version: plugin_host::CURRENT_ABI_VERSION,
             entry_points: vec![ExtensionPoint::OnState],
             capabilities: vec![plugin_host::Capability::ReadState],
             signature: None,
