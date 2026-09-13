@@ -133,6 +133,13 @@ jobs:
         cat "$DRAGON_HEAD_EVAL_DASHBOARD_PATH" >> "$GITHUB_STEP_SUMMARY"
     - name: Upload evaluation bench artifacts
       if: always()
+      # ISSUE-329: the actual test suite (steps above) is the correctness gate and
+      # always runs to completion; this step only publishes a convenience artifact.
+      # actions/upload-artifact@v4's finalize call has been observed to intermittently
+      # fail with a transient "403 Forbidden: Error from intermediary" from GitHub's
+      # storage backend even though the upload itself succeeds. Don't let that flake
+      # fail the whole nightly job when every real test passed.
+      continue-on-error: true
       uses: actions/upload-artifact@v4
       with:
         name: evaluation-bench-full
