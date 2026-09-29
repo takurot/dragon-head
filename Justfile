@@ -31,6 +31,8 @@ evaluation-bench-smoke:
     DRAGON_HEAD_EVAL_MODE=smoke DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p skills-engine --test comprehensive_evaluation
     DRAGON_HEAD_EVAL_MODE=smoke DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p plugin-host --test comprehensive_evaluation
     DRAGON_HEAD_EVAL_MODE=smoke DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p marketplace --test comprehensive_evaluation
+    DRAGON_HEAD_EVAL_MODE=smoke DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p hitl-bridge --test comprehensive_evaluation
+    DRAGON_HEAD_EVAL_MODE=smoke DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p bench --test comprehensive_evaluation
     python3 scripts/evaluation_dashboard.py --input-dir target/evaluation-bench --output target/evaluation-dashboard.md
 
 evaluation-bench-full:
@@ -41,4 +43,6 @@ evaluation-bench-full:
     DRAGON_HEAD_EVAL_MODE=full DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p skills-engine --test comprehensive_evaluation
     DRAGON_HEAD_EVAL_MODE=full DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p plugin-host --test comprehensive_evaluation
     DRAGON_HEAD_EVAL_MODE=full DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p marketplace --test comprehensive_evaluation
+    DRAGON_HEAD_EVAL_MODE=full DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p hitl-bridge --test comprehensive_evaluation
+    DRAGON_HEAD_EVAL_MODE=full DRAGON_HEAD_EVAL_OUTPUT_DIR="$PWD/target/evaluation-bench" cargo test -p bench --test comprehensive_evaluation
     python3 scripts/evaluation_dashboard.py --input-dir target/evaluation-bench --output target/evaluation-dashboard.md
