@@ -610,6 +610,10 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > obfuscation は安全にフィールド全体を `[REDACTED_SECURITY]` へ置換する。
 > stable_key は sanitizer 適用前生成の値を保持する回帰テストで固定した。
 
+> **Follow-up (ISSUE-190, done)**: `hitl-bridge` の同時承認ロックと
+> prompt/resolution、`bench` のROI集計とJSON reportを共通評価に登録した。
+> Justfileのsmoke/fullとPR/nightly CIから7 crateのJSONとdashboardを生成する。
+
 > **Follow-up (ISSUE-207, done)**: `skills-engine` の対応スキーマ版を
 > `SUPPORTED_SKILL_SCHEMA_VERSION` で一元管理し、JSON Schema、JSON parse、
 > typed definition の実行前検証で未対応版を拒否する。最初の未来版と version 0 の

@@ -539,20 +539,8 @@ jobs:
         save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: Verify Chrome is available
       run: google-chrome --version
-    - name: Run core-runtime evaluation bench
-      run: cargo test -p core-runtime --test comprehensive_evaluation -- --nocapture
-    - name: Run mcp-server evaluation bench
-      run: cargo test -p mcp-server --test comprehensive_evaluation -- --nocapture
-    - name: Run skills-engine evaluation bench
-      run: cargo test -p skills-engine --test comprehensive_evaluation --verbose
-    - name: Run plugin-host evaluation bench
-      run: cargo test -p plugin-host --test comprehensive_evaluation --verbose
-    - name: Run marketplace evaluation bench
-      run: cargo test -p marketplace --test comprehensive_evaluation --verbose
-    - name: Run hitl-bridge evaluation bench
-      run: cargo test -p hitl-bridge --test comprehensive_evaluation --verbose
-    - name: Run bench evaluation bench
-      run: cargo test -p bench --test comprehensive_evaluation --verbose
+    - name: Run all seven crate evaluation suites
+      run: cargo test --workspace --test comprehensive_evaluation --verbose -- --nocapture
     - name: Generate evaluation dashboard
       run: |
         python3 scripts/evaluation_dashboard.py --input-dir "$DRAGON_HEAD_EVAL_OUTPUT_DIR" --output "$DRAGON_HEAD_EVAL_DASHBOARD_PATH"

@@ -611,7 +611,8 @@ fn binary_doctor_and_startup_reject_fifo_without_blocking() -> anyhow::Result<()
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // Allow process startup contention; a blocking FIFO open still times out.
+        let deadline = Instant::now() + Duration::from_secs(10);
         let status = loop {
             if let Some(status) = child.try_wait()? {
                 break status;
@@ -619,7 +620,7 @@ fn binary_doctor_and_startup_reject_fifo_without_blocking() -> anyhow::Result<()
             if Instant::now() >= deadline {
                 child.kill()?;
                 child.wait()?;
-                anyhow::bail!("configured FIFO blocked startup/doctor");
+                anyhow::bail!("configured FIFO blocked startup/doctor {args:?} for 10s");
             }
             thread::sleep(Duration::from_millis(10));
         };

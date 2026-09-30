@@ -7,7 +7,7 @@
 //! `PageSessionGateway` end-to-end test stays `#[ignore]`d there and is not
 //! duplicated here (see docs/testing.md).
 
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::thread;
 
 use core_runtime::{ApprovalScope, OutcomeProjection, RiskLevel};
@@ -87,11 +87,16 @@ fn scenario_concurrent_approval_lock_race() -> anyhow::Result<Value> {
         ("carol", Decision::Approved),
     ];
 
+    let start = Arc::new(Barrier::new(decisions.len()));
     let handles: Vec<_> = decisions
         .into_iter()
         .map(|(name, decision)| {
             let bridge = Arc::clone(&bridge);
-            thread::spawn(move || bridge.resolve(id, decision, name))
+            let start = Arc::clone(&start);
+            thread::spawn(move || {
+                start.wait();
+                bridge.resolve(id, decision, name)
+            })
         })
         .collect();
 
@@ -156,7 +161,10 @@ fn scenario_approval_prompt_and_resolution_flow() -> anyhow::Result<Value> {
             ..
         }
     ) {
-        anyhow::bail!("second notifier call must be the resolution, got {:?}", calls[1]);
+        anyhow::bail!(
+            "second notifier call must be the resolution, got {:?}",
+            calls[1]
+        );
     }
 
     Ok(json!({

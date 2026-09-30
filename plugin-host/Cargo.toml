@@ -10,7 +10,7 @@ description = "Wasm plugin manifest validation, signature verification, and exec
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-wasmtime = "=36.0.14"
+wasmtime = "=36.0.16"
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }

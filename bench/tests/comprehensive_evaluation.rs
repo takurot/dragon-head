@@ -12,7 +12,11 @@ use test_bench_support::{EvaluationBench, EvaluationMode};
 
 #[test]
 fn test_bench_comprehensive_evaluation_suite() -> anyhow::Result<()> {
-    let mut bench = EvaluationBench::new("bench", "comprehensive_evaluation", EvaluationMode::from_env());
+    let mut bench = EvaluationBench::new(
+        "bench",
+        "comprehensive_evaluation",
+        EvaluationMode::from_env(),
+    );
 
     bench.run_scenario(
         "roi_cost_savings_accounting",

@@ -9,13 +9,6 @@
 [advisories]
 version = 2
 ignore = [
-    # ── rustls-webpki (transitive via headless_chrome) ───────────────────
-    # No fix available upstream; track https://github.com/rust-headless-chrome
-    { id = "RUSTSEC-2026-0104", reason = "transitive via headless_chrome; no upstream fix" },
-    { id = "RUSTSEC-2026-0098", reason = "transitive via headless_chrome; no upstream fix" },
-    { id = "RUSTSEC-2026-0099", reason = "transitive via headless_chrome; no upstream fix" },
-    { id = "RUSTSEC-2026-0049", reason = "transitive via headless_chrome; no upstream fix" },
-
     # ── unmaintained transitive deps ─────────────────────────────────────
     { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained; transitive via wasmtime, no drop-in" },
 ]
