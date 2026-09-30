@@ -1,7 +1,7 @@
 # Neural-Browser Runtime 実装計画（進捗管理版）
 
 - 対象仕様: [SPEC.md](./SPEC.md) v2.1（2026-02-10）
-- 最終更新日: 2026-07-06
+- 最終更新日: 2026-10-01
 - プラン状態: In Progress
 
 ## 1. 進捗管理ルール
@@ -47,6 +47,10 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 | 10 | Cathedral Edition (Commercialization) | PR-20〜29 | 10/10 | DONE |
 
 ## 3. PRバックログ（進捗チェック付き）
+
+> **Follow-up (ISSUE-332, done)**: README と SPEC の導入を Policy / HITL / Audit
+> 中心の governed runtime として揃えた。既存の比較表・トークン数の注意書きは
+> 保持し、sanitizer / `security_flags` が完全な防御ではないことを明記した。
 
 ### PR-20: Speculative State Generation Pipeline
 - Status: `DONE`
