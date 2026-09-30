@@ -153,6 +153,20 @@ pub struct SlackNotifier {
     client: reqwest::blocking::Client,
     bot_token: String,
     channel: String,
+    api_base_url: String,
+}
+
+/// Validates the explicit offline-demo transport. Only literal loopback HTTP
+/// with an explicit nonzero port and the exact `/api` path is permitted.
+pub fn validate_local_slack_api_base_url(base_url: &str) -> Result<()> {
+    let address = base_url
+        .strip_prefix("http://")
+        .and_then(|rest| rest.strip_suffix("/api"))
+        .and_then(|authority| authority.parse::<std::net::SocketAddr>().ok());
+    if !address.is_some_and(|address| address.ip().is_loopback() && address.port() != 0) {
+        anyhow::bail!("invalid local Slack API endpoint: expected literal loopback HTTP, explicit nonzero port, and /api path");
+    }
+    Ok(())
 }
 
 impl SlackNotifier {
@@ -161,17 +175,47 @@ impl SlackNotifier {
             client: reqwest::blocking::Client::new(),
             bot_token: bot_token.into(),
             channel: channel.into(),
+            api_base_url: "https://slack.com/api".to_string(),
         }
+    }
+
+    /// Uses a local Slack API double for an offline demo, with no proxies or
+    /// redirects that could forward the configured bearer token elsewhere.
+    pub fn with_local_api_base_url(
+        bot_token: impl Into<String>,
+        channel: impl Into<String>,
+        base_url: &str,
+    ) -> Result<Self> {
+        validate_local_slack_api_base_url(base_url)?;
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .context("failed to configure local Slack API client")?;
+        Ok(Self {
+            client,
+            bot_token: bot_token.into(),
+            channel: channel.into(),
+            api_base_url: base_url.to_string(),
+        })
     }
 
     fn post(&self, method: &str, body: &Value) -> Result<Value> {
         let response = self
             .client
-            .post(format!("https://slack.com/api/{method}"))
+            .post(format!("{}/{method}", self.api_base_url))
             .bearer_auth(&self.bot_token)
             .json(body)
             .send()
             .with_context(|| format!("failed to call Slack API method '{method}'"))?;
+
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "Slack API method '{method}' returned HTTP {}",
+                response.status()
+            );
+        }
 
         let payload: Value = response
             .json()
@@ -200,7 +244,8 @@ impl ChatNotifier for SlackNotifier {
         let ts = payload
             .get("ts")
             .and_then(Value::as_str)
-            .context("Slack chat.postMessage response missing 'ts'")?;
+            .filter(|ts| !ts.trim().is_empty())
+            .context("Slack chat.postMessage response missing nonempty 'ts'")?;
 
         Ok(format!("{}:{ts}", self.channel))
     }

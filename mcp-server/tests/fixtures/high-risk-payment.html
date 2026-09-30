@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Governed expense demo</title>
+<body>
+  <h1>Expense payment</h1>
+  <form id="payment" onsubmit="return false">
+    <label>Email <input id="email" aria-label="Email" type="email"></label>
+    <label>Password <input id="password" aria-label="Password" type="password"></label>
+    <label>Card <input id="card" aria-label="Card" autocomplete="cc-number"></label>
+    <label>Amount <input id="amount" aria-label="Amount" inputmode="decimal"></label>
+    <section>
+      <p id="total">Total: $0.00</p>
+      <button id="submit" type="button" aria-label="Submit expense">Submit expense</button>
+    </section>
+    <button id="receipt" type="button" aria-label="Payment receipt">Submitted 0</button>
+  </form>
+  <script>
+    window.demoLedger = [];
+    let submissions = 0;
+    document.querySelectorAll('input').forEach(input => {
+      input.addEventListener('input', () => {
+        window.demoLedger.push({event: 'input', field: input.id});
+        if (input.id === 'amount') {
+          document.getElementById('total').textContent =
+            'Total: $' + Number(input.value || 0).toFixed(2);
+        }
+      });
+    });
+    document.getElementById('submit').addEventListener('click', () => {
+      submissions += 1;
+      window.demoLedger.push({event: 'submit', count: submissions});
+      document.getElementById('receipt').textContent = 'Submitted ' + submissions;
+      const body = {};
+      ['email', 'password', 'card', 'amount'].forEach(field => {
+        body[field] = document.getElementById(field).value;
+      });
+      fetch('/submitted', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+    });
+  </script>
+</body>
+</html>

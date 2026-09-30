@@ -64,6 +64,13 @@ The CI pipeline is defined in `.github/workflows/`.
   - Markdown dashboard: `target/evaluation-dashboard.md`
 - **Registration Rule**: New major features are not considered complete until a corresponding scenario is added to the evaluation bench or an explicit exemption is documented in `docs/`.
 
+**ISSUE-330 exemption:** The composed high-risk expense demo is deliberately
+outside the dashboard suites: it starts the shipped MCP binary, Chrome, a local
+Slack API double and a signed HTTP callback in one process-level E2E. It is
+`#[ignore]`-gated locally and explicitly executed by `just demo-high-risk-action`
+and CI's `high-risk-action-demo` job. Existing policy/HITL and audit scenarios
+remain in the dashboard; this dedicated test proves their deployed composition.
+
 ## 3. Running Tests Locally
 
 ### 3.1 Dev Container (Recommended)

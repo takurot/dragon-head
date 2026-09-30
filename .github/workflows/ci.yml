@@ -253,6 +253,19 @@ jobs:
         cargo test -p core-runtime --test audit_logging --verbose
         cargo test -p core-runtime --test spa_stable_key_stress --verbose
 
+  high-risk-action-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
+    - name: Verify Chrome is available
+      run: google-chrome --version
+    - name: Run shipped-binary governed expense demo
+      env:
+        CHROME_INSTALLED: "true"
+      run: cargo test --workspace --test mcp_high_risk_action_demo -- --ignored --nocapture
+
   cdp-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15

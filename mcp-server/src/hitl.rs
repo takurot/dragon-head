@@ -43,10 +43,23 @@ use crate::config::HitlBridgeConfig;
 /// restarting `dragon-head-mcp` itself to pick up.
 pub fn spawn_embedded_bridge(page: Arc<PageSession>, config: &HitlBridgeConfig) {
     let gateway: Arc<dyn ApprovalGateway> = Arc::new(PageSessionGateway::new(page));
-    let notifier: Arc<dyn ChatNotifier> = Arc::new(SlackNotifier::new(
-        config.slack_bot_token.clone(),
-        config.slack_channel.clone(),
-    ));
+    let notifier: Arc<dyn ChatNotifier> = match &config.local_slack_api_base_url {
+        Some(base_url) => match SlackNotifier::with_local_api_base_url(
+            config.slack_bot_token.clone(),
+            config.slack_channel.clone(),
+            base_url,
+        ) {
+            Ok(notifier) => Arc::new(notifier),
+            Err(err) => {
+                tracing::error!(error = %err, "failed to configure local HITL notifier");
+                return;
+            }
+        },
+        None => Arc::new(SlackNotifier::new(
+            config.slack_bot_token.clone(),
+            config.slack_channel.clone(),
+        )),
+    };
     let audit = BridgeAuditTrail::new(config.audit_log.clone());
     let bridge = Arc::new(Bridge::new(gateway, notifier, audit));
 

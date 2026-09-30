@@ -41,6 +41,11 @@ The user-facing entry point is the stdio MCP server binary:
 dragon-head-mcp
 ```
 
+Try the [high-risk action demo](docs/demo-high-risk-action.md) to see a $900
+expense stopped for approval, resolved through the embedded HITL bridge, and
+recorded in PII-redacted audit trails. It runs the real MCP binary and Chrome;
+Slack's hosted API and the reviewer are replaced by local test doubles.
+
 ## Install
 
 ### Option 1: npm (recommended)
