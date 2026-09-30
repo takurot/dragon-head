@@ -3,12 +3,14 @@
 [![CI](https://github.com/takurot/dragon-head/actions/workflows/ci.yml/badge.svg)](https://github.com/takurot/dragon-head/actions/workflows/ci.yml)
 [![Nightly E2E](https://github.com/takurot/dragon-head/actions/workflows/e2e.yml/badge.svg)](https://github.com/takurot/dragon-head/actions/workflows/e2e.yml)
 
-**Last updated:** 2026-09-13
+**Last updated:** 2026-10-01
 
-Dragon Head is an AI-native headless browser runtime for LLM and VLM agents.
-It exposes a browser session as a structured **Semantic State** and provides an
-MCP server that agents use to inspect pages, act on elements, verify outcomes,
-request human approval, and run declarative skills.
+Dragon Head is a policy-enforced, auditable execution runtime for AI browser agents.
+Its Policy Engine can block risky actions or require human approval, while
+structured, PII-redacted audit logs make action attempts and policy decisions
+traceable. The MCP server exposes a browser session as **Semantic State** so
+agents can inspect pages, act on elements, verify outcomes, and run declarative
+skills; `stable_key` and delta delivery support multi-step workflows.
 
 ### Why Dragon Head over plain Playwright?
 
@@ -28,6 +30,10 @@ request human approval, and run declarative skills.
 > call onward** via delta delivery, and in **multi-step workflows** where
 > selector stability eliminates retries.
 > Full benchmark: [`docs/bench-playwright-comparison.md`](docs/bench-playwright-comparison.md).
+
+Prompt-injection sanitization and `security_flags` are defense-in-depth signals,
+not a complete defense. An absence of flags does not establish that page content
+is safe; policy enforcement and human review remain separate safeguards.
 
 The user-facing entry point is the stdio MCP server binary:
 

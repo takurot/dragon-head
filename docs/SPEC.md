@@ -1,21 +1,21 @@
-# AI-Native Headless Browser Runtime 統合仕様書
+# Governed Browser Runtime 統合仕様書
 
 - **Product Name**: Neural-Browser Runtime
 - **Version**: 2.2 (Cathedral Edition)
-- **Date**: 2026-05-03
+- **Date**: 2026-10-01
 - **Status**: Approved (Roadmap Expanded)
 
 ## 1. エグゼクティブサマリー
 
-Neural-Browser Runtime は、LLM（大規模言語モデル）および VLM（視覚モデル）がWebを操作するために設計された、次世代のブラウザ実行環境（Runtime）である。従来のヘッドレスブラウザが「人間用DOMの操作自動化」に留まっていたのに対し、本製品はWebページを**「AIが解釈可能な意味的状態（Semantic State）」**へリアルタイムに変換するミドルウェアとして機能する。
+Neural-Browser Runtime は、AIブラウザエージェントの操作を Policy Engine で制御し、人間の承認（HITL）と PII を伏せた監査ログで追跡可能にするブラウザ実行環境である。LLM（大規模言語モデル）および VLM（視覚モデル）には、MCP を通じて **Semantic State**、stable_key、差分更新を提供し、複数ステップの操作を支援する。プロンプトインジェクションの sanitizer と `security_flags` は多層防御の一部であり、完全な防御や、フラグがないコンテンツの安全性を保証しない。
 
 ### 1.1 コア・バリュープロポジション
 
-- **Token Efficiency**: 独自の Semantic Rendering Engine (SRE) と差分更新により、LLMへの入力トークンを平均90%削減。
-- **Reliability**: 視覚情報（SoM）と構造情報の同期、および stable_key による自己修復機能で、AIの誤操作（ハルシネーション）を防止。
-- **Compliance**: Policy Engine と監査ログを標準搭載し、企業のセキュリティ要件を満たす「正規の代理実行環境」を提供する。
-- **Speed**: 3段階のパイプライン処理、不要リソースのブロック、および**未来予測パイプライン**により、AIの「思考開始までの待ち時間（Near-Zero TTFT）」を実現。
-- **Resilience**: **セマンティック・ヒーリング**により、UI変更に対する耐性を 99.9% まで向上。
+- **Governance**: Policy Engine による操作の拒否・承認要求と、構造化監査ログにより、操作と判断を追跡可能にする。個々の企業要件への適合は運用・設定を含めて検証する。
+- **Human Review**: 高リスク操作の Outcome Projection と HITL により、実行前の人間の判断を支援する。
+- **Workflow Reliability**: 視覚情報（SoM）と構造情報の同期、stable_key による再探索・自己修復で、UI変更からの回復を支援する。誤操作の完全な防止を保証するものではない。
+- **Incremental State**: SRE と差分更新により、繰り返しの状態取得を効率化する。初回 payload は比較対象より大きくなる場合があり、トークン数は [比較ベンチマーク](./bench-playwright-comparison.md) の条件・結果で評価する。
+- **Responsiveness**: 非同期パイプライン、不要リソースのブロック、予測的な状態生成で待ち時間の短縮を図る。性能・回復率は後述の設計目標と実測結果を区別する。
 
 ## 2. システムアーキテクチャ
 
