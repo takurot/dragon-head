@@ -54,10 +54,11 @@ The CI pipeline is defined in `.github/workflows/`.
 
 ## 2.1 Comprehensive Evaluation Bench
 
-- **Goal**: Provide a single dashboard that verifies the main Dragon Head feature areas across `core-runtime`, `mcp-server`, `skills-engine`, `plugin-host`, and `marketplace`.
+- **Goal**: Provide a single dashboard that verifies the main Dragon Head feature areas across `core-runtime`, `mcp-server`, `skills-engine`, `plugin-host`, `marketplace`, `hitl-bridge`, and `bench`.
 - **Modes**:
-- `smoke`: Required on PRs. Covers representative scenarios for state capture, action recovery, wait semantics, policy/HITL, audit/session, MCP flow (including visual image content delivery and standalone configured-skill loading), skill execution, plugin validation, and marketplace accounting.
+- `smoke`: Required on PRs. Covers representative scenarios for state capture, action recovery, wait semantics, policy/HITL, audit/session, MCP flow (including visual image content delivery and standalone configured-skill loading), skill execution, plugin validation, marketplace accounting, HITL approval-lock concurrency and prompt/resolution flow (`hitl-bridge`), and ROI/cost-savings accounting and report generation (`bench`).
   - `full`: Runs on nightly/manual workflows. Uses the same report format and is reserved for expanded scenario sets and longer-running variants.
+- **Scope note**: The new `hitl-bridge` and `bench` evaluation scenarios run without a browser. Their browser-backed end-to-end tests (`PageSessionGateway` E2E, live-Chrome ROI runs) remain `#[ignore]`-gated in their crate-local `tests/` suites; other comprehensive evaluation suites do exercise Chrome.
 - **Artifacts**:
   - JSON reports: `target/evaluation-bench/*.json`
   - Markdown dashboard: `target/evaluation-dashboard.md`

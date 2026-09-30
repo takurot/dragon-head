@@ -1,7 +1,4 @@
-mod harness;
-mod metrics;
-mod report;
-
+use bench::{harness, metrics, report};
 use clap::Parser;
 use core_runtime::chrome_available;
 use std::path::PathBuf;
