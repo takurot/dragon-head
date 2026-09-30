@@ -23,6 +23,10 @@ check:
 test-all: test lint fmt
     @echo "All checks passed!"
 
+# Real MCP binary + Chrome; local fixture and Slack API double, no live credentials.
+demo-high-risk-action:
+    cargo test --workspace --test mcp_high_risk_action_demo -- --ignored --nocapture
+
 evaluation-bench-smoke:
     rm -rf target/evaluation-bench
     mkdir -p target/evaluation-bench

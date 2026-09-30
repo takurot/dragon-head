@@ -1816,6 +1816,7 @@ dependencies = [
  "escargot",
  "hex",
  "hitl-bridge",
+ "hmac",
  "json-patch",
  "jsonschema",
  "libc",

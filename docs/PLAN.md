@@ -135,6 +135,13 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - Exit Criteria
   - [x] チャットツール経由で安全に HITL 判断を完走できる。
 
+> **Follow-up (ISSUE-330, done)**: 実 MCP バイナリと Chrome で高額経費フォームの
+> Policy → HITL bridge → 署名付き承認 → 再実行 → PII 除去監査を通すデモを追加。
+> Slack API と承認者のみを loopback の代替サービスで再現する。ローカル接続は
+> proxy / redirect を無効化し、無効な URL・HTTP 応答を拒否する。
+> 実コールバックで再現した blocking notifier の Tokio panic を worker thread 化で
+> 修正し、回帰テストで固定した。`just demo-high-risk-action` と専用 CI で明示実行する。
+
 ### PR-26: Shared Wasm Engine & Performance Tuning
 - Status: `DONE`
 - Spec Ref: Section 4.1, ISSUE-16

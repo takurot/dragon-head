@@ -145,6 +145,8 @@ pub struct HitlBridgeFileConfig {
     pub audit_log: Option<String>,
     /// How often to poll the shared session for new pending approval requests. Defaults to 1000.
     pub poll_interval_ms: Option<u64>,
+    /// Explicit loopback Slack API double for offline demos; production uses Slack.
+    pub local_slack_api_base_url: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -209,6 +211,8 @@ pub enum ConfigError {
     HitlBridgeMissingCredential { name: &'static str },
     #[error("invalid {ENV_HITL_BRIDGE_POLL_INTERVAL_MS} '{0}' (expected a positive integer)")]
     InvalidHitlBridgePollIntervalMs(String),
+    #[error("invalid hitl_bridge.local_slack_api_base_url (expected literal loopback HTTP with a nonzero port and /api path)")]
+    InvalidLocalSlackApiBaseUrl,
     #[error("too many configured plugins (maximum {max})")]
     TooManyPlugins { max: usize },
     #[error("invalid plugin_trust_keys entry '{id}': {reason}")]
@@ -593,6 +597,7 @@ pub struct HitlBridgeConfig {
     pub slack_channel: String,
     pub audit_log: PathBuf,
     pub poll_interval_ms: u64,
+    pub local_slack_api_base_url: Option<String>,
 }
 
 /// One ed25519 trust root for verifying `[[plugins]]` signatures (ISSUE-303).
@@ -639,6 +644,7 @@ impl std::fmt::Debug for HitlBridgeConfig {
             .field("slack_channel", &self.slack_channel)
             .field("audit_log", &self.audit_log)
             .field("poll_interval_ms", &self.poll_interval_ms)
+            .field("local_slack_api_base_url", &self.local_slack_api_base_url)
             .finish()
     }
 }
@@ -717,6 +723,11 @@ pub fn resolve_config(
     let hitl_audit_log = lookup(ENV_HITL_BRIDGE_AUDIT_LOG);
     let hitl_poll_interval_ms_raw = lookup(ENV_HITL_BRIDGE_POLL_INTERVAL_MS);
 
+    if let Some(base_url) = &fc.hitl_bridge.local_slack_api_base_url {
+        hitl_bridge::notifier::validate_local_slack_api_base_url(base_url)
+            .map_err(|_| ConfigError::InvalidLocalSlackApiBaseUrl)?;
+    }
+
     let hitl_bridge_enabled = match hitl_bridge_enabled_raw {
         Some(raw) => match raw.as_str() {
             "true" => true,
@@ -758,6 +769,7 @@ pub fn resolve_config(
             slack_channel,
             audit_log: PathBuf::from(audit_log),
             poll_interval_ms,
+            local_slack_api_base_url: fc.hitl_bridge.local_slack_api_base_url.clone(),
         })
     } else {
         None
@@ -1679,6 +1691,46 @@ durability = "sync"
     }
 
     #[test]
+    fn local_slack_api_base_url_is_validated_even_when_bridge_is_disabled() {
+        for url in [
+            "http://localhost:8000/api",
+            "http://secret@127.0.0.1:8000/api",
+            "http://127.0.0.1:0/api",
+        ] {
+            let fc: FileConfig = toml::from_str(&format!(
+                "[hitl_bridge]\nlocal_slack_api_base_url = {url:?}"
+            ))
+            .unwrap();
+            let error =
+                resolve_config(Some(&fc), |_| None).expect_err("invalid endpoint must fail closed");
+            assert!(!error.to_string().contains(url));
+        }
+    }
+
+    #[test]
+    fn local_slack_api_base_url_is_preserved_in_enabled_bridge() {
+        let fc: FileConfig = toml::from_str(
+            "[hitl_bridge]\nenabled = true\nlocal_slack_api_base_url = 'http://127.0.0.1:8000/api'",
+        )
+        .unwrap();
+        let config = resolve_config(Some(&fc), |key| match key {
+            ENV_SLACK_SIGNING_SECRET | ENV_SLACK_BOT_TOKEN | ENV_SLACK_CHANNEL => {
+                Some("demo".into())
+            }
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(
+            config
+                .hitl_bridge
+                .unwrap()
+                .local_slack_api_base_url
+                .as_deref(),
+            Some("http://127.0.0.1:8000/api")
+        );
+    }
+
+    #[test]
     fn resolve_config_hitl_bridge_enabled_without_slack_credentials_errors() {
         let err = resolve_config(None, |key| {
             (key == ENV_HITL_BRIDGE_ENABLED).then(|| "true".to_string())
@@ -1711,6 +1763,7 @@ durability = "sync"
         assert_eq!(hitl.slack_channel, "C123");
         assert_eq!(hitl.audit_log, PathBuf::from("hitl-bridge-audit.ndjson"));
         assert_eq!(hitl.poll_interval_ms, 1000);
+        assert_eq!(hitl.local_slack_api_base_url, None);
     }
 
     #[test]
@@ -1722,6 +1775,7 @@ durability = "sync"
             slack_channel: "C123".to_string(),
             audit_log: PathBuf::from("hitl-bridge-audit.ndjson"),
             poll_interval_ms: 1000,
+            local_slack_api_base_url: None,
         };
 
         let debug_output = format!("{hitl:?}");
@@ -1742,6 +1796,7 @@ durability = "sync"
                 bind_addr: Some("127.0.0.1:9000".to_string()),
                 audit_log: Some("/var/log/hitl.ndjson".to_string()),
                 poll_interval_ms: Some(500),
+                local_slack_api_base_url: None,
             },
             ..Default::default()
         };

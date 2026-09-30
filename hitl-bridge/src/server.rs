@@ -165,11 +165,18 @@ async fn handle_interaction(
         }
     };
 
-    match state.bridge.resolve(id, decision, &decided_by) {
-        Ok(()) => StatusCode::OK,
-        Err(err) => {
+    // Gateway, audit, and notifier phases can block (the Slack notifier uses
+    // reqwest's blocking client). Keep them off the async HTTP executor.
+    match tokio::task::spawn_blocking(move || state.bridge.resolve(id, decision, &decided_by)).await
+    {
+        Ok(Ok(())) => StatusCode::OK,
+        Ok(Err(err)) => {
             tracing::warn!(error = %err, %id, "failed to resolve approval request");
             StatusCode::CONFLICT
+        }
+        Err(_) => {
+            tracing::error!(%id, "approval resolution worker failed");
+            StatusCode::INTERNAL_SERVER_ERROR
         }
     }
 }
@@ -311,5 +318,152 @@ mod tests {
         let body = serde_urlencoded::to_string([("payload", payload)]).unwrap();
 
         assert!(parse_interaction(body.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn signed_callback_with_real_http_notifier_resolves_outside_async_context() {
+        use crate::audit::BridgeAuditTrail;
+        use crate::gateway::{mock::MockGateway, PendingApproval};
+        use crate::notifier::SlackNotifier;
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let api = std::thread::spawn(move || {
+            for method in ["chat.postMessage", "chat.update"] {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "local API request timed out"
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("local API accept failed: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 4096];
+                loop {
+                    let count = stream.read(&mut buffer).unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..end]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .and_then(|v| v.parse::<usize>().ok())
+                            })
+                            .unwrap();
+                        if request.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                assert!(
+                    String::from_utf8_lossy(&request).starts_with(&format!("POST /api/{method} "))
+                );
+                let body = r#"{"ok":true,"ts":"123.45"}"#;
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let id = Uuid::new_v4();
+        let gateway = Arc::new(MockGateway::new(Some(PendingApproval {
+            id,
+            rule_id: "demo".into(),
+            action: "click".into(),
+            target_signature: "submit".into(),
+            scope: core_runtime::ApprovalScope::ActionOnly,
+            outcome: None,
+        })));
+        let notifier = SlackNotifier::with_local_api_base_url(
+            "dummy",
+            "C-demo",
+            &format!("http://{address}/api"),
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = Arc::new(Bridge::new(
+            gateway.clone(),
+            Arc::new(notifier),
+            BridgeAuditTrail::new(dir.path().join("audit.ndjson")),
+        ));
+        bridge.poll_once().unwrap();
+        let payload = serde_json::json!({"user":{"id":"demo"},"actions":[{"action_id":"approve","value":id.to_string()}]});
+        let body = serde_urlencoded::to_string([("payload", payload.to_string())]).unwrap();
+        let headers = signed_headers(now_secs(), body.as_bytes(), "demo-secret");
+        let state = ServerState {
+            bridge: Arc::clone(&bridge),
+            signing_secret: Arc::new("demo-secret".into()),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let status = runtime.block_on(handle_interaction(State(state), headers, Bytes::from(body)));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(gateway.resolutions().len(), 1);
+        api.join().unwrap();
+    }
+
+    #[test]
+    fn signed_callback_maps_resolution_failure_and_worker_panic() {
+        use crate::audit::BridgeAuditTrail;
+        use crate::gateway::{ApprovalGateway, PendingApproval};
+        use crate::notifier::mock::MockNotifier;
+
+        struct FailingGateway(bool);
+        impl ApprovalGateway for FailingGateway {
+            fn pending_request(&self) -> Option<PendingApproval> {
+                None
+            }
+            fn approve(&self, _: Uuid) -> Result<()> {
+                assert!(!self.0, "intentional worker panic");
+                anyhow::bail!("intentional gateway failure")
+            }
+            fn reject(&self, _: Uuid) -> Result<()> {
+                anyhow::bail!("unused reject")
+            }
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for (panic, expected) in [
+            (false, StatusCode::CONFLICT),
+            (true, StatusCode::INTERNAL_SERVER_ERROR),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let bridge = Arc::new(Bridge::new(
+                Arc::new(FailingGateway(panic)),
+                Arc::new(MockNotifier::new()),
+                BridgeAuditTrail::new(dir.path().join("audit.ndjson")),
+            ));
+            let payload = serde_json::json!({"user":{"id":"demo"},"actions":[{"action_id":"approve","value":Uuid::new_v4().to_string()}]});
+            let body = serde_urlencoded::to_string([("payload", payload.to_string())]).unwrap();
+            let headers = signed_headers(now_secs(), body.as_bytes(), "demo-secret");
+            let state = ServerState {
+                bridge,
+                signing_secret: Arc::new("demo-secret".into()),
+            };
+            assert_eq!(
+                runtime.block_on(handle_interaction(State(state), headers, Bytes::from(body))),
+                expected
+            );
+        }
     }
 }
