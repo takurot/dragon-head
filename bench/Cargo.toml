@@ -8,10 +8,17 @@ description = "NFR / ROI benchmarking harness and dashboard report generation fo
 
 [dependencies]
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 core-runtime = { path = "../core-runtime" }
+mcp-server = { path = "../mcp-server" }
+tempfile = "3.10"
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [lib]
 name = "bench"
@@ -22,5 +29,4 @@ name = "dragon-head-bench"
 path = "src/main.rs"
 
 [dev-dependencies]
-tempfile = "3.10"
 test-bench-support = { path = "../test-bench-support" }

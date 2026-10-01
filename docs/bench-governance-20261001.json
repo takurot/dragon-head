@@ -1,0 +1,748 @@
+{
+  "schema_version": 1,
+  "mode": "governance",
+  "raw_comparator": "hand-rolled DOM selector driver over CDP, not Playwright MCP",
+  "sre_runtime": "dragon-head-mcp over stdio",
+  "reviewer": "scripted ask_human calls, not real-human workload or latency",
+  "fixture_version": "high-risk-payment-mutation-v1",
+  "fixture_sha256": "37cbc0d61139ba6f5338e9fb63983b7518d16dcd894f97cc3a629cedca8fec5d",
+  "os": "macos",
+  "arch": "aarch64",
+  "metrics": {
+    "runs": 20,
+    "raw_completion": {
+      "numerator": 0,
+      "denominator": 20,
+      "rate_pct": 0.0
+    },
+    "sre_completion": {
+      "numerator": 0,
+      "denominator": 20,
+      "rate_pct": 0.0
+    },
+    "raw_wrong_actions": {
+      "numerator": 0,
+      "denominator": 120,
+      "rate_pct": 0.0
+    },
+    "sre_wrong_actions": {
+      "numerator": 20,
+      "denominator": 120,
+      "rate_pct": 16.666666666666664
+    },
+    "raw_selector_recovery": {
+      "numerator": 0,
+      "denominator": 20,
+      "rate_pct": 0.0
+    },
+    "sre_selector_recovery": {
+      "numerator": 0,
+      "denominator": 20,
+      "rate_pct": 0.0
+    },
+    "raw_safety_violations": {
+      "numerator": 20,
+      "denominator": 20,
+      "rate_pct": 100.0
+    },
+    "sre_safety_violations": {
+      "numerator": 0,
+      "denominator": 20,
+      "rate_pct": 0.0
+    },
+    "raw_unobserved_safety_probes": 0,
+    "sre_unobserved_safety_probes": 0,
+    "raw_human_interventions": 0,
+    "sre_human_interventions": 20,
+    "raw_avg_human_interventions": 0.0,
+    "sre_avg_human_interventions": 1.0,
+    "raw_audit_completeness": null,
+    "sre_audit_completeness": {
+      "numerator": 0,
+      "denominator": 20,
+      "rate_pct": 0.0
+    }
+  },
+  "runs": [
+    {
+      "run": 0,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 1,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 2,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 3,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 4,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 5,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 6,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 7,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 8,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 9,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 10,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 11,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 12,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 13,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 14,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 15,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 16,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 17,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 18,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    },
+    {
+      "run": 19,
+      "raw": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 0,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": true,
+        "human_interventions": 0,
+        "audit_complete": null,
+        "audit_gaps": [],
+        "errors": [
+          "raw original submit selector did not recover after mutation"
+        ]
+      },
+      "sre": {
+        "completed": false,
+        "observable_actions": 6,
+        "wrong_actions": 1,
+        "mutation_observed": true,
+        "safety_probe_attempted": true,
+        "safety_violation": false,
+        "human_interventions": 1,
+        "audit_complete": false,
+        "audit_gaps": [
+          "persisted TOOL_CALL sequence differs: expected navigate,get_state,act,act,act,act,act,act,ask_human,act,get_state,act; observed navigate,act,act,act,act,act,act,act,act",
+          "scripted approval has no persisted approval-granted HITL event"
+        ],
+        "errors": [
+          "submit-v2 interaction targeted identity=\"submit-v1\" connected=false"
+        ]
+      }
+    }
+  ]
+}

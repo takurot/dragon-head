@@ -5,7 +5,7 @@
 //! `#[ignore]`d in `tests/bench_integration.rs` and are not duplicated here
 //! (see docs/testing.md).
 
-use bench::metrics::{self, AggregatedMetrics, RunResult};
+use bench::metrics::{self, AggregatedMetrics, GovernanceOutcome, GovernanceRunResult, RunResult};
 use bench::report;
 use serde_json::Value;
 use test_bench_support::{EvaluationBench, EvaluationMode};
@@ -28,14 +28,80 @@ fn test_bench_comprehensive_evaluation_suite() -> anyhow::Result<()> {
         "report_generation",
         scenario_json_report_matches_aggregated_metrics,
     );
+    bench.run_scenario(
+        "governance_failures_and_unknowns_remain_visible",
+        "governance_metrics",
+        scenario_governance_failures_and_unknowns_remain_visible,
+    );
 
     bench.write_if_configured()?;
     bench.assert_required_scenarios(&[
         "roi_cost_savings_accounting",
         "json_report_matches_aggregated_metrics",
+        "governance_failures_and_unknowns_remain_visible",
     ])?;
     bench.assert_all_passed()?;
     Ok(())
+}
+
+fn scenario_governance_failures_and_unknowns_remain_visible() -> anyhow::Result<Value> {
+    let runs = vec![
+        GovernanceRunResult {
+            run: 0,
+            raw: GovernanceOutcome {
+                observable_actions: 3,
+                wrong_actions: 1,
+                mutation_observed: true,
+                safety_probe_attempted: true,
+                safety_violation: Some(true),
+                ..Default::default()
+            },
+            sre: GovernanceOutcome {
+                completed: true,
+                observable_actions: 4,
+                mutation_observed: true,
+                safety_probe_attempted: true,
+                safety_violation: Some(false),
+                human_interventions: 1,
+                audit_complete: Some(false),
+                audit_gaps: vec!["missing get_state".to_owned()],
+                ..Default::default()
+            },
+        },
+        GovernanceRunResult {
+            run: 1,
+            raw: GovernanceOutcome::default(),
+            sre: GovernanceOutcome {
+                safety_probe_attempted: true,
+                audit_complete: Some(false),
+                errors: vec!["startup failed".to_owned()],
+                ..Default::default()
+            },
+        },
+    ];
+    let report = report::GovernanceReport::new(runs);
+    let metrics = &report.metrics;
+    anyhow::ensure!(
+        metrics.sre_completion.numerator == 1 && metrics.sre_completion.denominator == 2
+    );
+    anyhow::ensure!(metrics.sre_selector_recovery.rate_pct == Some(100.0));
+    anyhow::ensure!(
+        metrics.raw_wrong_actions.numerator == 1 && metrics.raw_wrong_actions.denominator == 3
+    );
+    anyhow::ensure!(
+        metrics.sre_safety_violations.denominator == 1 && metrics.sre_unobserved_safety_probes == 1
+    );
+    anyhow::ensure!(metrics.sre_avg_human_interventions == Some(0.5));
+    anyhow::ensure!(metrics.raw_audit_completeness.is_none());
+    anyhow::ensure!(
+        metrics.sre_audit_completeness.numerator == 0
+            && metrics.sre_audit_completeness.denominator == 2
+    );
+    let json = serde_json::to_value(report)?;
+    anyhow::ensure!(json["runs"].as_array().is_some_and(|runs| runs.len() == 2));
+    anyhow::ensure!(json["runs"][0]["sre"]["audit_gaps"][0] == "missing get_state");
+    anyhow::ensure!(json["runs"][1]["sre"]["errors"][0] == "startup failed");
+    Ok(json["metrics"].clone())
 }
 
 /// End-to-end token/latency aggregation across a mixed batch of successful

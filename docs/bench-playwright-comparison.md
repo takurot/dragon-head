@@ -331,4 +331,102 @@ CHROME_INSTALLED=true cargo run -p bench -- \
 
 ---
 
-*レポート生成: Claude Sonnet 4.6 / bench-playwright harness + Rust bench crate*
+## Governance KPIs (ISSUE-331)
+
+既存のトークン／レイテンシ比較とは別の `--governance` モードで、同じ
+合成タスクを手書き CDP セレクタ・ドライバと、配布する `dragon-head-mcp`
+プロセスの stdio API で実行する。**比較相手は Playwright MCP そのものではない。**
+固定 CSS セレクタを使う単純な比較であり、Playwright の locator 再解決機能や
+LLM エージェント一般に対する優越性を示すものではない。
+
+### 再現
+
+Chrome をインストールした状態でリポジトリルートから実行する:
+
+```bash
+# 20 paired runs = 各方式 20 試行。CHROME_PATH で別の Chrome を指定できる。
+CHROME_INSTALLED=true just bench-governance
+
+# 動作確認用の小さい N
+CHROME_INSTALLED=true just bench-governance 2
+```
+
+`target/governance/report.json` と `report.md` に、集計の分子・分母と全試行の
+エラー／監査欠落を出力する。Chrome がない場合はエラーになる。
+通常のトークン比較の既定値は 3 回のまま、新モードだけが 20 回を既定値とする。
+`--url` / `--step-selectors` と新モードを混ぜることはできない。
+
+### タスクと観測境界
+
+- ISSUE-330 の支払い fixture を拡張した
+  `bench/fixtures/high-risk-payment-mutation.html` を loopback HTTP で提供する。
+  各方式・各試行で新しいページ／ブラウザを使い、MCP 側はプロセスと
+  設定・監査ディレクトリも分離する。偶数・奇数の試行で方式の実行順を交替する。
+- メール・パスワード・カード・金額を入力し、Review 操作で Submit の DOM
+  ノードを実際に置換する。ID/class は変わるが、aria-label・祖先タグ・位置は
+  維持する。取得済みの実際の backend node ID / stable key を使い、偽の stale ID
+  や評価用 ledger を操作対象の選択に使わない。
+- $900 の提出は $500 の警告閾値を超える。MCP 側はポリシーによる承認要求を
+  `ask_human` のスクリプト化した reviewer で解決してから明示的に再試行する。
+  **実際の人間の判断品質や応答時間、Slack の遅延は計測しない。** 実 Slack
+  bridge の署名付き callback を含む組み合わせは別の ISSUE-330 デモで検証する。
+- 独立した Delete records 操作を両方式で試みる。MCP 側の Block ポリシーに
+  相当する操作が実行されたかは、ツールの成功文字列ではなく fixture の
+  実際の削除イベントで判定する。主タスクに失敗してもこの probe は試みる。
+- ゴールは置換後の接続された Submit がちょうど一度実行され、実際の入力値が
+  receipt に一致すること。切断された古いノードの操作や別要素への操作は成功に
+  数えない。入力はダミーだけで、機密値そのものはレポートに含めない。
+
+### KPI の定義
+
+| KPI | 分子 / 分母・未観測時の扱い |
+| :--- | :--- |
+| Task completion | ゴール到達数 / 全 N。起動失敗も分母に残す |
+| Wrong actions | 意図した要素と異なる実イベント数 / 観測された論理操作数。キー入力文字数は数えない |
+| Selector recovery | DOM 変更を観測し、ゴールに到達した数 / DOM 変更を観測できた試行数 |
+| Safety violations | 禁止操作の実行数 / 実際に試み、結果を観測できた probe 数。未観測を「安全」に数えない |
+| Human interventions | 実際の scripted `ask_human` 呼び出し数。平均の分母は失敗を含む全 N |
+| Audit completeness | 実行した全 MCP tool 呼び出しと欠落なく対応する監査を持つ試行数 / 全 N。Raw は監査機能なしで `null` |
+
+観測された分母が 0 の率は `null` とし、0% の違反率と区別する。監査は
+action だけに都合よく限定せず、`get_state` / `ask_human` も照合する。
+現在の実装で読み取りや承認の記録が不足していれば、MCP 側でも「不完全」と
+報告する。これらの合成タスクの結果を、実世界の安全性や準拠の保証と解釈しない。
+
+### 実測結果 (2026-10-01, N=20 paired runs)
+
+全20組の観測データ・エラー・監査欠落は
+[bench-governance-20261001.json](bench-governance-20261001.json) に保存した。
+環境は macOS 26.6.2 / aarch64、Chrome 154.0.8037.58、rustc 1.91.1。
+MCP は main `cbd4565` と同じ実行時コードをこのブランチでビルドし、
+`CHROME_INSTALLED=true RUST_LOG=error just bench-governance 20` を実行した。
+fixture は `high-risk-payment-mutation-v1`、SHA-256 は
+`37cbc0d61139ba6f5338e9fb63983b7518d16dcd894f97cc3a629cedca8fec5d`。
+起動失敗・未観測の safety probe は両方式とも0件だった。
+
+| KPI | Raw DOM | Dragon Head MCP |
+| :--- | :--- | :--- |
+| Task completion | 0/20 (0%) | 0/20 (0%) |
+| Wrong logical actions | 0/120 (0%) | 20/120 (16.7%) |
+| Selector recovery after mutation | 0/20 (0%) | 0/20 (0%) |
+| Safety violations | 20/20 (100%) | 0/20 (0%) |
+| Scripted ask_human calls (total / mean) | 0 / 0 | 20 / 1 |
+| Complete audit trails | 非対応 (`null`) | 0/20 (0%) |
+
+Raw は置換前の `#submit-v1` を保持したため提出できなかった。
+Dragon Head は承認を1回要求し Delete を全試行で禁止したが、取得済みの
+backend node ID が指す切断済みの元 Submit に `click` を実行した。
+fixture のイベントは `identity="submit-v1", connected=false` であり、
+接続された置換後ノードの提出ではないため、誤操作・未完了に数えている。
+**この結果は stable key による回復の優位性を実証していない。**
+古いノードがまだ解決できる場合にクリックが成功応答になる実行時の欠陥を
+明らかにしたもので、この比較変更では実行時コードを修正していない。
+
+監査では `get_state` / `ask_human` の TOOL_CALL と approval-granted HITL
+イベントが欠落し、全試行を不完全と判定した。act の引数・順序・PII の
+マスクおよび禁止ポリシーの記録は別途照合した。禁止操作を止められたことと、
+タスク完了・回復・監査完全性はそれぞれ独立した結果である。
+N=20 の合成 fixture と固定ドライバの観測であり、一般的な Playwright、
+LLM エージェント、実際の人間による運用の比較に一般化しない。
+
+*既存トークン比較のレポート生成: Claude Sonnet 4.6 / bench-playwright harness + Rust bench crate*

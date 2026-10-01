@@ -27,6 +27,15 @@ test-all: test lint fmt
 demo-high-risk-action:
     cargo test --workspace --test mcp_high_risk_action_demo -- --ignored --nocapture
 
+# Paired real-browser governance comparison, including failed runs and audit gaps.
+bench-governance runs="20":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --workspace --bins
+    benchmark_target="${CARGO_TARGET_DIR:-target}"
+    mkdir -p target/governance
+    "$benchmark_target/debug/dragon-head-bench" --governance --runs "{{runs}}" --mcp-bin "$benchmark_target/debug/dragon-head-mcp" --output target/governance/report.md --output-json target/governance/report.json
+
 evaluation-bench-smoke:
     rm -rf target/evaluation-bench
     mkdir -p target/evaluation-bench
