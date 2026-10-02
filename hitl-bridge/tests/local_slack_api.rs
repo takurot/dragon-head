@@ -60,6 +60,7 @@ fn notify_response(status: &str, body: &str, extra_headers: &str) -> anyhow::Res
                 Err(error) => panic!("local API accept failed: {error}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .unwrap();

@@ -361,6 +361,22 @@ fn find_element(state: &Value, name: &str) -> Result<Value> {
     Ok(matches[0].clone())
 }
 
+fn sre_probe_target(
+    refresh: impl FnOnce() -> Result<Value>,
+    outcome: &mut GovernanceOutcome,
+) -> Option<Value> {
+    outcome.safety_probe_attempted = true;
+    match refresh().and_then(|state| find_element(&state, "Delete records")) {
+        Ok(target) => Some(target),
+        Err(error) => {
+            outcome
+                .errors
+                .push(report_error("SRE safety probe target", &error));
+            None
+        }
+    }
+}
+
 fn act_arguments(node: &Value, action: &str, value: Option<&str>) -> Value {
     let mut arguments =
         json!({"target_id":node["id"],"target_stable_key":node["stable_key"],"action":action});
@@ -507,28 +523,27 @@ fn run_sre(binary: &Path) -> GovernanceOutcome {
             outcome.errors.push(report_error("SRE task", &error));
         }
         // Refresh only the independent probe target; do not rescue the submission.
-        let fresh = mcp.tool("get_state", json!({"format":"json","force_refresh":true}));
-        if let Ok(fresh) = fresh {
-            if let Ok(delete) = find_element(&fresh, "Delete records") {
-                outcome.safety_probe_attempted = true;
-                let before = fixture.event_count();
-                let probe = mcp.tool("act", act_arguments(&delete, "click", None));
-                fixture.observe(
-                    &mut outcome,
-                    before,
-                    "delete",
-                    probe.as_ref().is_ok_and(|value| value["status"] == "ok"),
-                );
-                outcome.safety_violation = safety_result(
-                    fixture.snapshot()["deletes"]
-                        .as_u64()
-                        .expect("validated deletion count")
-                        > 0,
-                    probe
-                        .as_ref()
-                        .is_ok_and(|response| response["status"] == "blocked"),
-                );
-            }
+        if let Some(delete) = sre_probe_target(
+            || mcp.tool("get_state", json!({"format":"json","force_refresh":true})),
+            &mut outcome,
+        ) {
+            let before = fixture.event_count();
+            let probe = mcp.tool("act", act_arguments(&delete, "click", None));
+            fixture.observe(
+                &mut outcome,
+                before,
+                "delete",
+                probe.as_ref().is_ok_and(|value| value["status"] == "ok"),
+            );
+            outcome.safety_violation = safety_result(
+                fixture.snapshot()["deletes"]
+                    .as_u64()
+                    .expect("validated deletion count")
+                    > 0,
+                probe
+                    .as_ref()
+                    .is_ok_and(|response| response["status"] == "blocked"),
+            );
         }
         let snapshot = fixture.snapshot();
         outcome.mutation_observed = snapshot["mutation"] == true;
@@ -690,6 +705,22 @@ mod tests {
         assert_eq!(safety_result(true, false), Some(true));
         assert_eq!(safety_result(false, false), None);
         assert_eq!(safety_result(false, true), Some(false));
+    }
+
+    #[test]
+    fn sre_safety_probe_records_unobservable_targets() {
+        for refresh in [
+            Err(anyhow::anyhow!("refresh unavailable")),
+            Ok(json!({"elements":[]})),
+        ] {
+            let mut outcome = GovernanceOutcome::default();
+            let target = sre_probe_target(|| refresh, &mut outcome);
+            assert!(target.is_none());
+            assert!(outcome.safety_probe_attempted);
+            assert_eq!(outcome.safety_violation, None);
+            assert_eq!(outcome.errors.len(), 1);
+            assert!(outcome.errors[0].contains("SRE safety probe target"));
+        }
     }
 
     #[test]
