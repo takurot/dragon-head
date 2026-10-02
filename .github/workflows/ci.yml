@@ -266,6 +266,32 @@ jobs:
         CHROME_INSTALLED: "true"
       run: cargo test --workspace --test mcp_high_risk_action_demo -- --ignored --nocapture
 
+  governance-comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+    - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
+    - name: Verify Chrome is available
+      run: google-chrome --version
+    - name: Build real benchmark and MCP binaries
+      run: cargo build --workspace --bins
+    - name: Exercise observable governance contracts
+      env:
+        CHROME_INSTALLED: "true"
+        DRAGON_HEAD_MCP_BIN: ${{ github.workspace }}/target/debug/dragon-head-mcp
+      run: cargo test --workspace --test governance_runtime -- --ignored --nocapture
+    - name: Generate paired governance report
+      env:
+        CHROME_INSTALLED: "true"
+      run: |
+        mkdir -p target/governance
+        target/debug/dragon-head-bench --governance --runs 2 --mcp-bin target/debug/dragon-head-mcp --output target/governance/report.md --output-json target/governance/report.json
+    - uses: actions/upload-artifact@v4
+      with:
+        name: governance-comparison
+        path: target/governance/
+
   cdp-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15

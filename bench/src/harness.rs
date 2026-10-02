@@ -2,6 +2,14 @@ use crate::metrics::{MultiStepResult, RunResult, Step, StepKind};
 use core_runtime::{BrowserClient, DeltaPolicy, LoadProfile, StateUpdate};
 use std::time::Instant;
 
+/// Runs the governance workflow against a raw CDP selector baseline and the shipped MCP binary.
+pub fn run_governance_pair(
+    binary: &std::path::Path,
+    run: u32,
+) -> crate::metrics::GovernanceRunResult {
+    crate::governance::run_pair(binary, run)
+}
+
 pub fn run_one(url: &str, run_idx: u32) -> RunResult {
     let chrome_path = std::env::var("CHROME_PATH").ok();
 

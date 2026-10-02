@@ -2,6 +2,193 @@ use crate::metrics::{cost_savings, AggregatedMetrics, MultiStepAggregatedMetrics
 use anyhow::Result;
 use std::path::Path;
 
+/// Separate schema: governance reports must not masquerade as token/latency results.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GovernanceReport {
+    pub schema_version: u32,
+    pub mode: &'static str,
+    pub raw_comparator: &'static str,
+    pub sre_runtime: &'static str,
+    pub reviewer: &'static str,
+    pub fixture_version: Option<String>,
+    pub fixture_sha256: Option<String>,
+    pub os: &'static str,
+    pub arch: &'static str,
+    pub metrics: crate::metrics::GovernanceAggregatedMetrics,
+    pub runs: Vec<crate::metrics::GovernanceRunResult>,
+}
+
+impl GovernanceReport {
+    pub fn new(runs: Vec<crate::metrics::GovernanceRunResult>) -> Self {
+        Self {
+            schema_version: 1,
+            mode: "governance",
+            raw_comparator: "hand-rolled DOM selector driver over CDP, not Playwright MCP",
+            sre_runtime: "dragon-head-mcp over stdio",
+            reviewer: "scripted ask_human calls, not real-human workload or latency",
+            fixture_version: None,
+            fixture_sha256: None,
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            metrics: crate::metrics::aggregate_governance(&runs),
+            runs,
+        }
+    }
+}
+
+fn governance_rate(rate: &crate::metrics::RateMetric) -> String {
+    match rate.rate_pct {
+        Some(pct) => format!("{pct:.1}% ({}/{})", rate.numerator, rate.denominator),
+        None => format!("Not observed ({}/{})", rate.numerator, rate.denominator),
+    }
+}
+
+fn governance_cell(text: &str) -> String {
+    text.replace('|', "\\|").replace(['\r', '\n'], " ")
+}
+
+fn governance_markdown(report: &GovernanceReport) -> String {
+    let m = &report.metrics;
+    let mut text = format!(
+        "# Governance KPIs\n\nPaired runs: {}. Environment: {}/{}.\n\nRaw comparator: {}.\nDragon Head: {}.\nReviewer: {}.\n\nFixture version: {}. SHA-256: {}.\n\n| KPI | Raw DOM | Dragon Head MCP |\n| :--- | :--- | :--- |\n",
+        m.runs, report.os, report.arch, report.raw_comparator, report.sre_runtime, report.reviewer,
+        report.fixture_version.as_deref().unwrap_or("Not recorded"),
+        report.fixture_sha256.as_deref().unwrap_or("Not recorded")
+    );
+    for (name, raw, sre) in [
+        ("Task completion", &m.raw_completion, &m.sre_completion),
+        (
+            "Wrong logical actions",
+            &m.raw_wrong_actions,
+            &m.sre_wrong_actions,
+        ),
+        (
+            "Selector recovery after observed mutation",
+            &m.raw_selector_recovery,
+            &m.sre_selector_recovery,
+        ),
+        (
+            "Safety violations in observed probes",
+            &m.raw_safety_violations,
+            &m.sre_safety_violations,
+        ),
+    ] {
+        text.push_str(&format!(
+            "| {name} | {} | {} |\n",
+            governance_rate(raw),
+            governance_rate(sre)
+        ));
+    }
+    let mean = |value: Option<f64>| {
+        value
+            .map(|value| format!("{value:.2}"))
+            .unwrap_or_else(|| "Not observed".into())
+    };
+    text.push_str(&format!(
+        "| Scripted ask_human calls (total / mean per run) | {} / {} | {} / {} |\n| Complete audit trails | Unsupported | {} |\n\nUnobservable attempted safety probes: raw={}, SRE={}. Unknown outcomes are excluded from the safety denominator, not counted as safe.\n\nCompletion, mean interventions and strict SRE audit completeness include every run, including startup failures. Wrong actions use observed logical operations, not individual typing events. Recovery includes only actual observed mutations. Raw audit is unsupported; missing SRE audit evidence is incomplete.\n\n## Per-run observations\n\n| Run | Raw goal | SRE goal | Raw errors | SRE errors | SRE audit status / gaps |\n| ---: | :--- | :--- | :--- | :--- | :--- |\n",
+        m.raw_human_interventions, mean(m.raw_avg_human_interventions),
+        m.sre_human_interventions, mean(m.sre_avg_human_interventions),
+        governance_rate(&m.sre_audit_completeness), m.raw_unobserved_safety_probes, m.sre_unobserved_safety_probes
+    ));
+    for run in &report.runs {
+        let status = match run.sre.audit_complete {
+            Some(true) => "Complete",
+            Some(false) => "Incomplete",
+            None => "Missing evidence",
+        };
+        text.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} / {} |\n",
+            run.run,
+            run.raw.completed,
+            run.sre.completed,
+            governance_cell(&run.raw.errors.join("; ")),
+            governance_cell(&run.sre.errors.join("; ")),
+            status,
+            governance_cell(&run.sre.audit_gaps.join("; "))
+        ));
+    }
+    text
+}
+
+pub fn print_governance_table(report: &GovernanceReport) {
+    println!("{}", governance_markdown(report));
+}
+
+pub fn write_governance_markdown(report: &GovernanceReport, path: &Path) -> Result<()> {
+    std::fs::write(path, governance_markdown(report))?;
+    Ok(())
+}
+
+pub fn write_governance_json(report: &GovernanceReport, path: &Path) -> Result<()> {
+    std::fs::write(path, serde_json::to_vec_pretty(report)?)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod governance_report_tests {
+    use super::*;
+    use crate::metrics::{GovernanceOutcome, GovernanceRunResult};
+
+    #[test]
+    fn governance_json_preserves_failures_nulls_and_audit_gaps() {
+        let report = GovernanceReport::new(vec![GovernanceRunResult {
+            run: 0,
+            raw: GovernanceOutcome {
+                errors: vec!["raw startup failed".into()],
+                ..Default::default()
+            },
+            sre: GovernanceOutcome {
+                completed: true,
+                audit_complete: Some(false),
+                audit_gaps: vec!["ask_human audit missing".into()],
+                ..Default::default()
+            },
+        }]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("governance.json");
+        write_governance_json(&report, &path).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(parsed["mode"], "governance");
+        assert_eq!(parsed["metrics"]["raw_completion"]["denominator"], 1);
+        assert!(parsed["metrics"]["raw_audit_completeness"].is_null());
+        assert!(parsed["metrics"]["raw_safety_violations"]["rate_pct"].is_null());
+        assert_eq!(parsed["runs"][0]["raw"]["errors"][0], "raw startup failed");
+        assert_eq!(
+            parsed["runs"][0]["sre"]["audit_gaps"][0],
+            "ask_human audit missing"
+        );
+    }
+
+    #[test]
+    fn governance_markdown_discloses_comparator_and_unfavorable_observations() {
+        let report = GovernanceReport::new(vec![GovernanceRunResult {
+            run: 0,
+            raw: GovernanceOutcome {
+                completed: true,
+                ..Default::default()
+            },
+            sre: GovernanceOutcome {
+                audit_complete: Some(false),
+                audit_gaps: vec!["missing | approval event".into()],
+                errors: vec!["selector\nfailed".into()],
+                ..Default::default()
+            },
+        }]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("governance.md");
+        write_governance_markdown(&report, &path).unwrap();
+        let markdown = std::fs::read_to_string(path).unwrap();
+        assert!(markdown.contains("hand-rolled"));
+        assert!(markdown.contains("scripted"));
+        assert!(markdown.contains("Unsupported"));
+        assert!(markdown.contains("Not observed"));
+        assert!(markdown.contains("0.0% (0/1)"));
+        assert!(markdown.contains("missing \\| approval event"));
+        assert!(markdown.contains("selector failed"));
+    }
+}
+
 fn format_savings_usd(usd: f64) -> String {
     if usd >= 0.0 {
         format!("-${usd:.6}")

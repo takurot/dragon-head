@@ -346,6 +346,8 @@ mod tests {
                         Err(error) => panic!("local API accept failed: {error}"),
                     }
                 };
+                // macOS inherits O_NONBLOCK from the listener on accepted sockets.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .unwrap();

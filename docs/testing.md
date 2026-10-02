@@ -41,6 +41,10 @@ The CI pipeline is defined in `.github/workflows/`.
 - **Playwright comparison harness**: `ci.yml` installs and tests `bench-playwright` at the
   supported Node.js 20.19, 22.12, and 24 boundaries, and rejects moderate-or-higher npm
   audit findings.
+- **Governance comparison**: `governance-comparison` builds the shipped benchmark/MCP
+  binaries, explicitly runs the ignored real-Chrome observable-contract test, and
+  publishes JSON/Markdown from two paired runs. These synthetic outcomes are not
+  superiority thresholds: unfavorable results and audit gaps remain in artifacts.
 - **Skill schema version gate**: `skill-schema-compatibility` rejects JSON definitions above
   the supported schema version, while `skill-conformance` rejects unsupported typed
   definitions before any runtime operation is invoked.
@@ -70,6 +74,19 @@ Slack API double and a signed HTTP callback in one process-level E2E. It is
 `#[ignore]`-gated locally and explicitly executed by `just demo-high-risk-action`
 and CI's `high-risk-action-demo` job. Existing policy/HITL and audit scenarios
 remain in the dashboard; this dedicated test proves their deployed composition.
+
+**ISSUE-331 registration:** `bench`'s dashboard adds
+`governance_failures_and_unknowns_remain_visible` to verify failed-run denominators,
+unknown safety outcomes, unsupported raw audit coverage and preserved per-run gaps.
+The browser/process portion is explicitly exempt from the dashboard: it requires
+fresh Chrome pages and a shipped MCP subprocess per pair, and runs in the separate
+`governance-comparison` CI job. Pure aggregation/report/protocol tests run normally;
+`bench/tests/governance_runtime.rs` requires an explicit ignored-test invocation and
+`DRAGON_HEAD_MCP_BIN` pointing to the built binary. `just bench-governance` produces
+the documented 20-pair report; Chrome absence is an error, never a successful skip.
+The real-browser gate preserves the current detached-node wrong action and failed
+completion baseline alongside exact-one approval, observed mutation and hard block.
+The HTTP fixture also tests fragmented POSTs and idle browser connections.
 
 ## 3. Running Tests Locally
 

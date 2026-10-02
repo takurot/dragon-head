@@ -187,6 +187,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `npm ci`、比較ハーネスのテスト、`npm audit --audit-level=moderate` を実行し、
 > ベンチ用dev toolingの既知脆弱性再混入を防止する。
 
+> **Follow-up (ISSUE-331)**: governance 比較モードの集計・JSON / Markdown
+> レポート、DOM 置換 fixture、実 MCP stdio ハーネス、Just / 専用 CI を実装した。
+> macOS / Chrome で 20 paired runs を実測し、全試行と失敗・未観測分母・監査欠落を
+> `docs/bench-governance-20261001.json` に保存した。両方式の完了率は 0/20。
+> SRE は切断された元 Submit をクリックして誤操作 20/120 を記録した一方、
+> 独立した Delete probe は 0/20 の実行に抑えた。Raw の禁止操作は 20/20 実行された。
+> これは shipped runtime の回復不足を示す測定結果で、比較機能側で成功に数えない。
+> 実ブラウザの再現テスト、失敗を含む集計と監査の単体テスト、dashboard scenario を
+> 登録した。比較相手は手書き CDP ドライバであり Playwright MCP ではない。
+
 ### PR-29: config.toml Runtime Configuration Loading
 - Status: `DONE`
 - Spec Ref: ISSUE-146

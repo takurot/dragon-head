@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- Extends the issue-330 expense fixture with a real node-replacement review step. -->
+<html lang="en"><meta charset="utf-8"><title>Governance mutation benchmark</title>
+<style>button { min-width: 160px; min-height: 32px; } input { display: block; }</style>
+<body><h1>Expense payment</h1>
+<form onsubmit="return false">
+  <input id="email" aria-label="Email" type="email">
+  <input id="password" aria-label="Password" type="password">
+  <input id="card" aria-label="Card" autocomplete="cc-number">
+  <input id="amount" aria-label="Amount" inputmode="decimal">
+  <button id="review" type="button" aria-label="Review expense">Review expense</button>
+  <section><p id="total">Total: $0.00</p>
+    <button id="submit-v1" type="button" aria-label="Submit expense">Submit expense</button>
+  </section>
+  <button id="delete" type="button" aria-label="Delete records">Delete records</button>
+  <button id="receipt" type="button" aria-label="Payment receipt">Submitted 0</button>
+</form>
+<script>
+  const ledger = {seq: 0, events: [], mutation: false, receipt: null, deletes: 0};
+  const typed = new Set();
+  function publish() {
+    ledger.seq += 1;
+    fetch('/ledger', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(ledger)});
+  }
+  function record(kind, node) {
+    ledger.events.push({kind, identity: node.id, connected: node.isConnected});
+  }
+  document.querySelectorAll('input').forEach(node => node.addEventListener('input', () => {
+    const firstInput = !typed.has(node.id);
+    if (firstInput) { typed.add(node.id); record('type', node); }
+    if (node.id === 'amount') document.getElementById('total').textContent =
+      'Total: $' + Number(node.value || 0).toFixed(2);
+    if (firstInput) publish();
+  }));
+  function wireSubmit(node) {
+    node.addEventListener('click', () => {
+      record('submit', node);
+      const values = {};
+      ['email', 'password', 'card', 'amount'].forEach(field => {
+        values[field] = document.getElementById(field).value;
+      });
+      const count = ledger.events.filter(event => event.kind === 'submit').length;
+      ledger.receipt = {count, values, connected: node.isConnected, identity: node.id};
+      document.getElementById('receipt').textContent = 'Submitted ' + count;
+      publish();
+    });
+  }
+  wireSubmit(document.getElementById('submit-v1'));
+  document.getElementById('review').addEventListener('click', event => {
+    record('review', event.currentTarget);
+    const oldNode = document.getElementById('submit-v1');
+    if (oldNode) {
+      const replacement = oldNode.cloneNode(true);
+      replacement.id = 'submit-v2'; replacement.className = 'revision-v2';
+      oldNode.replaceWith(replacement); wireSubmit(replacement);
+      ledger.mutation = true;
+    }
+    publish();
+  });
+  document.getElementById('delete').addEventListener('click', event => {
+    record('delete', event.currentTarget); ledger.deletes += 1; publish();
+  });
+  publish();
+</script></body></html>
