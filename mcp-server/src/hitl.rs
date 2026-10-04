@@ -16,6 +16,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::{Context, Result};
+
 use core_runtime::PageSession;
 use hitl_bridge::audit::BridgeAuditTrail;
 use hitl_bridge::bridge::{run_poll_loop, Bridge};
@@ -30,10 +32,11 @@ use crate::config::HitlBridgeConfig;
 /// Approve/Reject callbacks. Both operate on `page`, the same `PageSession` the caller's
 /// `CoreRuntimeBackend` uses for `ask_human`.
 ///
-/// Returns as soon as the background threads are spawned; failures inside them (a bind error,
-/// a panicked poll loop) are logged via `tracing` rather than propagated, matching the
-/// standalone `dragon-head-hitl-bridge` binary's own poll-loop error handling (a transient
-/// failure must not take the bridge, or the MCP server it's embedded in, down).
+/// The notifier, the tokio runtime, and the `config.bind_addr` listener (bound and registered
+/// with the runtime) are all set up before any thread is spawned, and a failure in any of
+/// them is returned. Once this returns `Ok`,
+/// later failures inside the threads (a transient poll error, the server stopping) are logged
+/// via `tracing` rather than propagated.
 ///
 /// Known limitation (ISSUE-302 follow-up): `page` is a snapshot of whichever `PageSession` is
 /// live when this is called. If the host's own browser-restart recovery (ISSUE-149) later
@@ -41,25 +44,38 @@ use crate::config::HitlBridgeConfig;
 /// session rather than following the restart — the old session's pending approval (if any)
 /// simply becomes unreachable, and any *new* approval raised after the restart requires
 /// restarting `dragon-head-mcp` itself to pick up.
-pub fn spawn_embedded_bridge(page: Arc<PageSession>, config: &HitlBridgeConfig) {
+pub fn spawn_embedded_bridge(page: Arc<PageSession>, config: &HitlBridgeConfig) -> Result<()> {
     let gateway: Arc<dyn ApprovalGateway> = Arc::new(PageSessionGateway::new(page));
     let notifier: Arc<dyn ChatNotifier> = match &config.local_slack_api_base_url {
-        Some(base_url) => match SlackNotifier::with_local_api_base_url(
-            config.slack_bot_token.clone(),
-            config.slack_channel.clone(),
-            base_url,
-        ) {
-            Ok(notifier) => Arc::new(notifier),
-            Err(err) => {
-                tracing::error!(error = %err, "failed to configure local HITL notifier");
-                return;
-            }
-        },
+        Some(base_url) => Arc::new(
+            SlackNotifier::with_local_api_base_url(
+                config.slack_bot_token.clone(),
+                config.slack_channel.clone(),
+                base_url,
+            )
+            .context("failed to configure local HITL notifier")?,
+        ),
         None => Arc::new(SlackNotifier::new(
             config.slack_bot_token.clone(),
             config.slack_channel.clone(),
         )),
     };
+    let bind_addr = config.bind_addr.clone();
+    let listener = std::net::TcpListener::bind(&bind_addr)
+        .with_context(|| format!("failed to bind HITL bridge on {bind_addr}"))?;
+    listener
+        .set_nonblocking(true)
+        .with_context(|| format!("failed to configure HITL bridge listener on {bind_addr}"))?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime for the HITL bridge")?;
+    let listener = {
+        let _enter = runtime.enter();
+        tokio::net::TcpListener::from_std(listener)
+            .with_context(|| format!("failed to register HITL bridge listener on {bind_addr}"))?
+    };
+
     let audit = BridgeAuditTrail::new(config.audit_log.clone());
     let bridge = Arc::new(Bridge::new(gateway, notifier, audit));
 
@@ -74,30 +90,8 @@ pub fn spawn_embedded_bridge(page: Arc<PageSession>, config: &HitlBridgeConfig) 
         signing_secret: Arc::new(config.slack_signing_secret.clone()),
     };
     let app = router(state);
-    let bind_addr = config.bind_addr.clone();
     std::thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                tracing::error!(error = %err, "embedded hitl-bridge: failed to build tokio runtime");
-                return;
-            }
-        };
         runtime.block_on(async move {
-            let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
-                Ok(listener) => listener,
-                Err(err) => {
-                    tracing::error!(
-                        error = %err,
-                        addr = %bind_addr,
-                        "embedded hitl-bridge: failed to bind Slack interactions server"
-                    );
-                    return;
-                }
-            };
             tracing::info!(
                 addr = %bind_addr,
                 "embedded hitl-bridge listening for Slack interactions"
@@ -107,4 +101,5 @@ pub fn spawn_embedded_bridge(page: Arc<PageSession>, config: &HitlBridgeConfig) 
             }
         });
     });
+    Ok(())
 }
