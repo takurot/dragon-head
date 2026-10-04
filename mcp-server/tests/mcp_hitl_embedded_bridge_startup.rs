@@ -1,6 +1,3 @@
-//! ISSUE-335: every startup failure of the embedded HITL bridge must reach the caller, so
-//! `dragon-head-mcp` cannot keep serving with a dead Slack approval path.
-
 use std::net::TcpListener;
 use std::sync::Arc;
 
@@ -57,8 +54,12 @@ fn embedded_bridge_startup_reports_bind_and_notifier_failures() -> anyhow::Resul
 
     let mut bad_notifier = bridge_config("127.0.0.1:0".to_string(), &audit_dir);
     bad_notifier.local_slack_api_base_url = Some("https://slack.example.com/api".to_string());
-    spawn_embedded_bridge(Arc::clone(&page), &bad_notifier)
+    let err = spawn_embedded_bridge(Arc::clone(&page), &bad_notifier)
         .expect_err("a non-local Slack API override must fail instead of starting the bridge");
+    assert!(
+        format!("{err:#}").contains("local HITL notifier"),
+        "error must name the notifier, got: {err:#}"
+    );
 
     let free_addr = {
         let probe = TcpListener::bind("127.0.0.1:0")?;

@@ -32,12 +32,11 @@ use crate::config::HitlBridgeConfig;
 /// Approve/Reject callbacks. Both operate on `page`, the same `PageSession` the caller's
 /// `CoreRuntimeBackend` uses for `ask_human`.
 ///
-/// The notifier, the tokio runtime, and the `config.bind_addr` listener are all set up before
-/// any thread is spawned, and a failure in any of them is returned (ISSUE-335). This is the
-/// security-relevant approval path, so a bad `bind_addr` or a port conflict must stop the host
-/// at startup rather than leave approvals silently unreachable. Once this returns `Ok`, later
-/// failures inside the threads (a transient poll error, the server stopping) are logged via
-/// `tracing` rather than propagated, matching the standalone `dragon-head-hitl-bridge` binary.
+/// The notifier, the tokio runtime, and the `config.bind_addr` listener (bound and registered
+/// with the runtime) are all set up before any thread is spawned, and a failure in any of
+/// them is returned. Once this returns `Ok`,
+/// later failures inside the threads (a transient poll error, the server stopping) are logged
+/// via `tracing` rather than propagated.
 ///
 /// Known limitation (ISSUE-302 follow-up): `page` is a snapshot of whichever `PageSession` is
 /// live when this is called. If the host's own browser-restart recovery (ISSUE-149) later
@@ -71,6 +70,11 @@ pub fn spawn_embedded_bridge(page: Arc<PageSession>, config: &HitlBridgeConfig) 
         .enable_all()
         .build()
         .context("failed to build tokio runtime for the HITL bridge")?;
+    let listener = {
+        let _enter = runtime.enter();
+        tokio::net::TcpListener::from_std(listener)
+            .with_context(|| format!("failed to register HITL bridge listener on {bind_addr}"))?
+    };
 
     let audit = BridgeAuditTrail::new(config.audit_log.clone());
     let bridge = Arc::new(Bridge::new(gateway, notifier, audit));
@@ -88,17 +92,6 @@ pub fn spawn_embedded_bridge(page: Arc<PageSession>, config: &HitlBridgeConfig) 
     let app = router(state);
     std::thread::spawn(move || {
         runtime.block_on(async move {
-            let listener = match tokio::net::TcpListener::from_std(listener) {
-                Ok(listener) => listener,
-                Err(err) => {
-                    tracing::error!(
-                        error = %err,
-                        addr = %bind_addr,
-                        "embedded hitl-bridge: failed to register listener with tokio"
-                    );
-                    return;
-                }
-            };
             tracing::info!(
                 addr = %bind_addr,
                 "embedded hitl-bridge listening for Slack interactions"

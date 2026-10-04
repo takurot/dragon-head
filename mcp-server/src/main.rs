@@ -187,14 +187,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     if let Some(hitl_config) = &resolved.hitl_bridge {
-        mcp_server::hitl::spawn_embedded_bridge(backend.page_handle(), hitl_config).with_context(
-            || {
-                format!(
-                    "failed to start embedded HITL bridge (bind_addr {})",
-                    hitl_config.bind_addr
-                )
-            },
-        )?;
+        mcp_server::hitl::spawn_embedded_bridge(backend.page_handle(), hitl_config)
+            .context("failed to start embedded HITL bridge")?;
         eprintln!(
             "dragon-head-mcp: embedded HITL bridge listening on {}",
             hitl_config.bind_addr
