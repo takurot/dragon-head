@@ -656,6 +656,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > env overrideを追加し、件数・個別長・総量を制限した。runtimeが認識するconfig env名を
 > READMEと`--doctor`へ同期し、完全一致contract testと値非開示binary testでdriftを防ぐ。
 
+> **Follow-up (ISSUE-252, tracking)**: `headless_chrome = "=1.0.21"` のexact pinは
+> ISSUE-152で検証済みChrome範囲を保証するための意図的な固定であり、`Cargo.toml` に理由と更新手順を
+> 明記した。上流の更新頻度が低いため、`chromiumoxide` または直接CDPクライアントへの移行可否は
+> 別Issueで評価する（本Issueのスコープ外）。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。
