@@ -1082,7 +1082,7 @@ impl CoreRuntimeBackend {
             skills: HashMap::new(),
             last_skill_delta: SkillUsageDelta::default(),
             pending_visual_image: None,
-            schema_registry: SchemaRegistry::new(),
+            schema_registry: SchemaRegistry::with_builtin_rules(),
             injection_sanitizer: PromptInjectionSanitizer::new(PromptInjectionSanitizerConfig {
                 mode: PromptInjectionMode::ReportOnly,
                 ..Default::default()

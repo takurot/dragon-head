@@ -671,6 +671,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `traverse_node` の `children` は `with_capacity` 化。20,000 node treeで算出時間 約2.19ms → 約0.48ms。
 > diff用のtree→`Value`変換は `json_patch::diff` の入力として必要なため維持した。
 
+> **Follow-up (ISSUE-259, done)**: `SchemaRegistry::with_builtin_rules()` が `page_title` / `all_links` /
+> `meta_description` / `headings` を起動時に登録する（名前は予約され、同名の `register` は `DuplicateRule`）。
+> `all_links` / `headings` を表現するため、DSLの `fields` 値に `"&"`（itemの自テキスト）と `"@attr"`
+> （itemの属性/プロパティ）を後方互換で追加した。実ブラウザの統合testで4ルールの出力を固定した。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。
