@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -132,15 +132,10 @@ impl ExtractionRule {
 
                 let field_lines: Vec<String> = sorted_fields
                     .into_iter()
-                    .map(|(key, field_sel)| {
+                    .map(|(key, field_spec)| {
                         let key_json =
                             serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
-                        let field_sel_json =
-                            serde_json::to_string(field_sel).unwrap_or_else(|_| "\"\"".to_string());
-                        format!(
-                            "{key_json}: (() => {{ const f = item.querySelector({field_sel_json}); \
-                             return f ? (f.innerText || f.textContent || '').trim() : null; }})()"
-                        )
+                        format!("{key_json}: {}", field_value_js(field_spec))
                     })
                     .collect();
 
@@ -161,7 +156,33 @@ impl ExtractionRule {
 /// `getAttribute` only reads the HTML attribute string and returns null/stale values for
 /// these, since they reflect live JS-side element state.
 fn is_dom_property(attr: &str) -> bool {
-    matches!(attr, "textContent" | "innerText" | "value")
+    matches!(attr, "textContent" | "innerText" | "value" | "tagName")
+}
+
+/// `fields` value meaning "the matched item's own text" (rather than a child selector).
+const FIELD_SELF_TEXT: &str = "&";
+/// `fields` value prefix meaning "an attribute/property of the matched item itself".
+const FIELD_ATTRIBUTE_PREFIX: char = '@';
+
+/// JS expression (evaluated with `item` in scope) for one `fields` entry. Neither `&` nor an
+/// `@`-prefixed string is a valid CSS selector, so these forms never collide with child selectors.
+fn field_value_js(spec: &str) -> String {
+    if spec == FIELD_SELF_TEXT {
+        return "(item.innerText || item.textContent || '').trim()".to_string();
+    }
+    if let Some(attr) = spec.strip_prefix(FIELD_ATTRIBUTE_PREFIX) {
+        return if is_dom_property(attr) {
+            format!("(item.{attr} ?? null)")
+        } else {
+            let attr_json = serde_json::to_string(attr).unwrap_or_else(|_| "\"\"".to_string());
+            format!("item.getAttribute({attr_json})")
+        };
+    }
+    let sel_json = serde_json::to_string(spec).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        "(() => {{ const f = item.querySelector({sel_json}); \
+         return f ? (f.innerText || f.textContent || '').trim() : null; }})()"
+    )
 }
 
 fn parse_fields_map(value: &Value) -> Result<HashMap<String, String>, ExtractionRuleError> {
@@ -186,6 +207,11 @@ fn parse_fields_map(value: &Value) -> Result<HashMap<String, String>, Extraction
                 ))
             })?
             .to_string();
+        if selector.strip_prefix(FIELD_ATTRIBUTE_PREFIX) == Some("") {
+            return Err(ExtractionRuleError::InvalidFormat(format!(
+                "field '{key}' uses '@' without an attribute name"
+            )));
+        }
         map.insert(key.clone(), selector);
     }
     Ok(map)
@@ -210,9 +236,49 @@ pub struct SchemaRegistry {
     rules: HashMap<String, ExtractionRule>,
 }
 
+/// Names of the rules [`SchemaRegistry::with_builtin_rules`] registers, in registration order.
+pub const BUILTIN_RULE_NAMES: [&str; 4] =
+    ["page_title", "all_links", "meta_description", "headings"];
+
+fn builtin_rule_definitions() -> [(&'static str, Value); 4] {
+    [
+        ("page_title", json!({ "selector": "title" })),
+        (
+            "all_links",
+            json!({ "items": {
+                "selector": "a[href]",
+                "fields": { "text": FIELD_SELF_TEXT, "href": "@href" }
+            }}),
+        ),
+        (
+            "meta_description",
+            json!({ "selector": "meta[name=description]", "attribute": "content" }),
+        ),
+        (
+            "headings",
+            json!({ "items": {
+                "selector": "h1,h2,h3,h4,h5,h6",
+                "fields": { "level": "@tagName", "text": FIELD_SELF_TEXT }
+            }}),
+        ),
+    ]
+}
+
 impl SchemaRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A registry pre-populated with the always-available rules in [`BUILTIN_RULE_NAMES`]
+    /// (ISSUE-259). Their names are reserved: `register` rejects them as duplicates.
+    pub fn with_builtin_rules() -> Self {
+        let mut registry = Self::new();
+        for (name, definition) in builtin_rule_definitions() {
+            registry
+                .register(name, &definition)
+                .expect("built-in extraction rule definitions are valid");
+        }
+        registry
     }
 
     /// Parse and register an extraction rule from a JSON value.
@@ -276,6 +342,108 @@ fn discover_golden_fixtures() -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // --- built-in rules and "&" / "@attr" field specs (ISSUE-259) ---
+
+    #[test]
+    fn builtin_registry_contains_the_documented_rule_names() {
+        let registry = SchemaRegistry::with_builtin_rules();
+        for name in BUILTIN_RULE_NAMES {
+            assert!(registry.get(name).is_some(), "missing built-in '{name}'");
+        }
+        assert_eq!(registry.len(), BUILTIN_RULE_NAMES.len());
+        assert_eq!(
+            BUILTIN_RULE_NAMES,
+            ["page_title", "all_links", "meta_description", "headings"]
+        );
+    }
+
+    #[test]
+    fn builtin_rules_reserve_their_names() {
+        let mut registry = SchemaRegistry::with_builtin_rules();
+        let err = registry
+            .register("page_title", &json!({ "selector": "h1" }))
+            .unwrap_err();
+        assert_eq!(err, ExtractionRuleError::DuplicateRule("page_title".into()));
+    }
+
+    #[test]
+    fn builtin_meta_description_reads_the_content_attribute() {
+        let rule = SchemaRegistry::with_builtin_rules()
+            .get("meta_description")
+            .unwrap()
+            .clone();
+        let script = rule.to_js_script();
+        assert!(script.contains("meta[name=description]"), "{script}");
+        assert!(script.contains("getAttribute(\"content\")"), "{script}");
+    }
+
+    #[test]
+    fn field_ampersand_reads_the_item_text_itself() {
+        let rule = ExtractionRule::from_value(
+            "links",
+            &json!({ "items": { "selector": "a", "fields": { "text": "&" } } }),
+        )
+        .unwrap();
+        let script = rule.to_js_script();
+        assert!(
+            script.contains("\"text\": (item.innerText || item.textContent || '').trim()"),
+            "{script}"
+        );
+        assert!(!script.contains("querySelector(\"&\")"), "{script}");
+    }
+
+    #[test]
+    fn field_at_attribute_reads_the_item_attribute() {
+        let rule = ExtractionRule::from_value(
+            "links",
+            &json!({ "items": { "selector": "a", "fields": { "href": "@href" } } }),
+        )
+        .unwrap();
+        assert!(
+            rule.to_js_script()
+                .contains("\"href\": item.getAttribute(\"href\")")
+        );
+    }
+
+    #[test]
+    fn field_at_dom_property_reads_the_item_property_coalescing_undefined() {
+        let rule = ExtractionRule::from_value(
+            "h",
+            &json!({ "items": { "selector": "h1", "fields": { "level": "@tagName" } } }),
+        )
+        .unwrap();
+        assert!(
+            rule.to_js_script()
+                .contains("\"level\": (item.tagName ?? null)")
+        );
+    }
+
+    #[test]
+    fn rejects_field_with_empty_attribute_name() {
+        let err = ExtractionRule::from_value(
+            "bad",
+            &json!({ "items": { "selector": "a", "fields": { "x": "@" } } }),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ExtractionRuleError::InvalidFormat(_)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn plain_field_selectors_still_use_child_query_selector() {
+        let rule = ExtractionRule::from_value(
+            "p",
+            &json!({ "items": { "selector": ".row", "fields": { "n": ".name" } } }),
+        )
+        .unwrap();
+        assert!(
+            rule.to_js_script()
+                .contains("item.querySelector(\".name\")")
+        );
+    }
 
     // --- ExtractionRule::from_value ---
 
