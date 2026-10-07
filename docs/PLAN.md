@@ -681,6 +681,10 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `errors`（`SelectorNoMatch` / `AttributeNotFound`、field名または `$selector` をkey）を付与する。
 > `debug: true` で生成JSを `script` に返す。正常系の出力は不変（`errors` は空でない時のみ）。
 
+> **Follow-up (ISSUE-258, done)**: エージェント向け `docs/AGENTS_EXTRACT.md` を追加した（3モード、よくある間違い、
+> `get_state` → selector → `extract` の発見手順、`errors`/`debug` の読み方、組み込みルール）。記載した出力例と
+> エラー文言は実ブラウザで確認した値。SPEC §4.3 / §5.2 の `fields` 記法と `debug` も同期した。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。
