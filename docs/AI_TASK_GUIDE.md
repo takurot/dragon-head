@@ -31,7 +31,7 @@ AIコーディングエージェントがこのリポジトリで作業する際
 
 ### 新規 MCP ツールまたはツール契約変更
 
-1. `mcp-server/src/lib.rs` の既存 tool 定義、dispatch、input schema を確認する。
+1. `mcp-server/src/server.rs`（tool 定義・dispatch）、`schemas.rs`（input schema）、`backend_tools.rs`（実装）の既存 tool を確認する。
 2. `mcp-server/tests/mcp_*` の契約テストを更新する。
 3. `README.md` の Available MCP Tools、`docs/ARCHITECTURE.md`、
    `docs/AI_CONTEXT.md` を更新する。

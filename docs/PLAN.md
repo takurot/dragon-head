@@ -685,6 +685,18 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `get_state` → selector → `extract` の発見手順、`errors`/`debug` の読み方、組み込みルール）。記載した出力例と
 > エラー文言は実ブラウザで確認した値。SPEC §4.3 / §5.2 の `fields` 記法と `debug` も同期した。
 
+> **Follow-up (ISSUE-202, partially done)**: 挙動不変の純粋な移動で `mcp-server/src/lib.rs`（4.9k行）を約270行の
+> facade（`McpBackend`/`McpServer`/`CoreRuntimeBackend`定義と再エクスポート）にし、実装を `server` / `backend` /
+> `backend_tools` / `skill_runtime` / `tool_args` / `speculative_state` / `schemas` / `extract` / `convert` /
+> `tests` へ分割した。`core-runtime/src/browser/mod.rs`（3.7k行）は約400行になり、`impl PageSession` を
+> `act` / `policy` / `audit` / `capture` / `visual` / `page_navigation` / `vault`、`BrowserClient` を `client`、
+> redirect傍受を `navigation_policy` へ分割した。`act()` は `act_by_target_id` / `act_by_stable_key` /
+> `fail_unresolved_act` に分解し、承認は `PageSession::approve_pending_policy_request`（承認した“そのrequest”を返す
+> 単一call）に集約して `ask_human` の read-then-approve のTOCTOUを除いた。lib/テスト件数は移動前後で同一
+> （mcp-server lib 184、core-runtime lib 245）。**残課題（別Issue）**: `PageSession` のpublic面（60+ method）の縮小、
+> `navigate_public`（約210行）の分解、`mcp-server/src/tests.rs`（約1.9k行・テストのみ）と `config.rs`（約2.1k行）の
+> 分割。`capture_next_state_if_changed` はIssue起票後に既に小さくなっていたため対象外。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。

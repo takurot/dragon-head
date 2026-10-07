@@ -38,7 +38,7 @@ core-runtime = { path = "...", features = ["session-vault-api"] }
 already exercises both methods — no extra flags needed for the existing regression tests:
 `core-runtime/tests/session_management.rs`, `core-runtime/tests/comprehensive_evaluation.rs`
 (both call `BrowserClient::new_with_vault` directly), and the in-lib
-`#[tokio::test] test_session_vault_save_load` in `core-runtime/src/browser/mod.rs`.
+`#[tokio::test] test_session_vault_save_load` in `core-runtime/src/browser/browser_tests.rs`.
 
 **Feature-unification caveat**: with Cargo's default resolver, a dev-dependency's requested
 features are unified onto the single in-process `core-runtime` build for the whole invocation —

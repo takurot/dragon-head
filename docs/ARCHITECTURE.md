@@ -145,7 +145,7 @@ OS/container-level egress policy.
 
 | Boundary | Mechanism | File |
 |---|---|---|
-| Chrome/Chromium | CDP over websocket (`headless_chrome` crate) | `core-runtime/src/browser.rs` |
+| Chrome/Chromium | CDP over websocket (`headless_chrome` crate) | `core-runtime/src/browser/` |
 | Audit log files | NDJSON, rotated by size | `core-runtime/src/audit_sink.rs` (`RollingFileSink`) |
 | Audit webhook | HTTP POST per event | `core-runtime/src/audit_sink.rs` (`WebhookSink`) |
 | Slack/Teams HITL | Inbound HTTP webhook, HMAC-verified | `hitl-bridge/src/server.rs` |
@@ -181,15 +181,15 @@ OS/container-level egress policy.
   `skill_schema_compatibility.rs`) define the compatibility contract.
 - New audit sinks (`core-runtime/src/audit_sink.rs`) — implement the sink
   trait alongside `RollingFileSink`/`WebhookSink`.
-- New MCP tools — register in `mcp-server/src/lib.rs`'s tool list + dispatch
-  match; contract tests in `mcp-server/tests/mcp_protocol_compliance.rs` and
+- New MCP tools — register in `mcp-server/src/server.rs`'s tool list + dispatch
+  match (input schema in `schemas.rs`, handler in `backend_tools.rs`); contract tests in `mcp-server/tests/mcp_protocol_compliance.rs` and
   `mcp_client_contract.rs` will need matching fixtures.
 
 ## Easy to break
 
 - `stable_key` generation (`core-runtime/src/sre/stable_key.rs`) — any change
   changes element identity for every existing agent integration.
-- The audit-before-policy-before-execution ordering in `browser.rs::act` — a
+- The audit-before-policy-before-execution ordering in `core-runtime/src/browser/act.rs::act` — a
   refactor that reorders these silently weakens the audit guarantee.
 - `SpeculativeEngine` cache invalidation — a stale-but-served prediction
   means an agent acts on data that no longer matches the page.

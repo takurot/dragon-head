@@ -15,7 +15,7 @@ human approval, run declarative skills, extract structured data, and inspect
 usage meters.
 
 The current MCP tool contract has 9 tools, defined in `McpServer::tools()` in
-`mcp-server/src/lib.rs`:
+`mcp-server/src/server.rs`:
 
 <!-- mcp-tool-list:start -->
 - `get_state`
@@ -112,7 +112,7 @@ There is no `just build` recipe in the current `Justfile`; use `cargo build`.
 ## High Blast-Radius Areas
 
 - `core-runtime/src/sre/stable_key.rs`
-- `core-runtime/src/browser.rs`
+- `core-runtime/src/browser/`
 - `core-runtime/src/speculative/`
 - `core-runtime/src/prompt_injection.rs`
 - `.config/nextest.toml`
