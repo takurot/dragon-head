@@ -1,4 +1,5 @@
 use super::*;
+use std::ops::ControlFlow;
 
 impl PageSession {
     /// Resolve the element bounding box `[x, y, width, height]` from a backend node id.
@@ -90,110 +91,143 @@ impl PageSession {
 
         self.enforce_policy(target_id, stable_key, action)?;
 
-        // First attempt: use target_id if available
         if let Some(bid) = target_id {
-            match self.perform_action_by_id(bid, action, value) {
-                Ok(_) => {
-                    // Seed the DOMSignatureCache so future stale-key recovery can use it.
-                    if let Some(key) = stable_key {
-                        self.record_dom_signature_for_node_id(key, bid);
-                    }
-                    return Ok(());
-                }
-                Err(e) => {
-                    // Only fallback if the error indicates a node issue (e.g. "Could not find node", "No node with given id")
-                    // If it's a timeout or other error, we probably shouldn't blindly retry?
-                    // The CDP error for invalid backend_node_id usually says "Could not find node with given id".
-                    let node_error_markers = [
-                        "could not find node",
-                        "no node with given id",
-                        "could not find object with given id",
-                        "no object with given id",
-                        "node does not exist",
-                    ];
-                    let is_node_error = error_chain_contains_any(&e, &node_error_markers);
-
-                    if !is_node_error {
-                        return Err(e);
-                    }
-
-                    if stable_key.is_none() {
-                        self.record_action_log(
-                            "error",
-                            "verify_required",
-                            action,
-                            target_id,
-                            stable_key,
-                            "target_id lookup failed and no stable_key was provided",
-                        );
-                        self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
-                        return Err(ActionError::VerifyRequired.into());
-                    }
-                    // Fallback proceed...
-                }
+            if let ControlFlow::Break(result) =
+                self.act_by_target_id(bid, stable_key, action, value)
+            {
+                return result;
             }
         }
 
-        // Fallback: use stable_key
         if let Some(key) = stable_key {
-            // Refresh semantic snapshot and stable-key index before lookup.
-            self.capture_state(crate::sre::LoadProfile::Interactive)?;
+            return self.act_by_stable_key(key, target_id, action, value);
+        }
 
-            if let Some(new_id) = self.lookup_backend_node_id_by_stable_key(key) {
-                self.record_action_log(
-                    "warning",
-                    "stable_key_fallback_recovered",
-                    action,
-                    target_id,
-                    stable_key,
-                    &format!("Action recovered via stable key: {key} -> new_id: {new_id}"),
-                );
-                // Record a fresh signature for the successfully located node.
-                self.record_dom_signature_for_node_id(key, new_id);
-                return self.perform_action_by_id(new_id, action, value);
+        self.fail_unresolved_act(
+            action,
+            target_id,
+            stable_key,
+            "neither target_id nor stable_key resolved a target",
+        )
+    }
+
+    /// First `act` attempt, using the caller's `target_id`. `Break` carries the final result
+    /// (success, a non-node error, or an unresolved target with no `stable_key` to fall back
+    /// on); `Continue` means the node was stale and the `stable_key` fallback should run.
+    fn act_by_target_id(
+        &self,
+        bid: i64,
+        stable_key: Option<&str>,
+        action: &str,
+        value: Option<&str>,
+    ) -> ControlFlow<Result<()>> {
+        match self.perform_action_by_id(bid, action, value) {
+            Ok(_) => {
+                // Seed the DOMSignatureCache so future stale-key recovery can use it.
+                if let Some(key) = stable_key {
+                    self.record_dom_signature_for_node_id(key, bid);
+                }
+                ControlFlow::Break(Ok(()))
             }
+            Err(e) => {
+                // Only fallback if the error indicates a node issue (e.g. "Could not find node", "No node with given id")
+                // If it's a timeout or other error, we probably shouldn't blindly retry?
+                // The CDP error for invalid backend_node_id usually says "Could not find node with given id".
+                let node_error_markers = [
+                    "could not find node",
+                    "no node with given id",
+                    "could not find object with given id",
+                    "no object with given id",
+                    "node does not exist",
+                ];
+                if !error_chain_contains_any(&e, &node_error_markers) {
+                    return ControlFlow::Break(Err(e));
+                }
 
-            // Both target_id and stable_key lookup failed →
-            // attempt Self-Healing Context Recovery (PR-21).
-            if let Some(recovered_id) = self.try_self_healing_recovery(key) {
-                // Re-enforce policy against the recovered node so target-text /
-                // surrounding-context rules are evaluated on the actual target.
-                self.enforce_policy(Some(recovered_id), Some(key), action)?;
-                return self.perform_action_by_id(recovered_id, action, value);
+                if stable_key.is_none() {
+                    return ControlFlow::Break(self.fail_unresolved_act(
+                        action,
+                        Some(bid),
+                        stable_key,
+                        "target_id lookup failed and no stable_key was provided",
+                    ));
+                }
+                ControlFlow::Continue(())
             }
+        }
+    }
 
-            // Recovery failed → AskHumanRequired fallback.
+    /// `act` fallback when `target_id` was missing or stale: re-resolve by `stable_key`, then by
+    /// self-healing recovery (PR-21), and finally ask a human.
+    fn act_by_stable_key(
+        &self,
+        key: &str,
+        target_id: Option<i64>,
+        action: &str,
+        value: Option<&str>,
+    ) -> Result<()> {
+        // Refresh semantic snapshot and stable-key index before lookup.
+        self.capture_state(crate::sre::LoadProfile::Interactive)?;
+
+        if let Some(new_id) = self.lookup_backend_node_id_by_stable_key(key) {
             self.record_action_log(
-                "error",
-                "ask_human_required",
+                "warning",
+                "stable_key_fallback_recovered",
                 action,
                 target_id,
-                stable_key,
-                &format!(
-                    "Self-healing recovery failed for stable_key={key}; human intervention required"
-                ),
+                Some(key),
+                &format!("Action recovered via stable key: {key} -> new_id: {new_id}"),
             );
-            self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
-            return Err(ActionError::AskHumanRequired {
-                reason: format!(
-                    "target_id and stable_key both failed for key={key}; \
-                     self-healing found no confident match"
-                ),
-            }
-            .into());
+            // Record a fresh signature for the successfully located node.
+            self.record_dom_signature_for_node_id(key, new_id);
+            return self.perform_action_by_id(new_id, action, value);
         }
 
-        // If we reach here, we had no stable key or it failed lookup, and target_id failed or wasn't provided.
-        // Actually, if stable_key was None, we would have returned early in the target_id block if target_id was Some.
-        // If target_id was None AND stable_key was None, we should also error.
+        // Both target_id and stable_key lookup failed →
+        // attempt Self-Healing Context Recovery (PR-21).
+        if let Some(recovered_id) = self.try_self_healing_recovery(key) {
+            // Re-enforce policy against the recovered node so target-text /
+            // surrounding-context rules are evaluated on the actual target.
+            self.enforce_policy(Some(recovered_id), Some(key), action)?;
+            return self.perform_action_by_id(recovered_id, action, value);
+        }
 
+        // Recovery failed → AskHumanRequired fallback.
+        self.record_action_log(
+            "error",
+            "ask_human_required",
+            action,
+            target_id,
+            Some(key),
+            &format!(
+                "Self-healing recovery failed for stable_key={key}; human intervention required"
+            ),
+        );
+        self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
+        Err(ActionError::AskHumanRequired {
+            reason: format!(
+                "target_id and stable_key both failed for key={key}; \
+                 self-healing found no confident match"
+            ),
+        }
+        .into())
+    }
+
+    /// Logs and returns `VerifyRequired` for an `act` whose target could not be resolved.
+    fn fail_unresolved_act(
+        &self,
+        action: &str,
+        target_id: Option<i64>,
+        stable_key: Option<&str>,
+        detail: &str,
+    ) -> Result<()> {
         self.record_action_log(
             "error",
             "verify_required",
             action,
             target_id,
             stable_key,
-            "neither target_id nor stable_key resolved a target",
+            detail,
         );
         self.trigger_som_capture_best_effort(SomTrigger::ActAmbiguous);
         Err(ActionError::VerifyRequired.into())

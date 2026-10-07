@@ -57,6 +57,56 @@ fn test_block_rule_prevents_action_execution() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_approve_pending_policy_request_returns_the_approved_request_or_none() -> anyhow::Result<()>
+{
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+    page.set_policy_rules(vec![PolicyRule {
+        id: "approve-pay".to_string(),
+        domain: None,
+        path_prefix: None,
+        role: Some("button".to_string()),
+        text_regex: Some("(?i)pay".to_string()),
+        context_regex: None,
+        action: PolicyAction::RequireHumanApproval,
+        scope: Some(ApprovalScope::ActionOnly),
+        outcome_projector: None,
+    }])?;
+    let html = r#"<html><body><button id="pay">Pay</button></body></html>"#;
+    page.navigate(&format!("data:text/html,{}", urlencoding::encode(html)))?;
+    let (target_id, target_key) = find_button_info(&page)?;
+
+    assert!(
+        page.approve_pending_policy_request()?.is_none(),
+        "nothing is pending before an action is blocked"
+    );
+
+    page.act(Some(target_id), Some(&target_key), "click", None)
+        .expect_err("approval should be required first");
+    let pending = page
+        .pending_policy_approval()
+        .expect("blocked action leaves a pending request");
+
+    let approved = page.approve_pending_policy_request()?;
+    assert_eq!(
+        approved,
+        Some(pending),
+        "returns exactly the approved request"
+    );
+    assert!(page.pending_policy_approval().is_none());
+    assert!(
+        page.approve_pending_policy_request()?.is_none(),
+        "a second call has nothing left to approve"
+    );
+    page.act(Some(target_id), Some(&target_key), "click", None)?;
+    Ok(())
+}
+
+#[test]
 fn test_action_only_approval_scope_expires_after_single_use() -> anyhow::Result<()> {
     if test_bench_support::should_skip_browser_tests() {
         return Ok(());

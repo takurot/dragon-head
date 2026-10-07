@@ -40,15 +40,21 @@ impl PageSession {
             .and_then(|state| state.pending.clone())
     }
 
-    /// Approve the latest pending policy request.
-    pub fn approve_pending_policy_action(&self) -> Result<()> {
+    /// Approve the latest pending policy request and return exactly the request that was
+    /// approved, or `None` when nothing is pending.
+    ///
+    /// Callers that report on or log the approval should use the returned request instead of
+    /// reading [`pending_policy_approval`](Self::pending_policy_approval) first: between the two
+    /// calls the pending request could be replaced, so the report would describe a different
+    /// request from the one that was granted.
+    pub fn approve_pending_policy_request(&self) -> Result<Option<PolicyApprovalRequest>> {
         let guard = self
             .policy_approvals
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
 
         let Some(request) = guard.pending.clone() else {
-            anyhow::bail!("No pending policy approval request");
+            return Ok(None);
         };
 
         // Drop the lock before calling current_url() to avoid potential deadlock.
@@ -72,14 +78,25 @@ impl PageSession {
         }
         guard.pending = None;
         guard.granted.push(GrantedPolicyApproval {
-            request,
+            request: request.clone(),
             granted_navigation_epoch,
             granted_url,
             expires_at_epoch_ms,
             remaining_uses,
         });
 
-        Ok(())
+        Ok(Some(request))
+    }
+
+    /// Approve the latest pending policy request.
+    ///
+    /// Errors when nothing is pending; see
+    /// [`approve_pending_policy_request`](Self::approve_pending_policy_request) to also get the
+    /// approved request back.
+    pub fn approve_pending_policy_action(&self) -> Result<()> {
+        self.approve_pending_policy_request()?
+            .map(|_| ())
+            .ok_or_else(|| anyhow::anyhow!("No pending policy approval request"))
     }
 
     /// Reject the latest pending policy request.

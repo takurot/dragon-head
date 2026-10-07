@@ -289,15 +289,14 @@ impl McpBackend for CoreRuntimeBackend {
         let args: AskHumanArguments =
             serde_json::from_value(arguments).context("invalid ask_human arguments")?;
 
-        let Some(pending) = self.page.pending_policy_approval() else {
+        // One atomic call: the payload below describes exactly the request that was granted.
+        let Some(pending) = self.page.approve_pending_policy_request()? else {
             return Ok(json!({
                 "approved": false,
                 "reason": args.reason,
                 "pending": false
             }));
         };
-
-        self.page.approve_pending_policy_action()?;
 
         let mut payload = json!({
             "approved": true,
