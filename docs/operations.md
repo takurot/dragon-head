@@ -56,6 +56,17 @@ Validate detection with:
 dragon-head-mcp --doctor
 ```
 
+For a full local readiness check (doctor checks, server startup, and the
+`initialize` / `tools/list` / `get_usage_report` JSON-RPC calls) run:
+
+```bash
+dragon-head-mcp --self-test
+```
+
+It prints a PASS/FAIL summary (server version, negotiated protocol version, tool
+names, plan tier) and exits non-zero on failure. Use it for release checks and
+first-line support instead of piping hand-written JSON-RPC into the server.
+
 Common failures:
 
 | Symptom | Check |

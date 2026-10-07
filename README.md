@@ -146,6 +146,35 @@ summary of the resolved settings, e.g.:
 A malformed file or an invalid `prompt_injection.mode` makes this check fail
 (`✗`), and `--doctor` exits non-zero.
 
+### Self-test
+
+`--self-test` goes one step further than `--doctor`: it runs the same checks, starts
+the real server (config, plugins, Chrome, policy, skills), and drives its JSON-RPC
+handler through `initialize`, `tools/list` and `get_usage_report`, so you do not
+have to hand-craft stdin lines. Use it after installing or upgrading, in release
+checks, and when a client reports that the server will not start.
+
+```bash
+dragon-head-mcp --self-test
+```
+
+```text
+dragon-head-mcp self-test
+  ✓ Chrome/Chromium: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  ℹ Config file: /Users/you/.config/dragon-head/config.toml (not found — defaults will be used)
+  ✓ MCP server startup: server started
+  ✓ initialize: server dragon-head-mcp 0.4.0, protocol 2025-11-25
+  ✓ tools/list: 9 tools (navigate, get_state, act, ...)
+  ✓ get_usage_report: plan tier enterprise
+
+Self-test: PASS
+```
+
+It exits non-zero (`Self-test: FAIL`) on any Chrome, config, startup or protocol
+failure. It launches a throwaway browser, loads configured plugins and skills, and may
+create the configured audit log directory; it does not navigate, and it skips the
+embedded HITL bridge so it is safe to run next to a live server. Server logs go to stderr, the report to stdout.
+
 If Chrome is not found, install it or set `CHROME_PATH`:
 
 ```bash
