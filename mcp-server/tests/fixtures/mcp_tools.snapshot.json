@@ -151,6 +151,10 @@
         }
       ],
       "properties": {
+        "debug": {
+          "description": "Also return the generated JavaScript as `script` for debugging a rule",
+          "type": "boolean"
+        },
         "inline": {
           "description": "Inline Deep Lens DSL rule",
           "oneOf": [

@@ -94,6 +94,85 @@ impl ExtractionRule {
         })
     }
 
+    /// [`Self::to_js_script`] wrapped so a thrown JS exception (e.g. an invalid CSS selector)
+    /// comes back as `{ ok: false, error }` instead of being swallowed by the CDP evaluation,
+    /// which otherwise reports only "did not return a value". Success is `{ ok: true, value }`.
+    pub fn to_js_checked_script(&self) -> String {
+        format!(
+            "(() => {{ try {{ return {{ ok: true, value: {} }}; }} catch (e) {{ \
+             return {{ ok: false, error: String((e && e.message) || e) }}; }} }})()",
+            self.to_js_script()
+        )
+    }
+
+    /// JavaScript IIFE returning `{ [key]: "<Category>: <message>" }` explaining why the rule
+    /// matched nothing. Categories: `SelectorNoMatch`, `AttributeNotFound`. Keys are field names,
+    /// or [`DIAGNOSTIC_RULE_KEY`] for the rule's own selector. Messages contain only the rule's
+    /// selectors/attribute names and counts, never page content. An empty object means the
+    /// rule has no detectable selector/attribute problem.
+    pub fn to_js_diagnostics_script(&self) -> String {
+        let rule_key = json_str(DIAGNOSTIC_RULE_KEY);
+        match &self.mode {
+            ExtractionMode::Single {
+                selector,
+                attribute,
+            } => {
+                let sel_json = json_str(selector);
+                let no_match = json_str(&format!(
+                    "SelectorNoMatch: No elements matched selector '{selector}'"
+                ));
+                let attr_check = match attribute.as_deref() {
+                    None | Some("text") => String::new(),
+                    Some(attr) if is_dom_property(attr) => String::new(),
+                    Some(attr) => {
+                        let attr_json = json_str(attr);
+                        let missing = json_str(&format!(
+                            "AttributeNotFound: Element matched selector '{selector}' has no attribute '{attr}'"
+                        ));
+                        format!(
+                            " else if (!el.hasAttribute({attr_json})) {{ errors[{rule_key}] = {missing}; }}"
+                        )
+                    }
+                };
+                format!(
+                    "(() => {{ const errors = {{}}; const el = document.querySelector({sel_json}); \
+                     if (!el) {{ errors[{rule_key}] = {no_match}; }}{attr_check} return errors; }})()"
+                )
+            }
+            ExtractionMode::Structured { selector, fields } => {
+                let sel_json = json_str(selector);
+                let no_match = json_str(&format!(
+                    "SelectorNoMatch: No elements matched selector '{selector}'"
+                ));
+
+                let mut sorted_fields: Vec<(&String, &String)> = fields.iter().collect();
+                sorted_fields.sort_by_key(|(key, _)| key.as_str());
+
+                let checks: String = sorted_fields
+                    .into_iter()
+                    .filter_map(|(key, spec)| {
+                        let (present, message) = field_presence(spec)?;
+                        let key_json = json_str(key);
+                        let message_json = json_str(&message);
+                        Some(format!(
+                            "{{ const miss = items.filter(item => !({present})).length; \
+                             if (miss > 0) {{ errors[{key_json}] = {message_json} + ' within ' + \
+                             (miss === items.length ? 'all ' + miss : miss + ' of ' + items.length) \
+                             + ' items'; }} }} "
+                        ))
+                    })
+                    .collect();
+
+                format!(
+                    "(() => {{ const errors = {{}}; \
+                     const items = Array.from(document.querySelectorAll({sel_json})); \
+                     if (items.length === 0) {{ errors[{rule_key}] = {no_match}; return errors; }} \
+                     {checks}return errors; }})()"
+                )
+            }
+        }
+    }
+
     /// Generate a JavaScript IIFE that extracts data from the DOM.
     /// Returns JSON-serializable output: a string for Single mode, an array of objects for Structured.
     pub fn to_js_script(&self) -> String {
@@ -152,6 +231,14 @@ impl ExtractionRule {
     }
 }
 
+/// Key used in diagnostics for a problem with the rule's own (top-level) selector rather than a
+/// named field.
+pub const DIAGNOSTIC_RULE_KEY: &str = "$selector";
+
+fn json_str(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
 /// DOM properties that must be accessed via `.propName`, not `.getAttribute("propName")` —
 /// `getAttribute` only reads the HTML attribute string and returns null/stale values for
 /// these, since they reflect live JS-side element state.
@@ -163,6 +250,27 @@ fn is_dom_property(attr: &str) -> bool {
 const FIELD_SELF_TEXT: &str = "&";
 /// `fields` value prefix meaning "an attribute/property of the matched item itself".
 const FIELD_ATTRIBUTE_PREFIX: char = '@';
+
+/// For a `fields` entry that can fail to resolve, a JS boolean expression ("this item has it",
+/// with `item` in scope) and the diagnostic message used when it does not. `None` for the
+/// self-text form (`&`), which always resolves.
+fn field_presence(spec: &str) -> Option<(String, String)> {
+    if spec == FIELD_SELF_TEXT {
+        return None;
+    }
+    if let Some(attr) = spec.strip_prefix(FIELD_ATTRIBUTE_PREFIX) {
+        let present = if is_dom_property(attr) {
+            format!("(item.{attr} ?? null) !== null")
+        } else {
+            format!("item.hasAttribute({})", json_str(attr))
+        };
+        return Some((present, format!("AttributeNotFound: No attribute '{attr}'")));
+    }
+    Some((
+        format!("item.querySelector({})", json_str(spec)),
+        format!("SelectorNoMatch: No elements matched selector '{spec}'"),
+    ))
+}
 
 /// JS expression (evaluated with `item` in scope) for one `fields` entry. Neither `&` nor an
 /// `@`-prefixed string is a valid CSS selector, so these forms never collide with child selectors.
@@ -442,6 +550,81 @@ mod tests {
         assert!(
             rule.to_js_script()
                 .contains("item.querySelector(\".name\")")
+        );
+    }
+
+    // --- diagnostics (ISSUE-257) ---
+
+    fn single_rule(attribute: Option<&str>) -> ExtractionRule {
+        let value = match attribute {
+            Some(a) => json!({ "selector": ".x", "attribute": a }),
+            None => json!({ "selector": ".x" }),
+        };
+        ExtractionRule::from_value("r", &value).unwrap()
+    }
+
+    fn items_rule() -> ExtractionRule {
+        ExtractionRule::from_value(
+            "r",
+            &json!({ "items": { "selector": ".row", "fields": {
+                "name": ".name", "self": "&", "href": "@href"
+            }}}),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn checked_script_wraps_the_plain_script_in_a_catching_envelope() {
+        let rule = single_rule(None);
+        let checked = rule.to_js_checked_script();
+        assert!(checked.contains("try {"), "{checked}");
+        assert!(checked.contains("catch (e)"), "{checked}");
+        assert!(checked.contains("ok: true, value"), "{checked}");
+        assert!(checked.contains(&rule.to_js_script()), "{checked}");
+    }
+
+    #[test]
+    fn single_diagnostics_report_selector_and_attribute_categories() {
+        let script = single_rule(Some("data-id")).to_js_diagnostics_script();
+        assert!(
+            script.contains("SelectorNoMatch: No elements matched selector '.x'"),
+            "{script}"
+        );
+        assert!(script.contains("AttributeNotFound"), "{script}");
+        assert!(script.contains("hasAttribute(\"data-id\")"), "{script}");
+    }
+
+    #[test]
+    fn single_diagnostics_skip_attribute_check_for_text_and_dom_properties() {
+        for attr in [None, Some("text"), Some("value")] {
+            let script = single_rule(attr).to_js_diagnostics_script();
+            assert!(!script.contains("AttributeNotFound"), "{attr:?}: {script}");
+        }
+    }
+
+    #[test]
+    fn structured_diagnostics_cover_each_field_kind_except_self_text() {
+        let script = items_rule().to_js_diagnostics_script();
+        assert!(
+            script.contains("SelectorNoMatch: No elements matched selector '.row'"),
+            "{script}"
+        );
+        assert!(script.contains("\"name\""), "{script}");
+        assert!(script.contains("\"href\""), "{script}");
+        assert!(
+            !script.contains("\"self\""),
+            "self-text field cannot fail: {script}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_scripts_escape_selectors_as_json_strings() {
+        let rule =
+            ExtractionRule::from_value("r", &json!({ "selector": "a[title=\"x'y\"]" })).unwrap();
+        let script = rule.to_js_diagnostics_script();
+        assert!(
+            script.contains(r#"querySelector("a[title=\"x'y\"]")"#),
+            "{script}"
         );
     }
 
