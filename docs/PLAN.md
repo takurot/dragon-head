@@ -676,6 +676,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `all_links` / `headings` を表現するため、DSLの `fields` 値に `"&"`（itemの自テキスト）と `"@attr"`
 > （itemの属性/プロパティ）を後方互換で追加した。実ブラウザの統合testで4ルールの出力を固定した。
 
+> **Follow-up (ISSUE-257, done)**: `extract` の失敗診断を改善した。JS例外（不正selector等）はtry/catchで
+> 捕捉して `ScriptEvalError: <原因>` として返す。結果がnull/空/一部null のときだけ診断scriptを追加実行し、
+> `errors`（`SelectorNoMatch` / `AttributeNotFound`、field名または `$selector` をkey）を付与する。
+> `debug: true` で生成JSを `script` に返す。正常系の出力は不変（`errors` は空でない時のみ）。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。

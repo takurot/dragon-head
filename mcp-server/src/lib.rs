@@ -1172,6 +1172,19 @@ impl CoreRuntimeBackend {
         self.reset_navigation_state();
     }
 
+    /// Best-effort explanation of why `rule` produced a null/empty/partial result. A failure of
+    /// the diagnostics script itself must never mask the extraction result, so it yields no
+    /// entries.
+    fn diagnose_extraction(&self, rule: &ExtractionRule) -> serde_json::Map<String, Value> {
+        match self
+            .page
+            .evaluate_script_json(&rule.to_js_diagnostics_script())
+        {
+            Ok(Value::Object(map)) => map,
+            Ok(_) | Err(_) => serde_json::Map::new(),
+        }
+    }
+
     pub fn register_extraction_rule(&mut self, name: &str, value: &Value) -> Result<()> {
         self.schema_registry
             .register(name, value)
@@ -1899,24 +1912,39 @@ impl McpBackend for CoreRuntimeBackend {
             }
         };
 
-        let script = rule.to_js_script();
         // Use evaluate_script_json so arrays and objects are fully deserialized
-        // (return_by_value: true), not returned as opaque remote handles.
-        let raw_value = self
+        // (return_by_value: true), not returned as opaque remote handles. The checked script
+        // surfaces JS exceptions (e.g. an invalid selector) that CDP would otherwise swallow.
+        let envelope = self
             .page
-            .evaluate_script_json(&script)
-            .context("extraction script evaluation failed")?;
+            .evaluate_script_json(&rule.to_js_checked_script())
+            .map_err(|err| {
+                anyhow::anyhow!("ScriptEvalError: extraction script evaluation failed: {err:#}")
+            })?;
+        let raw_value = unwrap_extraction_envelope(envelope)?;
+        let errors = if extraction_result_has_gaps(&raw_value) {
+            self.diagnose_extraction(&rule)
+        } else {
+            serde_json::Map::new()
+        };
 
         let (sanitized, security_flags) = self.injection_sanitizer.sanitize_json_value(raw_value);
 
         // Apply PII redaction before returning extracted content to the caller.
         let redacted = core_runtime::privacy::global().redact_json(&sanitized);
 
-        Ok(json!({
+        let mut response = json!({
             "rule": rule.name,
             "result": redacted,
             "security_flags": security_flags
-        }))
+        });
+        if !errors.is_empty() {
+            response["errors"] = Value::Object(errors);
+        }
+        if args.debug {
+            response["script"] = Value::String(rule.to_js_script());
+        }
+        Ok(response)
     }
 
     fn audit_retention_snapshot(&self) -> Option<AuditRetentionSnapshot> {
@@ -2844,9 +2872,44 @@ fn extract_input_schema() -> Value {
                 "minLength": 1,
                 "description": "Name of a pre-registered SchemaRegistry rule"
             },
-            "inline": inline_rule_schema
+            "inline": inline_rule_schema,
+            "debug": {
+                "type": "boolean",
+                "description": "Also return the generated JavaScript as `script` for debugging a rule"
+            }
         }
     })
+}
+
+/// Unpacks the `{ ok, value | error }` envelope from `ExtractionRule::to_js_checked_script`.
+fn unwrap_extraction_envelope(envelope: Value) -> Result<Value> {
+    match envelope.get("ok").and_then(Value::as_bool) {
+        Some(true) => Ok(envelope.get("value").cloned().unwrap_or(Value::Null)),
+        Some(false) => {
+            let message = envelope
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown JavaScript error");
+            anyhow::bail!("ScriptEvalError: {message}")
+        }
+        None => anyhow::bail!("ScriptEvalError: extraction script returned an unexpected shape"),
+    }
+}
+
+/// Whether an extraction result is worth diagnosing: nothing matched (`null`, `[]`) or a
+/// structured row has an unresolved (`null`) field.
+fn extraction_result_has_gaps(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Array(rows) => {
+            rows.is_empty()
+                || rows.iter().any(|row| {
+                    row.as_object()
+                        .is_some_and(|o| o.values().any(Value::is_null))
+                })
+        }
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2856,6 +2919,9 @@ struct ExtractArguments {
     rule_name: Option<String>,
     #[serde(default)]
     inline: Option<Value>,
+    /// Also return the generated JavaScript (ISSUE-257).
+    #[serde(default)]
+    debug: bool,
 }
 
 #[cfg(test)]
