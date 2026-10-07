@@ -1432,3 +1432,66 @@ fn test_mcp_binary_full_handshake_and_tools_call() -> anyhow::Result<()> {
     eprintln!("[timing] total: {:?}", t0.elapsed());
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// --self-test (ISSUE-191)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn binary_self_test_fails_nonzero_without_chrome_and_skips_server_startup() -> anyhow::Result<()> {
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+
+    let out = Command::new(&bin)
+        .arg("--self-test")
+        .env("XDG_CONFIG_HOME", dir.path())
+        .env("CHROME_PATH", dir.path().join("missing-chrome"))
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "must exit non-zero: {stdout}");
+    assert!(stdout.contains("✗ Chrome/Chromium"), "{stdout}");
+    assert!(stdout.contains("✗ MCP server startup: skipped"), "{stdout}");
+    assert!(stdout.contains("Self-test: FAIL"), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn binary_self_test_passes_and_reports_version_protocol_tools_and_plan() -> anyhow::Result<()> {
+    if should_skip_browser_tests() {
+        eprintln!("SKIP: Chrome not available");
+        return Ok(());
+    }
+    let bin = build_binary_once()?;
+    let dir = tempfile::tempdir()?;
+
+    let out = Command::new(&bin)
+        .arg("--self-test")
+        .env("XDG_CONFIG_HOME", dir.path())
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "stdout: {stdout}\nstderr: {}", {
+        String::from_utf8_lossy(&out.stderr)
+    });
+    assert!(stdout.contains("Self-test: PASS"), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "✓ initialize: server dragon-head-mcp {}",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("✓ tools/list: "), "{stdout}");
+    assert!(stdout.contains("get_usage_report"), "{stdout}");
+    assert!(
+        stdout.contains("✓ get_usage_report: plan tier "),
+        "{stdout}"
+    );
+    // stdout is human-readable CLI output, never JSON-RPC framing.
+    assert!(
+        !stdout.lines().any(|line| line.starts_with('{')),
+        "{stdout}"
+    );
+    Ok(())
+}

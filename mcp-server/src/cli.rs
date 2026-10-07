@@ -9,6 +9,8 @@ USAGE:
 
 FLAGS:
     --doctor          Check Chrome detection and configuration, then exit
+    --self-test       Run --doctor checks, start the server, and exercise initialize,
+                      tools/list and get_usage_report; exit non-zero on failure
     --init [CLIENT]   Print an MCP client config snippet and exit
                       CLIENT: claude-code, claude-desktop, codex, generic
     -V, --version     Print version information and exit
@@ -27,6 +29,8 @@ pub enum CliAction {
     RunServer,
     /// Run Chrome/config diagnostics and exit.
     Doctor,
+    /// Run the doctor checks plus an in-process JSON-RPC smoke test and exit.
+    SelfTest,
     /// Print an MCP client config snippet for the given client (or all clients).
     Init(Option<String>),
     /// Print version information and exit.
@@ -38,7 +42,7 @@ pub enum CliAction {
 }
 
 /// `--`-prefixed flags recognized by [`parse_args`].
-const RECOGNIZED_FLAGS: &[&str] = &["--help", "--version", "--doctor", "--init"];
+const RECOGNIZED_FLAGS: &[&str] = &["--help", "--version", "--doctor", "--self-test", "--init"];
 
 /// Parses CLI arguments (excluding the program name) into a [`CliAction`].
 pub fn parse_args(args: &[String]) -> CliAction {
@@ -77,6 +81,10 @@ pub fn parse_args(args: &[String]) -> CliAction {
         return CliAction::Doctor;
     }
 
+    if args.iter().any(|a| a == "--self-test") {
+        return CliAction::SelfTest;
+    }
+
     if init_pos.is_some() {
         let client = init_client_idx.map(|idx| args[idx].clone());
         return CliAction::Init(client);
@@ -101,6 +109,27 @@ mod tests {
     #[test]
     fn doctor_flag_returns_doctor() {
         assert_eq!(parse_args(&args(&["--doctor"])), CliAction::Doctor);
+    }
+
+    #[test]
+    fn self_test_flag_returns_self_test() {
+        assert_eq!(parse_args(&args(&["--self-test"])), CliAction::SelfTest);
+    }
+
+    #[test]
+    fn doctor_takes_precedence_over_self_test() {
+        assert_eq!(
+            parse_args(&args(&["--self-test", "--doctor"])),
+            CliAction::Doctor
+        );
+    }
+
+    #[test]
+    fn self_test_takes_precedence_over_init() {
+        assert_eq!(
+            parse_args(&args(&["--init", "--self-test"])),
+            CliAction::SelfTest
+        );
     }
 
     #[test]

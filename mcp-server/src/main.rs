@@ -9,7 +9,8 @@ use core_runtime::audit::AuditLogger;
 use core_runtime::{
     BrowserClient, PolicyEngine, PromptInjectionMode, PromptInjectionSanitizerConfig,
 };
-use mcp_server::{config, doctor, CoreRuntimeBackend, McpServer};
+use mcp_server::{config, doctor, self_test, CoreRuntimeBackend, McpServer};
+use plugin_host::PluginHost;
 use serde_json::json;
 use std::io::{self, BufRead, Read, Write};
 
@@ -75,45 +76,13 @@ fn init_tracing() {
         .init();
 }
 
-fn main() -> anyhow::Result<()> {
-    init_tracing();
-    let args: Vec<String> = std::env::args().skip(1).collect();
-
-    match cli::parse_args(&args) {
-        // `Help`/`Version` both return before the stdio JSON-RPC loop starts (ISSUE-254): safe,
-        // one-shot human-facing CLI output, not a protocol-corruption risk.
-        #[allow(clippy::print_stdout)]
-        cli::CliAction::Help => {
-            println!("{}", cli::USAGE);
-            return Ok(());
-        }
-        #[allow(clippy::print_stdout)]
-        cli::CliAction::Version => {
-            println!("dragon-head-mcp {}", env!("CARGO_PKG_VERSION"));
-            return Ok(());
-        }
-        cli::CliAction::Init(client) => {
-            if !init::print_init(client.as_deref()) {
-                std::process::exit(1);
-            }
-            return Ok(());
-        }
-        cli::CliAction::Doctor => {
-            let report = doctor::run_doctor();
-            doctor::print_report(&report);
-            if !report.all_passed() {
-                std::process::exit(1);
-            }
-            return Ok(());
-        }
-        cli::CliAction::UnknownFlag(flag) => {
-            eprintln!("dragon-head-mcp: unrecognized flag '{flag}'\n");
-            eprintln!("{}", cli::USAGE);
-            std::process::exit(2);
-        }
-        cli::CliAction::RunServer => {}
-    }
-
+/// Builds the server exactly as the stdio loop runs it (config, plugins, Chrome, policy, skills,
+/// and the embedded HITL bridge when `spawn_hitl_bridge`), so `--self-test` exercises the real startup path. The returned
+/// `PluginHost` must outlive the server: it owns the Wasmtime epoch-interruption thread that
+/// enforces each Wasm call's wall-clock timeout budget (see `plugins::build_plugin_hook_config`).
+fn build_server(
+    spawn_hitl_bridge: bool,
+) -> anyhow::Result<(McpServer<CoreRuntimeBackend>, PluginHost)> {
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let config_path = config::default_config_path_with(env_lookup);
@@ -131,11 +100,7 @@ fn main() -> anyhow::Result<()> {
     let (plugin_key_registry, configured_plugins) =
         config::load_configured_plugins(config_path.as_deref(), file_config.as_ref())
             .context("failed to load configured plugins")?;
-    // `_plugin_host` must outlive every call any wired plugin hook makes: it owns the Wasmtime
-    // epoch-interruption thread that enforces each Wasm call's wall-clock timeout budget (see
-    // `plugins::build_plugin_hook_config`'s doc comment). Keep it bound here, in `main`'s own
-    // scope, for the rest of the process's life — never move it into a narrower scope.
-    let (plugin_hooks, _plugin_host) =
+    let (plugin_hooks, plugin_host) =
         mcp_server::plugins::build_plugin_hook_config(plugin_key_registry, configured_plugins)
             .context("failed to wire configured plugins")?;
 
@@ -186,7 +151,8 @@ fn main() -> anyhow::Result<()> {
         backend.register_skill(skill);
     }
 
-    if let Some(hitl_config) = &resolved.hitl_bridge {
+    // `--self-test` skips the bridge: binding its port would fail against a healthy running server.
+    if let Some(hitl_config) = resolved.hitl_bridge.as_ref().filter(|_| spawn_hitl_bridge) {
         mcp_server::hitl::spawn_embedded_bridge(backend.page_handle(), hitl_config)
             .context("failed to start embedded HITL bridge")?;
         eprintln!(
@@ -195,7 +161,59 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    let mut server = McpServer::new(backend);
+    Ok((McpServer::new(backend), plugin_host))
+}
+
+fn main() -> anyhow::Result<()> {
+    init_tracing();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    match cli::parse_args(&args) {
+        // `Help`/`Version` both return before the stdio JSON-RPC loop starts (ISSUE-254): safe,
+        // one-shot human-facing CLI output, not a protocol-corruption risk.
+        #[allow(clippy::print_stdout)]
+        cli::CliAction::Help => {
+            println!("{}", cli::USAGE);
+            return Ok(());
+        }
+        #[allow(clippy::print_stdout)]
+        cli::CliAction::Version => {
+            println!("dragon-head-mcp {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        cli::CliAction::Init(client) => {
+            if !init::print_init(client.as_deref()) {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        cli::CliAction::Doctor => {
+            let report = doctor::run_doctor();
+            doctor::print_report(&report);
+            if !report.all_passed() {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        cli::CliAction::SelfTest => {
+            let report = self_test::run_self_test(doctor::run_doctor(), || build_server(false));
+            self_test::print_report(&report);
+            if !report.all_passed() {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        cli::CliAction::UnknownFlag(flag) => {
+            eprintln!("dragon-head-mcp: unrecognized flag '{flag}'\n");
+            eprintln!("{}", cli::USAGE);
+            std::process::exit(2);
+        }
+        cli::CliAction::RunServer => {}
+    }
+
+    // `_plugin_host` must outlive every call any wired plugin hook makes (see `build_server`):
+    // keep it bound in `main`'s own scope for the rest of the process's life.
+    let (mut server, _plugin_host) = build_server(true)?;
     eprintln!("dragon-head-mcp: ready, listening on stdio");
 
     let stdin = io::stdin();

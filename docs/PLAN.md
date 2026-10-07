@@ -661,6 +661,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > 明記した。上流の更新頻度が低いため、`chromiumoxide` または直接CDPクライアントへの移行可否は
 > 別Issueで評価する（本Issueのスコープ外）。
 
+> **Follow-up (ISSUE-191, done)**: `dragon-head-mcp --self-test` を追加した。`--doctor` の検査に加え、
+> 実際のstdio起動と同じ経路（`build_server`）でサーバーを構築し、in-processで `initialize` / `tools/list` /
+> `get_usage_report` を実行してPASS/FAILを報告する（失敗時は非ゼロ終了）。Chrome不要のstub backend
+> unit testと、実バイナリのE2E（Chrome有無の両経路）で固定した。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。

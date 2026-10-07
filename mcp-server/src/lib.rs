@@ -11,6 +11,7 @@ pub mod hitl;
 pub mod metering;
 pub mod plugins;
 pub(crate) mod protocol;
+pub mod self_test;
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
