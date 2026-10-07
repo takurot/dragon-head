@@ -666,6 +666,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `get_usage_report` を実行してPASS/FAILを報告する（失敗時は非ゼロ終了）。Chrome不要のstub backend
 > unit testと、実バイナリのE2E（Chrome有無の両経路）で固定した。
 
+> **Follow-up (ISSUE-200, done)**: delta配信のpayload size比較で `SemanticState` を丸ごとcloneして再シリアライズ
+> していた処理を、借用ビュー + byte counting writerに置き換えた（出力バイト数は従来と完全一致、等価性testで固定）。
+> `traverse_node` の `children` は `with_capacity` 化。20,000 node treeで算出時間 約2.19ms → 約0.48ms。
+> diff用のtree→`Value`変換は `json_patch::diff` の入力として必要なため維持した。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。

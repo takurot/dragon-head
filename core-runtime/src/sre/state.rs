@@ -524,12 +524,34 @@ fn is_region_node(node: &SemanticNode) -> bool {
         })
 }
 
+/// Borrowed mirror of [`StateUpdate::Full`] so the payload size can be measured without cloning
+/// the state. Must keep the same serde representation (guarded by
+/// `full_update_payload_size_matches_serialized_state_update`).
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum FullUpdateRef<'a> {
+    Full { state: &'a SemanticState },
+}
+
+/// `io::Write` sink that only counts bytes, so sizing a payload allocates no buffer.
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn full_update_payload_size_bytes(state: &SemanticState) -> Result<usize> {
-    serde_json::to_vec(&StateUpdate::Full {
-        state: state.clone(),
-    })
-    .context("Failed to encode full update payload for policy check")
-    .map(|payload| payload.len())
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, &FullUpdateRef::Full { state })
+        .context("Failed to encode full update payload for policy check")?;
+    Ok(counter.0)
 }
 
 fn should_send_delta(
@@ -553,6 +575,22 @@ fn should_send_delta(
 mod tests {
     use super::*;
     use crate::sre::profile::LoadProfile;
+
+    #[test]
+    fn full_update_payload_size_matches_serialized_state_update() {
+        let mut root = simple_node("document");
+        root.label = Some("héllo \"quoted\"".to_string());
+        root.children = vec![simple_node("button"), simple_node("link")];
+        let state = SemanticState::new(root, LoadProfile::Interactive);
+
+        let expected = serde_json::to_vec(&StateUpdate::Full {
+            state: state.clone(),
+        })
+        .unwrap()
+        .len();
+
+        assert_eq!(full_update_payload_size_bytes(&state).unwrap(), expected);
+    }
 
     fn simple_node(role: &str) -> SemanticNode {
         SemanticNode {

@@ -244,7 +244,7 @@ fn traverse_node(
     let redactor = crate::privacy::global();
     let attributes = redactor.redact_semantic_attributes(&raw_attributes);
 
-    let mut children = Vec::new();
+    let mut children = Vec::with_capacity(node.children.as_ref().map_or(0, Vec::len));
     if let Some(child_nodes) = &node.children {
         // We need to track sibling index per role? Or just absolute index?
         // Using absolute index for simplicity in traversal, but for stable keys relying on structure,
