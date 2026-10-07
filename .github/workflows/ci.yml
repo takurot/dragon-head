@@ -158,6 +158,14 @@ jobs:
       env:
         CHROME_INSTALLED: "true"
       run: cargo test --workspace --doc
+    # Tests must treat checked-in fixtures as read-only (baselines are only
+    # rewritten via explicit opt-in such as UPDATE_SOM_BASELINE=1, ISSUE-251).
+    - name: Verify tests did not modify tracked fixtures
+      run: |
+        if ! git diff --exit-code --stat -- ':(glob)**/tests/fixtures/**'; then
+          echo "::error::A test modified a tracked fixture under tests/fixtures/"
+          exit 1
+        fi
     - name: Upload failure artifacts
       if: failure()
       uses: actions/upload-artifact@v4
