@@ -473,7 +473,7 @@ specific Chromium build.
 ## Available MCP Tools
 
 `dragon-head-mcp` currently exposes 9 tools. The source of truth is
-`McpServer::tools()` in `mcp-server/src/lib.rs`:
+`McpServer::tools()` in `mcp-server/src/server.rs`:
 
 <!-- mcp-tool-list:start -->
 | Tool | Purpose |

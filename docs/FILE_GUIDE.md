@@ -25,7 +25,7 @@
 ### `core-runtime/src/`
 
 - `lib.rs` — crate root and public API exports.
-- `browser.rs` — `BrowserClient`, `PageSession`, action execution, policy, audit, and recovery.
+- `browser/` — `BrowserClient`, `PageSession`. `mod.rs` holds the type definitions; `act.rs` (action execution and self-healing), `policy.rs` (policy enforcement and the human-approval state), `audit.rs`, `capture.rs` (state capture, SRE event bridge, semantic waits), `visual.rs` (SoM), `page_navigation.rs`, `vault.rs`, `client.rs` (`BrowserClient`), `navigation_policy.rs` (redirect interception) are separate `impl PageSession` modules.
 - `chrome_detection.rs` — Chrome/Chromium discovery.
 - `dom_signature.rs` — fallback element matching.
 - `policy.rs` — `PolicyEngine`, `PolicyRule`, `PolicyDecision`, `OutcomeProjection`.
@@ -60,7 +60,7 @@
 
 ### MCP Tool Behavior
 
-- `mcp-server/src/lib.rs`
+- `mcp-server/src/server.rs` (JSON-RPC dispatch, plan gating), `schemas.rs` (tool input schemas), `backend_tools.rs` (`McpBackend` for `CoreRuntimeBackend`), `tool_args.rs`, `lib.rs` (tool contract types)
 - `mcp-server/tests/mcp_protocol_compliance.rs`
 - `mcp-server/tests/mcp_client_contract.rs`
 - `mcp-server/tests/mcp_schema_compatibility.rs`
@@ -132,14 +132,14 @@
 
 ### Browser Recovery
 
-- `core-runtime/src/browser.rs`
+- `core-runtime/src/browser/` (`client.rs`, `mod.rs`)
 - `core-runtime/tests/browser_recovery.rs`
 - `core-runtime/tests/cdp_connectivity.rs`
 - `mcp-server/tests/mcp_browser_recovery.rs`
 
 ### Metering / Billing
 
-- `mcp-server/src/lib.rs`
+- `mcp-server/src/server.rs`, `mcp-server/src/metering.rs`
 - `mcp-server/tests/mcp_billing_plan_gating.rs`
 - `mcp-server/tests/mcp_usage_metering_gaps.rs`
 - `mcp-server/tests/mcp_pricing_snapshot.rs`

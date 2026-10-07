@@ -829,7 +829,7 @@ fn test_get_state_json_omits_security_flags_for_clean_element() -> Result<()> {
 }
 
 // NOTE: Markdown rendering tests (security_flags in markdown output, sanitization of
-// malicious flag characters, multi-flag comma-join) live in mcp-server/src/lib.rs unit
+// malicious flag characters, multi-flag comma-join) live in mcp-server/src/tests.rs unit
 // tests for render_state_markdown (render_state_markdown_includes_security_flags_when_present,
 // render_state_markdown_omits_security_flags_line_when_empty, etc.).  A mock-based test here
 // would only exercise the mock's own output, not render_state_markdown itself.
