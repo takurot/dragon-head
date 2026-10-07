@@ -176,6 +176,7 @@ UI変更に対する耐性を極限まで高めるレジリエンス・レイヤ
 AI とブラウザの間の会話を「操作」から「情報の取得」へとレベルアップさせる抽出エンジン。
 - **仕様**: YAML/JSON ベースの抽出定義（例: `items: { selector: "tr.product", fields: { price: ".amt" } }`）。
 - **Schema Registry**: DSL ルールをプリコンパイルし、実行時のパース・オーバーヘッドを排除。
+- **fields の値**: 子要素のCSS selector、`"&"`（item自身のテキスト）、`"@attr"`（item自身の属性/プロパティ）。組み込みルール（`page_title` / `all_links` / `meta_description` / `headings`）は常時登録される。エージェント向けの使い方は `docs/AGENTS_EXTRACT.md`。
 - **Golden Dataset**: 正解データセット（`core-runtime/tests/fixtures/golden/`）による抽出精度の継続的自動評価。
 
 ## 5. API & Schema Definitions
@@ -222,7 +223,7 @@ Model Context Protocol (MCP) 準拠のツール定義。
 | `ask_human` | `reason`: string, `context`: bool, `outcome_projection`: object | HITL要求（2FA/判断不能/高額決済時）。承認要求に未来投影データを同梱。 |
 | `run_skill` | `skill_name`: string, `params`: object | 起動時に `config.toml` の `[skills].files` から全件検証・登録されたSkillの実行。`status`/`message`/`trace` に加え `outputs`（`extract` ステップが書き込んだ値。`security_flags` でサニタイズ済みかを明示、PII は redact 済み）を返す（ISSUE-304）。テンプレートは `{{params.KEY}}`（起動パラメータ、未定義はエラー）、`{{extracted.KEY}}`（先行 `extract` の値、未定義/非スカラーはエラー、`act.action`/`act.target`/`locate.query`/`wait.condition` など制御スロットでは拒否）、レガシー `{{KEY}}`（従来通りパラメータのみを参照し、未定義時はテンプレート文字列をそのまま返す）の3系統。 |
 | `get_usage_report` | なし | 現在のplan tier、usage meters、audit-retention snapshotを返す。 |
-| `extract` | `rule_name`: string または `inline`: object | Deep Lens抽出を実行し、`result` と `security_flags` を返す。 |
+| `extract` | `rule_name`: string または `inline`: object, `debug`: bool | Deep Lens抽出を実行し、`result` と `security_flags` を返す。空/null結果には `errors`（`SelectorNoMatch`/`AttributeNotFound`）、`debug` では生成JSを `script` で返す。 |
 <!-- mcp-tool-list:end -->
 
 <!-- mcp-tool-semantics:start -->

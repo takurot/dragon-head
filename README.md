@@ -492,6 +492,8 @@ specific Chromium build.
 <!-- mcp-tool-semantics:start -->
 `extract` applies prompt-injection sanitization and PII redaction before returning
 structured page data. It is read-only and does not emit an action audit event.
+See [docs/AGENTS_EXTRACT.md](docs/AGENTS_EXTRACT.md) for the rule modes, selector
+discovery workflow, error diagnostics and the built-in rules.
 `get_usage_report` is also read-only: it reports the plan tier, usage meters, and
 the audit-retention snapshot, but does not meter itself or emit an action audit event.
 `navigate` accepts absolute HTTP(S) URLs without embedded credentials, strips

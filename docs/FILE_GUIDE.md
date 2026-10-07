@@ -51,6 +51,7 @@
 - `skills-engine/src/lib.rs` — `SkillDefinition`, `SkillStep`, `SkillEngine`, `SkillRuntime`.
 - `plugin-host/src/lib.rs` — `PluginManifest`, `PluginRuntime`, Wasm execution.
 - `plugin-host/src/schema_registry.rs` — extraction rule registry.
+- `docs/AGENTS_EXTRACT.md` — agent-facing guide to the `extract` tool (modes, selector discovery, diagnostics, built-in rules).
 - `hitl-bridge/src/server.rs` — Slack interaction endpoint and HMAC verification.
 - `hitl-bridge/src/bridge.rs` — gateway polling, notification, and resolution orchestration.
 - `hitl-bridge/src/lock.rs` — double-resolution prevention.
