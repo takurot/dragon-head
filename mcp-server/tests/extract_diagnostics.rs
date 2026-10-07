@@ -32,6 +32,7 @@ macro_rules! browser_test {
             if test_bench_support::should_skip_browser_tests() {
                 return Ok(());
             }
+            #[allow(unused_mut)]
             let mut $server = server()?;
             $body
             Ok(())
