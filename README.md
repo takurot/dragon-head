@@ -3,7 +3,7 @@
 [![CI](https://github.com/takurot/dragon-head/actions/workflows/ci.yml/badge.svg)](https://github.com/takurot/dragon-head/actions/workflows/ci.yml)
 [![Nightly E2E](https://github.com/takurot/dragon-head/actions/workflows/e2e.yml/badge.svg)](https://github.com/takurot/dragon-head/actions/workflows/e2e.yml)
 
-**Last updated:** 2026-10-06
+**Last updated:** 2026-10-08
 
 Dragon Head is a policy-enforced, auditable execution runtime for AI browser agents.
 Its Policy Engine can block risky actions or require human approval, while
