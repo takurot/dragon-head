@@ -180,9 +180,16 @@ fn non_mutating_skill_does_not_invalidate_state_cache() -> anyhow::Result<()> {
 
     // A non-mutating skill (no `act` steps) must not discard the still-valid cached state.
     let state_b = server.call_tool("get_state", json!({ "format": "json" }))?;
+    // `state_hash` is content-derived, so on its own it cannot tell a cache hit from a wrongful
+    // invalidation followed by a re-capture of the unchanged DOM. Each capture mints a fresh
+    // `page_instance_id`, so equality proves the cached payload itself was served.
+    assert_eq!(
+        state_a["metadata"]["page_instance_id"], state_b["metadata"]["page_instance_id"],
+        "a non-mutating skill must not invalidate state_cache: {state_b}"
+    );
     assert_eq!(
         state_a["metadata"]["state_hash"], state_b["metadata"]["state_hash"],
-        "a non-mutating skill must not invalidate state_cache: {state_b}"
+        "a non-mutating skill must not change the served state: {state_b}"
     );
 
     Ok(())
