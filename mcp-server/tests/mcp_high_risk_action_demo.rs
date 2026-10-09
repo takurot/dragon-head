@@ -469,7 +469,10 @@ fn high_risk_payment_requires_signed_approval_and_records_redacted_audit() -> Re
         "invalid signature accepted"
     );
     ensure!(
-        !bridge_audit.exists() && services.submissions.load(Ordering::SeqCst) == 0,
+        // The bridge creates its audit log at startup (ISSUE-352), so "nothing recorded" means
+        // empty rather than absent.
+        std::fs::metadata(&bridge_audit).map_or(true, |meta| meta.len() == 0)
+            && services.submissions.load(Ordering::SeqCst) == 0,
         "invalid signature changed approval/page"
     );
     ensure!(
