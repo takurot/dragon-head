@@ -70,6 +70,7 @@ fn main() -> Result<()> {
         cli.slack_channel.clone(),
     ));
     let audit = BridgeAuditTrail::new(cli.audit_log.clone());
+    audit.verify_writable().context("audit log is not usable")?;
 
     let bridge = Arc::new(Bridge::new(gateway, notifier, audit));
 

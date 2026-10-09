@@ -63,6 +63,18 @@ fn embedded_bridge_startup_reports_bind_and_notifier_failures() -> anyhow::Resul
         "error must name the notifier, got: {err:#}"
     );
 
+    let missing_dir_cfg = {
+        let mut cfg = bridge_config("127.0.0.1:0".to_string(), &audit_dir);
+        cfg.audit_log = audit_dir.path().join("no-such-dir").join("audit.ndjson");
+        cfg
+    };
+    let err = spawn_embedded_bridge(Arc::clone(&page), &missing_dir_cfg)
+        .expect_err("an unwritable audit_log must fail at startup, not on the first approval");
+    assert!(
+        format!("{err:#}").contains(&missing_dir_cfg.audit_log.display().to_string()),
+        "error must name the audit path, got: {err:#}"
+    );
+
     let free_addr = {
         let probe = TcpListener::bind("127.0.0.1:0")?;
         probe.local_addr()?.to_string()
