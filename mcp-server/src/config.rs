@@ -139,7 +139,7 @@ pub struct HitlBridgeFileConfig {
     /// Starts the embedded bridge alongside the stdio MCP server.
     #[serde(default)]
     pub enabled: bool,
-    /// Address the Slack interactivity webhook server binds to. Defaults to `0.0.0.0:8787`.
+    /// Address the Slack interactivity webhook server binds to. Defaults to loopback (`127.0.0.1:8787`).
     pub bind_addr: Option<String>,
     /// Path to the append-only NDJSON audit trail file. Defaults to `hitl-bridge-audit.ndjson`.
     pub audit_log: Option<String>,
@@ -750,7 +750,7 @@ pub fn resolve_config(
         })?;
         let bind_addr = hitl_bind_addr
             .or_else(|| fc.hitl_bridge.bind_addr.clone())
-            .unwrap_or_else(|| "0.0.0.0:8787".to_string());
+            .unwrap_or_else(|| "127.0.0.1:8787".to_string());
         let audit_log = hitl_audit_log
             .or_else(|| fc.hitl_bridge.audit_log.clone())
             .unwrap_or_else(|| "hitl-bridge-audit.ndjson".to_string());
@@ -1765,7 +1765,7 @@ durability = "sync"
         .unwrap();
 
         let hitl = resolved.hitl_bridge.expect("hitl_bridge must be enabled");
-        assert_eq!(hitl.bind_addr, "0.0.0.0:8787");
+        assert_eq!(hitl.bind_addr, "127.0.0.1:8787");
         assert_eq!(hitl.slack_signing_secret, "secret");
         assert_eq!(hitl.slack_bot_token, "xoxb-token");
         assert_eq!(hitl.slack_channel, "C123");

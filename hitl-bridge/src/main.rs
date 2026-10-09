@@ -24,7 +24,7 @@ use hitl_bridge::server::{router, ServerState};
 #[command(name = "dragon-head-hitl-bridge", version, about)]
 struct Cli {
     /// Address to bind the Slack interactivity webhook server to.
-    #[arg(long, default_value = "0.0.0.0:8787")]
+    #[arg(long, default_value = "127.0.0.1:8787")]
     bind_addr: String,
 
     /// Slack app signing secret, used to verify `X-Slack-Signature` on inbound interactions.

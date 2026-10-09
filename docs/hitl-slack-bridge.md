@@ -152,15 +152,19 @@ cargo run -p mcp-server --bin dragon-head-mcp
 
 `HITL_BRIDGE_BIND_ADDR`, `HITL_BRIDGE_AUDIT_LOG`, and `HITL_BRIDGE_POLL_INTERVAL_MS`
 (or the equivalent `[hitl_bridge]` `config.toml` keys — see the
-[README's config reference](../README.md#precedence)) override the `0.0.0.0:8787` /
+[README's config reference](../README.md#precedence)) override the `127.0.0.1:8787` /
 `hitl-bridge-audit.ndjson` / `1000`ms defaults. Slack credentials are env-only by
 design and are never read from `config.toml`.
 
-The default `0.0.0.0:8787` binds on all interfaces (matching the standalone binary's
-own default below). Every request to it is HMAC-signature-verified before any
-approval mutation, but for anything beyond local development, set
-`HITL_BRIDGE_BIND_ADDR=127.0.0.1:8787` and put a reverse proxy or tunnel (e.g.
-`ngrok`) in front of it, rather than exposing the port directly.
+The default `127.0.0.1:8787` listens on loopback only (also the standalone binary's
+default below). Every request to it is HMAC-signature-verified before any approval
+mutation, but Slack must still reach the endpoint: put a reverse proxy or tunnel (e.g.
+`ngrok`) in front of the loopback port, or set `HITL_BRIDGE_BIND_ADDR` to a non-loopback
+address deliberately. A non-loopback bind address is logged as a warning at startup.
+
+> **Upgrade note (breaking default):** earlier releases defaulted to `0.0.0.0:8787`. A
+> deployment that relied on that default to receive Slack callbacks directly on a public
+> interface must now set `HITL_BRIDGE_BIND_ADDR` (or `hitl_bridge.bind_addr`) explicitly.
 
 ### 2b. Run the standalone binary (its own, unrelated session)
 
@@ -169,7 +173,7 @@ SLACK_SIGNING_SECRET=... \
 SLACK_BOT_TOKEN=xoxb-... \
 SLACK_CHANNEL=C0123456789 \
 cargo run -p hitl-bridge -- \
-  --bind-addr 0.0.0.0:8787 \
+  --bind-addr 127.0.0.1:8787 \
   --audit-log hitl-bridge-audit.ndjson \
   --poll-interval-ms 1000
 ```
