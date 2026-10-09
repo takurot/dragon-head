@@ -2,9 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 
-use core_runtime::{
-    AtomicKmsRotation, BrowserClient, KmsAdapter, LocalSessionVault, SessionVault, SoftwareKms,
-};
+use core_runtime::{AtomicKmsRotation, BrowserClient, KmsAdapter, LocalSessionVault, SoftwareKms};
 
 #[tokio::test]
 async fn test_session_management_cross_domain_save_restore() -> anyhow::Result<()> {
