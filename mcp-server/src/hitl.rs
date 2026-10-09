@@ -31,7 +31,8 @@ use crate::config::HitlBridgeConfig;
 /// Approve/Reject callbacks. Both operate on `page`, the same `PageSession` the caller's
 /// `CoreRuntimeBackend` uses for `ask_human`.
 ///
-/// The notifier, the tokio runtime, and the `config.bind_addr` listener (bound and registered
+/// The notifier, the audit log path (must be writable), the tokio runtime, and the
+/// `config.bind_addr` listener (bound and registered
 /// with the runtime) are all set up before any thread is spawned, and a failure in any of
 /// them is returned. Once this returns `Ok`,
 /// later failures inside the threads (a transient poll error, the server stopping) are logged
@@ -57,6 +58,10 @@ pub fn spawn_embedded_bridge(page: SessionProvider, config: &HitlBridgeConfig) -
             config.slack_channel.clone(),
         )),
     };
+    let audit = BridgeAuditTrail::new(config.audit_log.clone());
+    audit
+        .verify_writable()
+        .context("HITL bridge audit_log is not usable")?;
     let bind_addr = config.bind_addr.clone();
     let listener = std::net::TcpListener::bind(&bind_addr)
         .with_context(|| format!("failed to bind HITL bridge on {bind_addr}"))?;
@@ -73,7 +78,6 @@ pub fn spawn_embedded_bridge(page: SessionProvider, config: &HitlBridgeConfig) -
             .with_context(|| format!("failed to register HITL bridge listener on {bind_addr}"))?
     };
 
-    let audit = BridgeAuditTrail::new(config.audit_log.clone());
     let bridge = Arc::new(Bridge::new(gateway, notifier, audit));
 
     let poll_bridge = Arc::clone(&bridge);

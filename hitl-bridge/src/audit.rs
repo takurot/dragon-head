@@ -158,6 +158,20 @@ impl BridgeAuditTrail {
         Ok(())
     }
 
+    /// Startup check: confirms the audit log can be indexed and opened for append (creating it
+    /// if absent), so an unusable `audit_log` fails when the bridge starts rather than on the
+    /// first Approve/Reject callback. Errors name the audit path.
+    pub fn verify_writable(&self) -> Result<()> {
+        self.prepare()
+            .with_context(|| format!("audit trail at {} is not usable", self.path.display()))?;
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .with_context(|| format!("audit trail at {} is not writable", self.path.display()))?;
+        Ok(())
+    }
+
     /// Prepares the persistent request-ID index before gateway mutation.
     pub fn prepare(&self) -> Result<()> {
         let mut state = self.state.lock().expect("audit trail mutex poisoned");
@@ -416,6 +430,45 @@ mod tests {
                 .count(),
             records.len()
         );
+    }
+
+    #[test]
+    fn verify_writable_rejects_a_missing_parent_directory_naming_the_path() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("missing-dir").join("audit.ndjson");
+        let trail = BridgeAuditTrail::new(&path);
+
+        let err = trail.verify_writable().expect_err("must fail at startup");
+
+        assert!(
+            format!("{err:#}").contains(&path.display().to_string()),
+            "error must name the audit path, got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn verify_writable_rejects_a_path_that_cannot_be_opened_for_append() {
+        let dir = tempdir().expect("tempdir");
+        // A directory at the audit path cannot be opened as an append-mode file.
+        let path = dir.path().join("audit.ndjson");
+        std::fs::create_dir(&path).expect("mkdir");
+        let trail = BridgeAuditTrail::new(&path);
+
+        let err = trail.verify_writable().expect_err("must fail at startup");
+
+        assert!(format!("{err:#}").contains(&path.display().to_string()));
+    }
+
+    #[test]
+    fn verify_writable_creates_the_file_and_leaves_records_intact() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("audit.ndjson");
+        let trail = BridgeAuditTrail::new(&path);
+
+        trail.verify_writable().expect("writable path");
+
+        assert!(path.is_file(), "startup check should create the audit file");
+        assert_eq!(trail.read_all().expect("read_all"), Vec::new());
     }
 
     #[test]
