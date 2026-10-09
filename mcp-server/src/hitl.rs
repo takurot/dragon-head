@@ -63,6 +63,13 @@ pub fn spawn_embedded_bridge(page: SessionProvider, config: &HitlBridgeConfig) -
         .verify_writable()
         .context("HITL bridge audit_log is not usable")?;
     let bind_addr = config.bind_addr.clone();
+    if binds_beyond_loopback(&bind_addr) {
+        tracing::warn!(
+            %bind_addr,
+            "HITL bridge approval callback is bound beyond loopback; requests rely solely on \
+             Slack signature verification"
+        );
+    }
     let listener = std::net::TcpListener::bind(&bind_addr)
         .with_context(|| format!("failed to bind HITL bridge on {bind_addr}"))?;
     listener
@@ -103,4 +110,35 @@ pub fn spawn_embedded_bridge(page: SessionProvider, config: &HitlBridgeConfig) -
         });
     });
     Ok(())
+}
+
+/// True when `bind_addr` is a socket address whose IP is not loopback (e.g. `0.0.0.0` or a LAN
+/// address). Unparseable values return false: the bind that follows reports them.
+fn binds_beyond_loopback(bind_addr: &str) -> bool {
+    bind_addr
+        .parse::<std::net::SocketAddr>()
+        .is_ok_and(|addr| !addr.ip().is_loopback())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::binds_beyond_loopback;
+
+    #[test]
+    fn loopback_binds_do_not_warn() {
+        assert!(!binds_beyond_loopback("127.0.0.1:8787"));
+        assert!(!binds_beyond_loopback("[::1]:8787"));
+    }
+
+    #[test]
+    fn wide_binds_warn() {
+        assert!(binds_beyond_loopback("0.0.0.0:8787"));
+        assert!(binds_beyond_loopback("[::]:8787"));
+        assert!(binds_beyond_loopback("192.168.1.5:8787"));
+    }
+
+    #[test]
+    fn unparseable_binds_are_left_to_the_bind_error() {
+        assert!(!binds_beyond_loopback("not-an-address"));
+    }
 }
