@@ -209,7 +209,7 @@ pub enum ConfigError {
          SLACK_SIGNING_SECRET, SLACK_BOT_TOKEN, and SLACK_CHANNEL"
     )]
     HitlBridgeMissingCredential { name: &'static str },
-    #[error("invalid {ENV_HITL_BRIDGE_POLL_INTERVAL_MS} '{0}' (expected a positive integer)")]
+    #[error("invalid HITL bridge poll interval '{0}' from {ENV_HITL_BRIDGE_POLL_INTERVAL_MS} or hitl_bridge.poll_interval_ms (expected a positive integer)")]
     InvalidHitlBridgePollIntervalMs(String),
     #[error("invalid hitl_bridge.local_slack_api_base_url (expected literal loopback HTTP with a nonzero port and /api path)")]
     InvalidLocalSlackApiBaseUrl,
@@ -760,7 +760,15 @@ pub fn resolve_config(
                 .ok()
                 .filter(|ms| *ms > 0)
                 .ok_or(ConfigError::InvalidHitlBridgePollIntervalMs(raw))?,
-            None => fc.hitl_bridge.poll_interval_ms.unwrap_or(1000),
+            None => match fc.hitl_bridge.poll_interval_ms {
+                Some(0) => {
+                    return Err(ConfigError::InvalidHitlBridgePollIntervalMs(
+                        "0".to_string(),
+                    ))
+                }
+                Some(ms) => ms,
+                None => 1000,
+            },
         };
         Some(HitlBridgeConfig {
             bind_addr,
@@ -1835,6 +1843,31 @@ durability = "sync"
             "SLACK_BOT_TOKEN" => Some("xoxb-token".to_string()),
             "SLACK_CHANNEL" => Some("C123".to_string()),
             "HITL_BRIDGE_POLL_INTERVAL_MS" => Some("0".to_string()),
+            _ => None,
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ConfigError::InvalidHitlBridgePollIntervalMs(ref value) if value == "0"
+        ));
+    }
+
+    #[test]
+    fn resolve_config_hitl_bridge_zero_poll_interval_from_file_is_rejected() {
+        let fc = FileConfig {
+            hitl_bridge: HitlBridgeFileConfig {
+                enabled: true,
+                poll_interval_ms: Some(0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let err = resolve_config(Some(&fc), |key| match key {
+            "SLACK_SIGNING_SECRET" => Some("secret".to_string()),
+            "SLACK_BOT_TOKEN" => Some("xoxb-token".to_string()),
+            "SLACK_CHANNEL" => Some("C123".to_string()),
             _ => None,
         })
         .unwrap_err();
