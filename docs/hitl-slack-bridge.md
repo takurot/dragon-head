@@ -22,7 +22,7 @@ nothing to observe.
   (plus `SLACK_SIGNING_SECRET`/`SLACK_BOT_TOKEN`/`SLACK_CHANNEL`) on `dragon-head-mcp`
   itself. `main.rs` starts the same `Bridge`/poll-loop/webhook-server this crate
   exposes, on background threads inside the MCP server process, built from
-  `CoreRuntimeBackend::page_handle()` — the exact `PageSession` `ask_human` uses. See
+  `CoreRuntimeBackend::page_provider()` — the exact `PageSession` `ask_human` uses. See
   the [README's config reference](../README.md#precedence) for the full env var list.
   This is the only supported way to run the bridge alongside `dragon-head-mcp`.
 - **Standalone (`dragon-head-hitl-bridge` binary)**: launches its **own**
@@ -34,14 +34,11 @@ nothing to observe.
   a test harness), or for local development against `tests/bridge_flow.rs`'s
   `page_session_gateway_resolves_a_real_pending_approval`-style setup.
 
-Known limitation: the embedded mode's gateway is built once, from whichever
-`PageSession` is live at `dragon-head-mcp` startup. If Chrome crashes and
-`dragon-head-mcp`'s own restart recovery (ISSUE-149) relaunches it with a fresh
-`PageSession`, the embedded bridge keeps observing the old, now-defunct session — any
-pending approval on it becomes moot, and a *new* approval raised after the restart
-requires restarting `dragon-head-mcp` itself to be picked up. Tracked as a follow-up;
-not addressed by ISSUE-302, which scopes to eliminating the two-independent-sessions
-bug for the normal (no browser crash) case.
+Browser restarts: the embedded gateway re-resolves its `PageSession` on every poll and
+every Approve/Reject, so when Chrome crashes and `dragon-head-mcp`'s restart recovery
+(ISSUE-149) relaunches it with a fresh `PageSession`, the bridge follows the swap
+(ISSUE-336). An approval that was pending on the crashed session is lost with it; new
+approvals raised after the restart reach Slack normally.
 
 ## How it works
 

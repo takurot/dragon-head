@@ -106,14 +106,25 @@ impl MintedIdCache {
     }
 }
 
+/// Returns the `PageSession` the gateway should act on right now. Called on every gateway
+/// operation so a host that swaps its session (browser-restart recovery) is followed instead of
+/// the gateway pinning the session that was live at construction time.
+pub type SessionProvider = Arc<dyn Fn() -> Arc<PageSession> + Send + Sync>;
+
 /// [`ApprovalGateway`] backed by a live `core_runtime::PageSession`.
 pub struct PageSessionGateway {
-    session: Arc<PageSession>,
+    session: SessionProvider,
     minted: std::sync::Mutex<MintedIdCache>,
 }
 
 impl PageSessionGateway {
+    /// Gateway bound to one fixed session for its whole lifetime.
     pub fn new(session: Arc<PageSession>) -> Self {
+        Self::with_provider(Arc::new(move || Arc::clone(&session)))
+    }
+
+    /// Gateway that re-resolves its session through `session` on every operation.
+    pub fn with_provider(session: SessionProvider) -> Self {
         Self {
             session,
             minted: std::sync::Mutex::new(MintedIdCache::default()),
@@ -132,7 +143,7 @@ impl PageSessionGateway {
     /// current pending request; a validation lookup must not mutate cache
     /// state (see [`MintedIdCache::peek`]).
     fn current_id(&self) -> Option<Uuid> {
-        let pending = self.session.pending_policy_approval()?;
+        let pending = (self.session)().pending_policy_approval()?;
         let key = RequestKey {
             rule_id: pending.rule_id,
             target_signature: pending.target_signature,
@@ -147,7 +158,7 @@ impl PageSessionGateway {
 
 impl ApprovalGateway for PageSessionGateway {
     fn pending_request(&self) -> Option<PendingApproval> {
-        let Some(pending) = self.session.pending_policy_approval() else {
+        let Some(pending) = (self.session)().pending_policy_approval() else {
             self.minted
                 .lock()
                 .expect("minted-id mutex poisoned")
@@ -174,14 +185,14 @@ impl ApprovalGateway for PageSessionGateway {
         if self.current_id() != Some(id) {
             anyhow::bail!("Approval request {id} is no longer pending");
         }
-        self.session.approve_pending_policy_action()
+        (self.session)().approve_pending_policy_action()
     }
 
     fn reject(&self, id: Uuid) -> Result<()> {
         if self.current_id() != Some(id) {
             anyhow::bail!("Approval request {id} is no longer pending");
         }
-        self.session.reject_pending_policy_action()
+        (self.session)().reject_pending_policy_action()
     }
 }
 

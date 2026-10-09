@@ -1,6 +1,6 @@
 //! ISSUE-302: a policy approval raised inside a `CoreRuntimeBackend`/`McpServer` (the same
 //! object graph `dragon-head-mcp`'s `main.rs` builds) must be observable and resolvable through
-//! `hitl_bridge::gateway::PageSessionGateway` built from `CoreRuntimeBackend::page_handle()` —
+//! `hitl_bridge::gateway::PageSessionGateway` built from `CoreRuntimeBackend::page_provider()` —
 //! not only through the backend's own `ask_human` tool. This is what makes the embedded bridge
 //! in `mcp_server::hitl::spawn_embedded_bridge` share state with the MCP server it runs inside,
 //! instead of independently polling an unrelated `PageSession` (the bug the standalone
@@ -72,7 +72,7 @@ fn bridge_gateway_observes_and_approves_the_mcp_servers_own_pending_approval() -
 
     // Build the bridge's gateway from the *same* backend the MCP server is using, exactly as
     // `mcp_server::hitl::spawn_embedded_bridge` does from `main.rs`.
-    let gateway = PageSessionGateway::new(server.backend_mut().page_handle());
+    let gateway = PageSessionGateway::with_provider(server.backend_mut().page_provider());
 
     // No action has been attempted yet, so the shared session has nothing pending.
     assert!(
@@ -150,7 +150,7 @@ fn bridge_gateway_reject_path_clears_the_mcp_servers_own_pending_approval() -> a
     setup_gated_button(&page)?;
 
     let mut server = McpServer::new(CoreRuntimeBackend::new(page));
-    let gateway = PageSessionGateway::new(server.backend_mut().page_handle());
+    let gateway = PageSessionGateway::with_provider(server.backend_mut().page_provider());
 
     let state = server.call_tool(
         "get_state",
@@ -195,7 +195,7 @@ fn bridge_gateway_reject_path_clears_the_mcp_servers_own_pending_approval() -> a
 
 /// A gateway built from an unrelated `PageSession` (mirroring the pre-ISSUE-302 standalone
 /// `dragon-head-hitl-bridge` topology) must NOT observe an approval raised in a different,
-/// unrelated `CoreRuntimeBackend`'s session -- confirming `page_handle()` sharing (not global
+/// unrelated `CoreRuntimeBackend`'s session -- confirming `page_provider()` sharing (not global
 /// state) is what makes the above tests pass.
 #[test]
 fn gateway_on_an_unrelated_session_does_not_see_another_sessions_pending_approval(
@@ -233,7 +233,7 @@ fn gateway_on_an_unrelated_session_does_not_see_another_sessions_pending_approva
     let other_page = other_client.new_page()?;
     other_page.navigate("data:text/html,<html><body>unrelated</body></html>")?;
     let unrelated_backend = CoreRuntimeBackend::new(other_page);
-    let unrelated_gateway = PageSessionGateway::new(unrelated_backend.page_handle());
+    let unrelated_gateway = PageSessionGateway::with_provider(unrelated_backend.page_provider());
 
     assert!(
         unrelated_gateway.pending_request().is_none(),

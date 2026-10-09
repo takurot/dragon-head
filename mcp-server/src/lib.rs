@@ -61,6 +61,7 @@ mod tool_args;
 
 use convert::*;
 use extract::*;
+use hitl_bridge::gateway::SessionProvider;
 pub use schemas::semantic_state_json_schema;
 use schemas::*;
 #[cfg(test)]
@@ -198,9 +199,12 @@ const RESTART_RATE_LIMIT_MAX: usize = 3;
 const RESTART_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
 pub struct CoreRuntimeBackend {
-    /// Shared so an embedded HITL bridge (ISSUE-302) can observe and resolve the exact same
-    /// pending policy approvals as this backend, via [`CoreRuntimeBackend::page_handle`].
     page: Arc<PageSession>,
+    /// Mirror of `page` that an embedded HITL bridge (ISSUE-302) re-reads on every poll via
+    /// [`CoreRuntimeBackend::page_provider`], so it observes and resolves the same pending policy
+    /// approvals as this backend and follows the swap made by browser-restart recovery
+    /// (ISSUE-149, ISSUE-336). Must be updated wherever `page` is replaced.
+    shared_page: Arc<std::sync::RwLock<Arc<PageSession>>>,
     state_cache: Option<ExternalSemanticState>,
     previous_semantic_state: Option<SemanticState>,
     skill_engine: SkillEngine,

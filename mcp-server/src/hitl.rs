@@ -5,7 +5,7 @@
 //! independent `BrowserClient -> PageSession` pairs: a policy approval raised by an action in
 //! the MCP server lived in one session, while the standalone bridge polled a second, unrelated
 //! session and could never see it. Spawning the bridge here instead, against
-//! [`CoreRuntimeBackend::page_handle`], means both `ask_human` (in this process) and the Slack
+//! [`CoreRuntimeBackend::page_provider`], means both `ask_human` (in this process) and the Slack
 //! bridge observe and resolve the exact same pending approval — `PageSession`'s approval methods
 //! (`pending_policy_approval`, `approve_pending_policy_action`, `reject_pending_policy_action`)
 //! take `&self` and are already safe to share across threads (`hitl-bridge`'s own standalone
@@ -18,10 +18,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use core_runtime::PageSession;
 use hitl_bridge::audit::BridgeAuditTrail;
 use hitl_bridge::bridge::{run_poll_loop, Bridge};
-use hitl_bridge::gateway::{ApprovalGateway, PageSessionGateway};
+use hitl_bridge::gateway::{ApprovalGateway, PageSessionGateway, SessionProvider};
 use hitl_bridge::notifier::{ChatNotifier, SlackNotifier};
 use hitl_bridge::server::{router, ServerState};
 
@@ -38,14 +37,12 @@ use crate::config::HitlBridgeConfig;
 /// later failures inside the threads (a transient poll error, the server stopping) are logged
 /// via `tracing` rather than propagated.
 ///
-/// Known limitation (ISSUE-302 follow-up): `page` is a snapshot of whichever `PageSession` is
-/// live when this is called. If the host's own browser-restart recovery (ISSUE-149) later
-/// replaces its `PageSession`, this embedded bridge keeps observing the old, now-defunct
-/// session rather than following the restart — the old session's pending approval (if any)
-/// simply becomes unreachable, and any *new* approval raised after the restart requires
-/// restarting `dragon-head-mcp` itself to pick up.
-pub fn spawn_embedded_bridge(page: Arc<PageSession>, config: &HitlBridgeConfig) -> Result<()> {
-    let gateway: Arc<dyn ApprovalGateway> = Arc::new(PageSessionGateway::new(page));
+/// `page` is re-resolved on every poll and every Approve/Reject, so when the host's
+/// browser-restart recovery (ISSUE-149) replaces its `PageSession` the bridge follows the
+/// relaunched session (ISSUE-336). An approval still pending on the crashed session is lost
+/// with it.
+pub fn spawn_embedded_bridge(page: SessionProvider, config: &HitlBridgeConfig) -> Result<()> {
+    let gateway: Arc<dyn ApprovalGateway> = Arc::new(PageSessionGateway::with_provider(page));
     let notifier: Arc<dyn ChatNotifier> = match &config.local_slack_api_base_url {
         Some(base_url) => Arc::new(
             SlackNotifier::with_local_api_base_url(

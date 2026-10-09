@@ -2,8 +2,10 @@ use super::*;
 
 impl CoreRuntimeBackend {
     pub fn new(page: PageSession) -> Self {
+        let page = Arc::new(page);
         Self {
-            page: Arc::new(page),
+            shared_page: Arc::new(std::sync::RwLock::new(Arc::clone(&page))),
+            page,
             state_cache: None,
             previous_semantic_state: None,
             skill_engine: SkillEngine::new(),
@@ -126,7 +128,7 @@ impl CoreRuntimeBackend {
         &self.page
     }
 
-    /// Returns a cloned handle to the exact `PageSession` this backend acts on.
+    /// Returns a provider of the `PageSession` this backend currently acts on.
     ///
     /// `PageSession`'s policy-approval methods (`pending_policy_approval`,
     /// `approve_pending_policy_action`, `reject_pending_policy_action`) take `&self` and are
@@ -134,12 +136,16 @@ impl CoreRuntimeBackend {
     /// (ISSUE-302) observe and resolve the same pending approvals as this backend's own
     /// `ask_human`, instead of independently opening an unrelated `PageSession`.
     ///
-    /// Note: [`CoreRuntimeBackend::handle_browser_disconnect`] replaces `self.page` with a
-    /// freshly relaunched session after a Chrome crash (ISSUE-149); a handle obtained before
-    /// that point keeps referring to the old, now-defunct session rather than following the
-    /// restart.
-    pub fn page_handle(&self) -> Arc<PageSession> {
-        Arc::clone(&self.page)
+    /// Each call of the provider returns the live session, so the bridge follows the
+    /// `PageSession` swap made by [`CoreRuntimeBackend::handle_browser_disconnect`] after a
+    /// Chrome crash (ISSUE-149, ISSUE-336) rather than holding the defunct one.
+    pub fn page_provider(&self) -> SessionProvider {
+        let shared = Arc::clone(&self.shared_page);
+        Arc::new(move || {
+            // The guarded value is a plain `Arc` that is only ever replaced wholesale, so a
+            // poisoned lock still holds a valid session.
+            Arc::clone(&shared.read().unwrap_or_else(|e| e.into_inner()))
+        })
     }
 
     pub fn register_skill(&mut self, skill: SkillDefinition) {
