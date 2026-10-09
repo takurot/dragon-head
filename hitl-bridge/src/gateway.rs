@@ -48,11 +48,35 @@ pub trait ApprovalGateway: Send + Sync {
     fn reject(&self, id: Uuid) -> Result<()>;
 }
 
+/// Identity of one `PageSession` allocation. Holds a `Weak` so the address cannot be recycled
+/// for a different session while the token is alive.
+#[derive(Debug, Clone)]
+struct SessionToken(std::sync::Weak<dyn std::any::Any + Send + Sync>);
+
+impl SessionToken {
+    fn of<T: std::any::Any + Send + Sync>(session: &Arc<T>) -> Self {
+        let erased: Arc<dyn std::any::Any + Send + Sync> = Arc::clone(session) as _;
+        Self(Arc::downgrade(&erased))
+    }
+}
+
+impl PartialEq for SessionToken {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_ptr() as *const () == other.0.as_ptr() as *const ()
+    }
+}
+
+impl Eq for SessionToken {}
+
 /// Identifies a [`core_runtime::PolicyApprovalRequest`] independent of the
 /// bridge-minted [`Uuid`], so repeated polls of the same request resolve to
 /// the same ID.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RequestKey {
+    /// The session the request was observed on. A restart-driven session swap changes this, so
+    /// an ID minted for the crashed session never validates against, or is reused for, a
+    /// request on its replacement even if the rule/target/action happen to match.
+    session: SessionToken,
     rule_id: String,
     target_signature: String,
     action: String,
@@ -106,14 +130,25 @@ impl MintedIdCache {
     }
 }
 
+/// Returns the `PageSession` the gateway should act on right now. Called on every gateway
+/// operation so a host that swaps its session (browser-restart recovery) is followed instead of
+/// the gateway pinning the session that was live at construction time.
+pub type SessionProvider = Arc<dyn Fn() -> Arc<PageSession> + Send + Sync>;
+
 /// [`ApprovalGateway`] backed by a live `core_runtime::PageSession`.
 pub struct PageSessionGateway {
-    session: Arc<PageSession>,
+    session: SessionProvider,
     minted: std::sync::Mutex<MintedIdCache>,
 }
 
 impl PageSessionGateway {
+    /// Gateway bound to one fixed session for its whole lifetime.
     pub fn new(session: Arc<PageSession>) -> Self {
+        Self::with_provider(Arc::new(move || Arc::clone(&session)))
+    }
+
+    /// Gateway that re-resolves its session through `session` on every operation.
+    pub fn with_provider(session: SessionProvider) -> Self {
         Self {
             session,
             minted: std::sync::Mutex::new(MintedIdCache::default()),
@@ -127,13 +162,13 @@ impl PageSessionGateway {
             .id_for(key)
     }
 
-    /// Returns the bridge-minted ID for the current pending request, without
-    /// minting one. Used to validate a caller-supplied ID against the
-    /// current pending request; a validation lookup must not mutate cache
-    /// state (see [`MintedIdCache::peek`]).
-    fn current_id(&self) -> Option<Uuid> {
-        let pending = self.session.pending_policy_approval()?;
+    /// Returns the bridge-minted ID for `session`'s current pending request, without minting
+    /// one. Used to validate a caller-supplied ID against the current pending request; a
+    /// validation lookup must not mutate cache state (see [`MintedIdCache::peek`]).
+    fn current_id(&self, session: &Arc<PageSession>) -> Option<Uuid> {
+        let pending = session.pending_policy_approval()?;
         let key = RequestKey {
+            session: SessionToken::of(session),
             rule_id: pending.rule_id,
             target_signature: pending.target_signature,
             action: pending.action,
@@ -147,7 +182,8 @@ impl PageSessionGateway {
 
 impl ApprovalGateway for PageSessionGateway {
     fn pending_request(&self) -> Option<PendingApproval> {
-        let Some(pending) = self.session.pending_policy_approval() else {
+        let session = (self.session)();
+        let Some(pending) = session.pending_policy_approval() else {
             self.minted
                 .lock()
                 .expect("minted-id mutex poisoned")
@@ -155,6 +191,7 @@ impl ApprovalGateway for PageSessionGateway {
             return None;
         };
         let key = RequestKey {
+            session: SessionToken::of(&session),
             rule_id: pending.rule_id.clone(),
             target_signature: pending.target_signature.clone(),
             action: pending.action.clone(),
@@ -170,18 +207,22 @@ impl ApprovalGateway for PageSessionGateway {
         })
     }
 
+    // Resolve the session once per operation: validating the ID on one session and applying the
+    // decision to another (after a restart swap) would resolve an unvalidated request.
     fn approve(&self, id: Uuid) -> Result<()> {
-        if self.current_id() != Some(id) {
+        let session = (self.session)();
+        if self.current_id(&session) != Some(id) {
             anyhow::bail!("Approval request {id} is no longer pending");
         }
-        self.session.approve_pending_policy_action()
+        session.approve_pending_policy_action()
     }
 
     fn reject(&self, id: Uuid) -> Result<()> {
-        if self.current_id() != Some(id) {
+        let session = (self.session)();
+        if self.current_id(&session) != Some(id) {
             anyhow::bail!("Approval request {id} is no longer pending");
         }
-        self.session.reject_pending_policy_action()
+        session.reject_pending_policy_action()
     }
 }
 
@@ -280,7 +321,14 @@ mod tests {
     }
 
     fn sample_key() -> RequestKey {
+        sample_key_on(&SESSION_A)
+    }
+
+    static SESSION_A: std::sync::LazyLock<Arc<()>> = std::sync::LazyLock::new(|| Arc::new(()));
+
+    fn sample_key_on(session: &Arc<()>) -> RequestKey {
         RequestKey {
+            session: SessionToken::of(session),
             rule_id: "approve-pay".to_string(),
             target_signature: "sig-123".to_string(),
             action: "click".to_string(),
@@ -302,6 +350,7 @@ mod tests {
     fn minted_id_cache_mints_a_distinct_id_for_a_different_key() {
         let mut cache = MintedIdCache::default();
         let other_key = RequestKey {
+            session: SessionToken::of(&SESSION_A),
             rule_id: "approve-pay".to_string(),
             target_signature: "sig-456".to_string(),
             action: "click".to_string(),
@@ -359,6 +408,7 @@ mod tests {
         let mut cache = MintedIdCache::default();
         let cached_key = sample_key();
         let other_key = RequestKey {
+            session: SessionToken::of(&SESSION_A),
             rule_id: "approve-pay".to_string(),
             target_signature: "sig-456".to_string(),
             action: "click".to_string(),
@@ -366,6 +416,22 @@ mod tests {
         cache.id_for(&cached_key);
 
         assert_eq!(cache.peek(&other_key), None);
+    }
+
+    #[test]
+    fn minted_id_cache_does_not_reuse_an_id_across_sessions_for_an_identical_request() {
+        let mut cache = MintedIdCache::default();
+        let session_b = Arc::new(());
+
+        let on_a = cache.id_for(&sample_key_on(&SESSION_A));
+        let key_b = sample_key_on(&session_b);
+
+        assert_eq!(
+            cache.peek(&key_b),
+            None,
+            "an ID minted for a crashed session must not validate on its replacement"
+        );
+        assert_ne!(cache.id_for(&key_b), on_a);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 use std::net::TcpListener;
 use std::sync::Arc;
 
-use core_runtime::{BrowserClient, PageSession};
+use core_runtime::BrowserClient;
+use hitl_bridge::gateway::SessionProvider;
 use mcp_server::config::HitlBridgeConfig;
 use mcp_server::hitl::spawn_embedded_bridge;
 
@@ -17,9 +18,10 @@ fn bridge_config(bind_addr: String, audit_dir: &tempfile::TempDir) -> HitlBridge
     }
 }
 
-fn page() -> anyhow::Result<Arc<PageSession>> {
+fn page() -> anyhow::Result<SessionProvider> {
     let client = BrowserClient::new()?;
-    Ok(Arc::new(client.new_page()?))
+    let page = Arc::new(client.new_page()?);
+    Ok(Arc::new(move || Arc::clone(&page)))
 }
 
 #[test]

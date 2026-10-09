@@ -110,3 +110,49 @@ fn handle_browser_disconnect_rate_limits_after_max_restarts() -> anyhow::Result<
 
     Ok(())
 }
+
+// ISSUE-336: the provider handed to the embedded HITL bridge must follow the PageSession swap
+// made by browser-restart recovery instead of pinning the session live at startup.
+#[cfg(unix)]
+#[test]
+fn page_provider_follows_session_swap_after_chrome_restart() -> anyhow::Result<()> {
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+    let pid = client
+        .process_id()
+        .expect("launched BrowserClient should have a process id");
+    let mut backend = CoreRuntimeBackend::new_with_client(client, page);
+    let provider = backend.page_provider();
+    let before = provider();
+
+    std::process::Command::new("kill")
+        .arg("-9")
+        .arg(pid.to_string())
+        .status()
+        .context("failed to signal the Chrome process")?;
+
+    let mut restarted = false;
+    for _ in 0..10 {
+        if backend.handle_browser_disconnect().is_ok() {
+            restarted = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(restarted, "expected handle_browser_disconnect to relaunch");
+
+    let after = provider();
+    assert!(
+        !std::sync::Arc::ptr_eq(&before, &after),
+        "provider must return the relaunched session, not the pre-restart one"
+    );
+    assert!(
+        std::ptr::eq(after.as_ref(), backend.page()),
+        "provider must return the exact session the backend now acts on"
+    );
+    Ok(())
+}

@@ -532,6 +532,7 @@ impl McpBackend for CoreRuntimeBackend {
         }
 
         self.page = Arc::new(new_page);
+        *self.shared_page.write().unwrap_or_else(|e| e.into_inner()) = Arc::clone(&self.page);
         self.state_cache = None;
         self.previous_semantic_state = None;
         self.previous_state_verified = true;

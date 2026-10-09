@@ -153,7 +153,7 @@ fn build_server(
 
     // `--self-test` skips the bridge: binding its port would fail against a healthy running server.
     if let Some(hitl_config) = resolved.hitl_bridge.as_ref().filter(|_| spawn_hitl_bridge) {
-        mcp_server::hitl::spawn_embedded_bridge(backend.page_handle(), hitl_config)
+        mcp_server::hitl::spawn_embedded_bridge(backend.page_provider(), hitl_config)
             .context("failed to start embedded HITL bridge")?;
         eprintln!(
             "dragon-head-mcp: embedded HITL bridge listening on {}",
