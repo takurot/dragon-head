@@ -63,15 +63,18 @@ pub fn spawn_embedded_bridge(page: SessionProvider, config: &HitlBridgeConfig) -
         .verify_writable()
         .context("HITL bridge audit_log is not usable")?;
     let bind_addr = config.bind_addr.clone();
-    if binds_beyond_loopback(&bind_addr) {
-        tracing::warn!(
-            %bind_addr,
-            "HITL bridge approval callback is bound beyond loopback; requests rely solely on \
-             Slack signature verification"
-        );
-    }
     let listener = std::net::TcpListener::bind(&bind_addr)
         .with_context(|| format!("failed to bind HITL bridge on {bind_addr}"))?;
+    // Judge exposure by the address actually bound: `bind_addr` may be a hostname.
+    if let Ok(local) = listener.local_addr() {
+        if is_beyond_loopback(&local) {
+            tracing::warn!(
+                bind_addr = %local,
+                "HITL bridge approval callback is bound beyond loopback; requests rely solely \
+                 on Slack signature verification"
+            );
+        }
+    }
     listener
         .set_nonblocking(true)
         .with_context(|| format!("failed to configure HITL bridge listener on {bind_addr}"))?;
@@ -112,33 +115,31 @@ pub fn spawn_embedded_bridge(page: SessionProvider, config: &HitlBridgeConfig) -
     Ok(())
 }
 
-/// True when `bind_addr` is a socket address whose IP is not loopback (e.g. `0.0.0.0` or a LAN
-/// address). Unparseable values return false: the bind that follows reports them.
-fn binds_beyond_loopback(bind_addr: &str) -> bool {
-    bind_addr
-        .parse::<std::net::SocketAddr>()
-        .is_ok_and(|addr| !addr.ip().is_loopback())
+/// True when `addr` is not a loopback address (e.g. `0.0.0.0` or a LAN address).
+fn is_beyond_loopback(addr: &std::net::SocketAddr) -> bool {
+    !addr.ip().is_loopback()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::binds_beyond_loopback;
+    use super::is_beyond_loopback;
+    use std::net::{SocketAddr, TcpListener};
+
+    fn bound(bind_addr: &str) -> SocketAddr {
+        TcpListener::bind(bind_addr)
+            .expect("bind")
+            .local_addr()
+            .expect("local_addr")
+    }
 
     #[test]
     fn loopback_binds_do_not_warn() {
-        assert!(!binds_beyond_loopback("127.0.0.1:8787"));
-        assert!(!binds_beyond_loopback("[::1]:8787"));
+        assert!(!is_beyond_loopback(&bound("127.0.0.1:0")));
+        assert!(!is_beyond_loopback(&bound("localhost:0")));
     }
 
     #[test]
     fn wide_binds_warn() {
-        assert!(binds_beyond_loopback("0.0.0.0:8787"));
-        assert!(binds_beyond_loopback("[::]:8787"));
-        assert!(binds_beyond_loopback("192.168.1.5:8787"));
-    }
-
-    #[test]
-    fn unparseable_binds_are_left_to_the_bind_error() {
-        assert!(!binds_beyond_loopback("not-an-address"));
+        assert!(is_beyond_loopback(&bound("0.0.0.0:0")));
     }
 }
