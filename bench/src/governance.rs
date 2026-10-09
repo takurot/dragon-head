@@ -665,7 +665,7 @@ mod tests {
             &body[..10]
         )?;
         thread::sleep(Duration::from_millis(50));
-        stream.write_all(body[10..].as_bytes())?;
+        stream.write_all(&body.as_bytes()[10..])?;
         let mut response = String::new();
         stream.read_to_string(&mut response)?;
         ensure!(
