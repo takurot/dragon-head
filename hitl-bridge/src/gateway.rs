@@ -214,7 +214,10 @@ impl ApprovalGateway for PageSessionGateway {
         if self.current_id(&session) != Some(id) {
             anyhow::bail!("Approval request {id} is no longer pending");
         }
-        session.approve_pending_policy_action()
+        session
+            .approve_pending_policy_request_via("hitl_bridge")?
+            .map(|_| ())
+            .ok_or_else(|| anyhow::anyhow!("No pending policy approval request"))
     }
 
     fn reject(&self, id: Uuid) -> Result<()> {

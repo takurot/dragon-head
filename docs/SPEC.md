@@ -109,9 +109,9 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
 - **Event Model**:
   - `STATE_SNAPSHOT`: Full State (初回/Navigation時)
   - `STATE_PATCH`: RFC 6902 Delta (操作時)
-  - `TOOL_CALL`: AIからの操作要求 (Act, Verify, Skill)
+  - `TOOL_CALL`: AIからの操作要求 (Act, Verify, Skill, AskHuman)
   - `POLICY_DECISION`: 審査結果 (Rule ID, Decision)
-  - `HITL_EVENT`: 人間介入 (Request, Resume, User ID)
+  - `HITL_EVENT`: 人間介入 (Request, Resume, User ID)。`event_type` は `request` / `approved` / `rejected`。`approved` の `reason` には承認経路（`ask_human` / `hitl_bridge`）、rule id、scope、action、target signature を記録する。
   - `VISUAL_CAPTURE`: SoM画像参照 (Hash)
 - **PII Redaction**: `input[type="password/email"]` およびクレジットカード番号形式をデフォルトでマスク保存。
 

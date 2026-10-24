@@ -47,9 +47,10 @@ With the bridge enabled, the in-band `ask_human` tool cannot grant: it returns
 `approved: false` and the action stays held until the signed callback arrives.
 
 The runtime and bridge logs are two correlated trails, not a fabricated unified
-event stream. Runtime audit currently does not record every MCP read call or a
-separate approval-granted event; the bridge record supplies the reviewer and
-approval decision. This demo checks the executed action/escalation sequence,
+event stream. Runtime audit does not record every MCP read call. It records
+`HITL_EVENT request` and, when granted, `HITL_EVENT approved` (naming the granting
+channel, e.g. `hitl_bridge`, plus rule id and target); the bridge record supplies the
+reviewer identity and approval decision. This demo checks the executed action/escalation sequence,
 not universal audit completeness or regulatory compliance.
 
 The test uses temporary configuration/audit directories, ephemeral loopback

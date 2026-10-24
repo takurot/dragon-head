@@ -356,6 +356,25 @@ mod tests {
     }
 
     #[test]
+    fn replay_preserves_hitl_request_approved_rejected_order() {
+        let hitl = |event_type: &str, timestamp: u64| AuditEvent::HitlEvent {
+            event_type: event_type.to_string(),
+            reason: None,
+            user_id: None,
+            timestamp,
+        };
+        let report = replay_events(&[hitl("request", 1), hitl("approved", 2), hitl("rejected", 3)])
+            .expect("replay should succeed");
+        let types: Vec<&str> = report
+            .hitl_events
+            .iter()
+            .map(|e| e.event_type.as_str())
+            .collect();
+        assert_eq!(types, ["request", "approved", "rejected"]);
+        assert!(report_to_markdown(&report).contains("`approved`"));
+    }
+
+    #[test]
     fn empty_event_list_produces_empty_report() {
         let report = replay_events(&[]).expect("empty replay should succeed");
         assert_eq!(report.total_events, 0);

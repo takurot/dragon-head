@@ -188,5 +188,16 @@ class TestReplayEventsSnapshotTracking(unittest.TestCase):
             audit_replay.replay_events(events)
 
 
+class TestReplayHitlEvents(unittest.TestCase):
+    def test_approved_event_is_kept_in_order(self):
+        events = [
+            {"type": "HITL_EVENT", "event_type": "request", "timestamp": 1},
+            {"type": "HITL_EVENT", "event_type": "approved", "timestamp": 2},
+        ]
+        report = audit_replay.replay_events(events)
+        self.assertEqual([e.event_type for e in report.hitl_events], ["request", "approved"])
+        self.assertIn("`approved`", audit_replay.report_to_markdown(report))
+
+
 if __name__ == "__main__":
     unittest.main()

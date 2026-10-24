@@ -48,6 +48,16 @@ impl PageSession {
     /// calls the pending request could be replaced, so the report would describe a different
     /// request from the one that was granted.
     pub fn approve_pending_policy_request(&self) -> Result<Option<PolicyApprovalRequest>> {
+        self.approve_pending_policy_request_via("api")
+    }
+
+    /// Like [`approve_pending_policy_request`](Self::approve_pending_policy_request), recording
+    /// `channel` (e.g. `ask_human`, `hitl_bridge`) in the `HITL_EVENT` `approved` audit entry so
+    /// a reviewer can tell which path granted the approval (ISSUE-372).
+    pub fn approve_pending_policy_request_via(
+        &self,
+        channel: &str,
+    ) -> Result<Option<PolicyApprovalRequest>> {
         let guard = self
             .policy_approvals
             .lock()
@@ -83,6 +93,17 @@ impl PageSession {
             granted_url,
             expires_at_epoch_ms,
             remaining_uses,
+        });
+        drop(guard);
+
+        self.audit_logger.log(AuditEvent::HitlEvent {
+            event_type: "approved".to_string(),
+            reason: Some(format!(
+                "Approved via {channel}: rule {} scope {:?} action {} target {}",
+                request.rule_id, request.scope, request.action, request.target_signature
+            )),
+            user_id: None,
+            timestamp: epoch_millis_u64(),
         });
 
         Ok(Some(request))
