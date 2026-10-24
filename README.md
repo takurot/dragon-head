@@ -273,6 +273,15 @@ enabled = true
 | Slack channel | `SLACK_CHANNEL` | none (env only) |
 <!-- config-env-contract:end -->
 
+**Who can approve a held action.** With the embedded HITL bridge enabled
+(`hitl_bridge.enabled`), `ask_human` never grants approval: it returns
+`approved: false, pending: true` and only the bridge's signed Slack/Teams callback can
+resolve the request, so the agent cannot approve its own held action. Without a
+bridge, `ask_human` grants the pending request itself, so `require_human_approval` is
+only as strong as your MCP client's tool-permission prompt for `ask_human`. The
+bridge's webhook port is part of the trust boundary; keep it on loopback or behind
+authentication.
+
 `PROMPT_INJECTION_ADDITIONAL_PHRASES` must be a JSON array of strings, for
 example `["reveal developer message","ignore prior instructions"]`. It replaces
 the file value; use `[]` to clear it. Empty phrases and exact duplicates are

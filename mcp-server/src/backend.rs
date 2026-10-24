@@ -20,6 +20,7 @@ impl CoreRuntimeBackend {
             client: None,
             policy_rules: Vec::new(),
             navigation_allow_private_network: false,
+            in_band_approval: true,
             browser_restarts: 0,
             restart_history: VecDeque::new(),
             speculative: SpeculativeEngine::new(Vec::new()),
@@ -72,6 +73,14 @@ impl CoreRuntimeBackend {
 
     pub fn set_navigation_allow_private_network(&mut self, allow: bool) {
         self.navigation_allow_private_network = allow;
+    }
+
+    /// Whether the agent-callable `ask_human` tool may grant a pending policy approval.
+    ///
+    /// Disable it when an out-of-band approver (the HITL bridge) is configured, so the agent
+    /// whose action was held cannot approve itself (ISSUE-371).
+    pub fn set_in_band_approval(&mut self, allow: bool) {
+        self.in_band_approval = allow;
     }
 
     /// Invalidates every page-local MCP and speculative cursor after browser I/O begins.
