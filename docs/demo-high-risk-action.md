@@ -43,6 +43,9 @@ Chrome is unavailable. CI's `high-risk-action-demo` job runs it explicitly too.
    NDJSON resolution record matches the UUID, reviewer and projection. Neither
    trail contains the fixture's raw email, password or card value.
 
+With the bridge enabled, the in-band `ask_human` tool cannot grant: it returns
+`approved: false` and the action stays held until the signed callback arrives.
+
 The runtime and bridge logs are two correlated trails, not a fabricated unified
 event stream. Runtime audit currently does not record every MCP read call or a
 separate approval-granted event; the bridge record supplies the reviewer and

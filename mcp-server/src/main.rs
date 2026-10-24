@@ -147,6 +147,8 @@ fn build_server(
         additional_phrases: resolved.injection_additional_phrases.clone(),
     });
     backend.set_navigation_allow_private_network(resolved.navigation_allow_private_network);
+    // A configured bridge is the only approver; keyed on config, not on whether it was spawned.
+    backend.set_in_band_approval(resolved.hitl_bridge.is_none());
     for skill in skills {
         backend.register_skill(skill);
     }

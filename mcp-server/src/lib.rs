@@ -223,6 +223,9 @@ pub struct CoreRuntimeBackend {
     /// Whether public navigation may target private and otherwise non-global networks.
     /// Defaults to false and is set from the resolved startup configuration.
     navigation_allow_private_network: bool,
+    /// Whether `ask_human` may grant a pending policy approval. False when an out-of-band
+    /// approver (the HITL bridge) is configured (ISSUE-371).
+    in_band_approval: bool,
     /// Total number of successful automatic browser restarts.
     browser_restarts: u64,
     /// Timestamps of recent restart attempts, used for rate limiting.

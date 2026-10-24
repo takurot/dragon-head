@@ -289,6 +289,17 @@ impl McpBackend for CoreRuntimeBackend {
         let args: AskHumanArguments =
             serde_json::from_value(arguments).context("invalid ask_human arguments")?;
 
+        if !self.in_band_approval {
+            // Granting is reserved for the out-of-band approver (ISSUE-371); report only
+            // whether a request is waiting, without echoing its rule or context.
+            return Ok(json!({
+                "approved": false,
+                "reason": args.reason,
+                "pending": self.page.pending_policy_approval().is_some(),
+                "awaiting": "out_of_band_approval"
+            }));
+        }
+
         // One atomic call: the payload below describes exactly the request that was granted.
         let Some(pending) = self.page.approve_pending_policy_request()? else {
             return Ok(json!({

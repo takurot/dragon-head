@@ -262,6 +262,7 @@ TOOL_CALL/POLICY_DECISION audit evidenceはscheme/host/explicit port/pathまた�
 
 **ACT-05: HITL Concurrency & Safety**
 - **Session Lock**: Slack/Teams 等のチャットツール連携において、複数人による同時承認を防ぐ排他ロック機構。
+- **Approver Trust Model**: 埋め込み HITL bridge 有効時、`ask_human` は承認を付与せず `approved=false, pending=true, awaiting="out_of_band_approval"` を返す（付与は bridge の署名付き callback のみ）。bridge 無効時は `ask_human` が保留中の承認を付与するため、承認の強度は MCP クライアントの `ask_human` ツール権限確認に依存する。
 - **Audit Trace**: 承認・却下を行ったユーザー ID、タイムスタンプ、およびその際の `Outcome Projection` データを不変ログに記録。
 
 ## 6. 非機能要件 (NFR) - 測定条件の明文化
