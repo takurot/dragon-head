@@ -94,8 +94,9 @@ impl PageSession {
             expires_at_epoch_ms,
             remaining_uses,
         });
-        drop(guard);
 
+        // Logged while the approval-state lock is held: once it is released another thread can
+        // consume this grant, and the audit trail must show the approval before that use.
         self.audit_logger.log(AuditEvent::HitlEvent {
             event_type: "approved".to_string(),
             reason: Some(format!(
