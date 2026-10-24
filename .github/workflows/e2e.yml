@@ -139,10 +139,22 @@ jobs:
           target/evaluation-dashboard.md
           target/evaluation-bench/*.json
 
+  # ISSUE-376: advisories are published against an unchanged lockfile, so the push/PR
+  # `cargo-deny` job in ci.yml alone only notices them on the next PR. Run on the nightly
+  # schedule so a new advisory files the nightly-failure issue.
+  cargo-deny-advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v4
+    - uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+      with:
+        command: check advisories
+
   notify-on-failure:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [nfr-benchmark-long, full-e2e, mcp-binary-e2e, evaluation-bench-full]
+    needs: [nfr-benchmark-long, full-e2e, mcp-binary-e2e, evaluation-bench-full, cargo-deny-advisories]
     if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     permissions:
       issues: write
@@ -156,6 +168,7 @@ jobs:
         E2E_RESULT: ${{ needs.full-e2e.result }}
         MCP_RESULT: ${{ needs.mcp-binary-e2e.result }}
         EVAL_RESULT: ${{ needs.evaluation-bench-full.result }}
+        DENY_RESULT: ${{ needs.cargo-deny-advisories.result }}
       shell: bash
       run: |
         FAILED=""
@@ -163,6 +176,7 @@ jobs:
         case "$E2E_RESULT"  in failure|cancelled) FAILED="${FAILED}- full-e2e (${E2E_RESULT})\n" ;; esac
         case "$MCP_RESULT"  in failure|cancelled) FAILED="${FAILED}- mcp-binary-e2e (${MCP_RESULT})\n" ;; esac
         case "$EVAL_RESULT" in failure|cancelled) FAILED="${FAILED}- evaluation-bench-full (${EVAL_RESULT})\n" ;; esac
+        case "$DENY_RESULT" in failure|cancelled) FAILED="${FAILED}- cargo-deny-advisories (${DENY_RESULT})\n" ;; esac
 
         BODY_FILE=$(mktemp)
         trap 'rm -f "$BODY_FILE"' EXIT
