@@ -705,7 +705,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [x] ISSUE-381: Python監査再生のJSON Patch copy/move・境界検証を修正する。
 - [x] ISSUE-382: 総合評価レポートの欠損・矛盾によるfalse PASSを防止する。
 - [x] ISSUE-383: NFR閾値の欠損・未知キーによるfalse PASSを防止する。
-- [ ] ISSUE-374: navigate拒否・schema validationの診断を安全に具体化する。
+- [x] ISSUE-374: navigate拒否・schema validationの診断を安全に具体化する。
 - [ ] ISSUE-380: スキルextractのJavaScript例外を失敗として扱う。
 
 > **Follow-up (ISSUE-385, done)**: npm配布ラッパーのテストをNode.js 22のPR/push CIゲートへ接続した。
@@ -729,3 +729,5 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [ ] 最低1件の新規テストが追加されている。
 - [ ] CI Required Checks が全て通過している。
 - [ ] 破壊的変更がある場合、移行手順が `docs/` に追記されている。
+
+> **Follow-up (ISSUE-374, done)**: schema validationの安全なschema path/required項目と、型付きnavigation拒否理由を返す。入力値・未知property名・URLのquery/credentialsを診断やstderrへ出さず、実Chrome/stdioのnegative testで検証する。
