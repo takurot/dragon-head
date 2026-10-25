@@ -80,7 +80,8 @@ The CI pipeline is defined in `.github/workflows/`.
 The dashboard requires all seven `comprehensive_evaluation` suite reports by default.
 It validates report types, nonempty scenario lists, unique suite/scenario identities,
 matching summary counts, finite nonnegative durations, and a consistent `smoke` or
-`full` mode. Missing browser-backed suites therefore cannot produce overall PASS.
+`full` mode. A passed scenario cannot carry an error. Missing browser-backed suites
+therefore cannot produce overall PASS.
 Invalid input exits nonzero and writes a FAIL dashboard, replacing any stale PASS
 artifact. Valid reports containing failed scenarios produce a FAIL dashboard and
 exit nonzero.

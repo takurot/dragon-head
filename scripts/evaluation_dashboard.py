@@ -66,6 +66,8 @@ def validate_reports(reports: list[dict], allow_partial: bool = False) -> set[tu
                 raise ValueError("scenario is missing details")
             if scenario.get("error") is not None and not isinstance(scenario["error"], str):
                 raise ValueError("scenario error must be a string or null")
+            if scenario["status"] == "passed" and scenario.get("error") is not None:
+                raise ValueError("passed scenario must not contain an error")
         summary = report.get("summary")
         if not isinstance(summary, dict):
             raise ValueError("summary must be an object")

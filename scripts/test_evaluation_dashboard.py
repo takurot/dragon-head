@@ -79,7 +79,8 @@ class TestReportValidation(unittest.TestCase):
         for key, value in (("status", "skipped"), ("duration_ms", float("nan")),
                            ("duration_ms", float("inf")), ("duration_ms", True),
                            ("duration_ms", -1), ("scenario_id", ""),
-                           ("feature_area", []), ("error", {})):
+                           ("feature_area", []), ("error", {}),
+                           ("error", "actual failure")):
             item = report()
             item["scenarios"][0][key] = value
             bad.append(item)
@@ -131,6 +132,14 @@ class TestDashboardCli(unittest.TestCase):
         result, artifact = self.run_cli(complete_reports())
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Overall Status: PASS", artifact)
+
+    def test_passed_scenario_with_error_is_rejected(self):
+        reports = complete_reports()
+        reports[0]["scenarios"][0]["error"] = "actual failure"
+        for data, args in ((reports, ()), (reports[:1], ("--allow-partial",))):
+            result, artifact = self.run_cli(data, *args)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Overall Status: FAIL", artifact)
 
     def test_cli_rejects_empty_missing_and_inconsistent_reports(self):
         inconsistent = report()

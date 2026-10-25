@@ -702,7 +702,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [x] ISSUE-384: Python監査再生・NFRトレンドの回帰テストをPR CIへ接続する。
 - [x] ISSUE-385: npm配布ラッパーの回帰テスト・パッケージE2EをPR CIへ接続する。
 - [x] ISSUE-381: Python監査再生のJSON Patch copy/move・境界検証を修正する。
-- [ ] ISSUE-382: 総合評価レポートの欠損・矛盾によるfalse PASSを防止する。
+- [x] ISSUE-382: 総合評価レポートの欠損・矛盾によるfalse PASSを防止する。
 - [ ] ISSUE-383: NFR閾値の欠損・未知キーによるfalse PASSを防止する。
 - [ ] ISSUE-374: navigate拒否・schema validationの診断を安全に具体化する。
 - [ ] ISSUE-380: スキルextractのJavaScript例外を失敗として扱う。
