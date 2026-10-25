@@ -702,7 +702,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [x] ISSUE-384: Python監査再生・NFRトレンドの回帰テストをPR CIへ接続する。
 - [x] ISSUE-385: npm配布ラッパーの回帰テスト・パッケージE2EをPR CIへ接続する。
 - [x] ISSUE-381: Python監査再生のJSON Patch copy/move・境界検証を修正する。
-- [ ] ISSUE-382: 総合評価レポートの欠損・矛盾によるfalse PASSを防止する。
+- [x] ISSUE-382: 総合評価レポートの欠損・矛盾によるfalse PASSを防止する。
 - [ ] ISSUE-383: NFR閾値の欠損・未知キーによるfalse PASSを防止する。
 - [ ] ISSUE-374: navigate拒否・schema validationの診断を安全に具体化する。
 - [ ] ISSUE-380: スキルextractのJavaScript例外を失敗として扱う。
@@ -719,6 +719,10 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `InvalidFromPointer` で拒否するため、正当なroot同一pathのno-opはPython側の専用回帰testで維持する。
 
 ## 4. 共通 Definition of Done（全PR共通）
+
+> **Follow-up (ISSUE-382, done)**: 総合評価dashboardは7つの必須suite、report/scenarioの型・件数・一意性・mode整合性を検証する。
+> 欠損・矛盾は非0とFAIL artifactで古いPASSを置換し、正当な失敗reportはFAILとして保持する。明示的な `--allow-partial` のみ不足suiteを許し、PARTIALとcoverageを表示する。
+> Pythonのunit/CLI回帰testとRust producer由来のJSON fixtureで固定する。
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。
 - [ ] 最低1件の新規テストが追加されている。

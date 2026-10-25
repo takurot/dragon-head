@@ -1,0 +1,73 @@
+{
+  "crate_name": "core-runtime",
+  "suite_name": "comprehensive_evaluation",
+  "mode": "smoke",
+  "scenarios": [
+    {
+      "scenario_id": "semantic_state_capture",
+      "feature_area": "sre",
+      "status": "passed",
+      "duration_ms": 4291.075125,
+      "details": {
+        "indexed_elements": 10,
+        "interactive_elements": 1,
+        "purchase_stable_key": "1d053bb1224cfd916a11818b88cfc218821f740ef2b644eaefef91d638bca845"
+      }
+    },
+    {
+      "scenario_id": "stable_key_recovery",
+      "feature_area": "actions",
+      "status": "passed",
+      "duration_ms": 4621.040625,
+      "details": {
+        "recovered": true,
+        "stable_key": "aaabe2a01ad6d048b8d58ac38d1a46673bef78e4d972d132b6971d19c31e2a31"
+      }
+    },
+    {
+      "scenario_id": "semantic_wait",
+      "feature_area": "waits",
+      "status": "passed",
+      "duration_ms": 3947.7735420000004,
+      "details": {
+        "enabled": true,
+        "stable_key": "74add009107cc7361a6aa5736afccdc7d82c3e9fab8324fee4041a2b5aecf296"
+      }
+    },
+    {
+      "scenario_id": "policy_hitl",
+      "feature_area": "policy",
+      "status": "passed",
+      "duration_ms": 4951.969792,
+      "details": {
+        "approved": true,
+        "stable_key": "1d053bb1224cfd916a11818b88cfc218821f740ef2b644eaefef91d638bca845",
+        "target_id": 6
+      }
+    },
+    {
+      "scenario_id": "audit_redaction",
+      "feature_area": "audit",
+      "status": "passed",
+      "duration_ms": 11931.326416,
+      "details": {
+        "masked_value": "***"
+      }
+    },
+    {
+      "scenario_id": "session_vault_roundtrip",
+      "feature_area": "session_vault",
+      "status": "passed",
+      "duration_ms": 4001.522542,
+      "details": {
+        "encrypt_key_id": "key-1",
+        "session_id": "session-example-com"
+      }
+    }
+  ],
+  "summary": {
+    "total": 6,
+    "passed": 6,
+    "failed": 0
+  }
+}

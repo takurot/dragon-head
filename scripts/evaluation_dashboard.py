@@ -2,8 +2,85 @@
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
+
+
+REQUIRED_SUITES = {
+    (crate, "comprehensive_evaluation")
+    for crate in (
+        "core-runtime", "mcp-server", "skills-engine", "plugin-host",
+        "marketplace", "hitl-bridge", "bench",
+    )
+}
+
+
+def _require_text(value: object, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a nonempty string")
+
+
+def validate_reports(reports: list[dict], allow_partial: bool = False) -> set[tuple[str, str]]:
+    if not reports:
+        raise ValueError("No evaluation reports found")
+    identities = set()
+    modes = set()
+    for report in reports:
+        if not isinstance(report, dict):
+            raise ValueError("evaluation report must be an object")
+        for field in ("crate_name", "suite_name", "mode"):
+            _require_text(report.get(field), field)
+        identity = (report["crate_name"], report["suite_name"])
+        if identity in identities:
+            raise ValueError(f"duplicate evaluation suite: {identity}")
+        identities.add(identity)
+        if report["mode"] not in ("smoke", "full"):
+            raise ValueError("evaluation mode must be smoke or full")
+        modes.add(report["mode"])
+        scenarios = report.get("scenarios")
+        if not isinstance(scenarios, list) or not scenarios:
+            raise ValueError("scenarios must be a nonempty array")
+        counts = {"total": len(scenarios), "passed": 0, "failed": 0}
+        scenario_ids = set()
+        for scenario in scenarios:
+            if not isinstance(scenario, dict):
+                raise ValueError("scenario must be an object")
+            for field in ("scenario_id", "feature_area", "status"):
+                _require_text(scenario.get(field), field)
+            if scenario["scenario_id"] in scenario_ids:
+                raise ValueError("duplicate scenario_id in evaluation suite")
+            scenario_ids.add(scenario["scenario_id"])
+            if scenario["status"] not in ("passed", "failed"):
+                raise ValueError("scenario status must be passed or failed")
+            counts[scenario["status"]] += 1
+            duration = scenario.get("duration_ms")
+            try:
+                valid_duration = (type(duration) in (int, float)
+                                  and math.isfinite(duration) and duration >= 0)
+            except OverflowError:
+                valid_duration = False
+            if not valid_duration:
+                raise ValueError("duration_ms must be a finite nonnegative number")
+            if "details" not in scenario:
+                raise ValueError("scenario is missing details")
+            if scenario.get("error") is not None and not isinstance(scenario["error"], str):
+                raise ValueError("scenario error must be a string or null")
+            if scenario["status"] == "passed" and scenario.get("error") is not None:
+                raise ValueError("passed scenario must not contain an error")
+        summary = report.get("summary")
+        if not isinstance(summary, dict):
+            raise ValueError("summary must be an object")
+        for field, expected in counts.items():
+            if type(summary.get(field)) is not int or summary[field] != expected:
+                raise ValueError(f"summary.{field} does not match scenario records")
+    if len(modes) != 1:
+        raise ValueError("evaluation reports must use the same mode")
+    missing = REQUIRED_SUITES - identities
+    if missing and not allow_partial:
+        names = ", ".join(f"{crate}/{suite}" for crate, suite in sorted(missing))
+        raise ValueError(f"missing required evaluation suites: {names}")
+    return missing
 
 
 def load_reports(input_dir: Path) -> list[dict]:
@@ -14,15 +91,17 @@ def load_reports(input_dir: Path) -> list[dict]:
     return reports
 
 
-def render_dashboard(reports: list[dict]) -> str:
-    overall_failed = sum(report.get("summary", {}).get("failed", 0) for report in reports)
-    overall_passed = overall_failed == 0 and bool(reports)
+def render_dashboard(reports: list[dict], allow_partial: bool = False) -> str:
+    missing = validate_reports(reports, allow_partial)
+    overall_failed = sum(report["summary"]["failed"] for report in reports)
+    status = "FAIL" if overall_failed else ("PARTIAL" if missing else "PASS")
 
     lines = [
         "# Dragon Head Evaluation Bench Dashboard",
         "",
         f"- Reports: {len(reports)}",
-        f"- Overall Status: {'PASS' if overall_passed else 'FAIL'}",
+        f"- Overall Status: {status}",
+        f"- Coverage: {'partial' if missing else 'complete'} ({len(REQUIRED_SUITES - missing)}/{len(REQUIRED_SUITES)} required suites)",
         "",
         "| Crate | Suite | Mode | Passed | Failed | Total |",
         "| :--- | :--- | :--- | ---: | ---: | ---: |",
@@ -77,16 +156,28 @@ def main() -> int:
     )
     parser.add_argument("--input-dir", default="target/evaluation-bench")
     parser.add_argument("--output", default="target/evaluation-dashboard.md")
+    parser.add_argument(
+        "--allow-partial", action="store_true",
+        help="Allow missing required suites, reported as PARTIAL rather than PASS",
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
     output_path = Path(args.output)
-    reports = load_reports(input_dir)
-    if not reports:
-        print(f"No evaluation reports found in {input_dir}", file=sys.stderr)
+    try:
+        reports = load_reports(input_dir)
+        dashboard = render_dashboard(reports, args.allow_partial)
+    except (OSError, ValueError) as error:
+        print(f"Invalid evaluation reports in {input_dir}: {error}", file=sys.stderr)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            "# Dragon Head Evaluation Bench Dashboard\n\n"
+            "- Overall Status: FAIL\n"
+            "- Input validation failed; see stderr for details.\n",
+            encoding="utf-8",
+        )
         return 1
 
-    dashboard = render_dashboard(reports)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(dashboard, encoding="utf-8")
     print(dashboard)

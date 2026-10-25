@@ -77,6 +77,24 @@ The CI pipeline is defined in `.github/workflows/`.
   - Markdown dashboard: `target/evaluation-dashboard.md`
 - **Registration Rule**: New major features are not considered complete until a corresponding scenario is added to the evaluation bench or an explicit exemption is documented in `docs/`.
 
+The dashboard requires all seven `comprehensive_evaluation` suite reports by default.
+It validates report types, nonempty scenario lists, unique suite/scenario identities,
+matching summary counts, finite nonnegative durations, and a consistent `smoke` or
+`full` mode. A passed scenario cannot carry an error. Missing browser-backed suites
+therefore cannot produce overall PASS.
+Invalid input exits nonzero and writes a FAIL dashboard, replacing any stale PASS
+artifact. Valid reports containing failed scenarios produce a FAIL dashboard and
+exit nonzero.
+
+For an intentionally limited local run, use
+`python3 scripts/evaluation_dashboard.py --input-dir <reports> --allow-partial`.
+Missing required suites are then permitted and reported as **PARTIAL**, with the
+coverage count, rather than PASS. Partial mode still rejects invalid, duplicate,
+inconsistent, or mixed-mode reports; failed scenarios still exit nonzero. The
+standard `just` and CI commands keep the complete-coverage requirement.
+Run the aggregator's unit and CLI regressions with
+`python3 -m unittest discover -s scripts -p 'test_evaluation_dashboard.py'`.
+
 **ISSUE-330 exemption:** The composed high-risk expense demo is deliberately
 outside the dashboard suites: it starts the shipped MCP binary, Chrome, a local
 Slack API double and a signed HTTP callback in one process-level E2E. It is
