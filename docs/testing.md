@@ -34,6 +34,9 @@ We follow the "Testing Pyramid" approach with the following layers:
 The CI pipeline is defined in `.github/workflows/`.
 
 - **`ci.yml`**: Runs `fmt`, `clippy`, unit tests, and integration tests.
+- **Python regression tests**: `ci.yml` runs all `scripts/test_*.py` suites with
+  Python 3.12 on PRs and main pushes. Audit replay and NFR trend failures fail
+  the job; the tests use only the Python standard library.
 - **MCP binary stdio smoke (PR required)**: `ci.yml` starts the shipped
   `dragon-head-mcp` binary with Chrome and verifies `initialize`,
   `notifications/initialized`, and `tools/list` over real stdio. The gate rejects
@@ -131,6 +134,9 @@ CHROME_INSTALLED=true cargo test -p core-runtime --test semantic_wait
 ### 3.2 Manual Setup (without the container)
 
 ```bash
+# Run Python regression tests (same discovery command as CI)
+python3 -m unittest discover -s scripts -p 'test_*.py'
+
 # Run all unit and integration tests
 cargo test
 
