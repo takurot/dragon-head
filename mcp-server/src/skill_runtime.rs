@@ -226,18 +226,31 @@ impl SkillRuntime for PageSkillRuntime<'_> {
     ) -> OperationOutcome {
         let selector = resolve_or_fail!(&step.selector, self.params, ctx, TemplateSlot::Control);
         let script = format!(
-            "(() => {{ const el = document.querySelector({}); return el ? (el.innerText || el.textContent || '').trim() : null; }})()",
+            "(() => {{ try {{ const el = document.querySelector({}); const value = el ? (el.innerText || el.textContent || '').trim() : null; return {{ ok: true, value }}; }} catch (error) {{ return {{ ok: false, error: String(error && error.message || error) }}; }} }})()",
             serde_json::to_string(&selector).unwrap_or_else(|_| "\"\"".to_string())
         );
 
-        match self.page.evaluate_script(&script) {
-            Ok(object) => {
+        // CDP's RemoteObject alone does not distinguish a JS exception from a
+        // missing value. Keep the checked envelope and validate it before storing
+        // any page-derived output or reporting the step as successful.
+        match self.page.evaluate_script_json(&script) {
+            Ok(envelope) => {
                 // A missing element stores `Value::Null`, distinct from a successful-but-empty
                 // extraction (an empty string) — see `resolve_extracted_scalar`, which rejects
                 // `Null` when a later template references `{{extracted.<key>}}`, so a failed
                 // extraction fails that step loudly instead of silently typing an empty value
                 // (ISSUE-304 review).
-                let raw = object.value.unwrap_or(Value::Null);
+                let raw = match unwrap_skill_extraction_envelope(envelope) {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        return OperationOutcome::Failure {
+                            reason: format!(
+                                "ScriptEvalError: {}",
+                                safe_script_error_message(self.injection_sanitizer, &reason)
+                            ),
+                        };
+                    }
+                };
                 // Extracted content is untrusted page content (ISSUE-304 review): sanitize it
                 // here, at the point it enters `ctx.extracted`, so *every* later consumer — a
                 // template substitution into another step, or `run_skill`'s `outputs` — sees the
@@ -249,10 +262,28 @@ impl SkillRuntime for PageSkillRuntime<'_> {
                 ctx.extracted.insert(step.key.clone(), sanitized);
                 OperationOutcome::Success
             }
-            Err(err) => OperationOutcome::Failure {
-                reason: err.to_string(),
+            Err(_) => OperationOutcome::Failure {
+                reason: "ScriptEvalError: skill extraction script evaluation failed".to_string(),
             },
         }
+    }
+}
+
+fn unwrap_skill_extraction_envelope(envelope: Value) -> Result<Value, String> {
+    let invalid_shape = || "skill extraction script returned an unexpected shape".to_string();
+    let object = envelope.as_object().ok_or_else(invalid_shape)?;
+    match object.get("ok").and_then(Value::as_bool) {
+        Some(true) => object
+            .get("value")
+            .filter(|value| value.is_string() || value.is_null())
+            .cloned()
+            .ok_or_else(invalid_shape),
+        Some(false) => Err(object
+            .get("error")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(invalid_shape)),
+        None => Err(invalid_shape()),
     }
 }
 
@@ -337,4 +368,43 @@ pub(crate) fn resolve_scalar(value: Option<&Value>) -> Option<String> {
         return Some(value.to_string());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_extraction_envelope_preserves_explicit_null_and_empty_text() {
+        for value in [Value::Null, json!(""), json!("READY")] {
+            assert_eq!(
+                unwrap_skill_extraction_envelope(json!({"ok": true, "value": value})),
+                Ok(value)
+            );
+        }
+    }
+
+    #[test]
+    fn skill_extraction_envelope_rejects_missing_values_and_invalid_shapes() {
+        for envelope in [
+            Value::Null,
+            json!([]),
+            json!({}),
+            json!({"ok": "true", "value": "text"}),
+            json!({"ok": true}),
+            json!({"ok": true, "value": 123}),
+            json!({"ok": true, "value": {"text": "READY"}}),
+            json!({"ok": false}),
+            json!({"ok": false, "error": 123}),
+        ] {
+            assert_eq!(
+                unwrap_skill_extraction_envelope(envelope),
+                Err("skill extraction script returned an unexpected shape".to_string())
+            );
+        }
+        assert_eq!(
+            unwrap_skill_extraction_envelope(json!({"ok": false, "error": "DOM failed"})),
+            Err("DOM failed".to_string())
+        );
+    }
 }
