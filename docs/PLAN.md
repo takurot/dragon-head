@@ -697,6 +697,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `navigate_public`（約210行）の分解、`mcp-server/src/tests.rs`（約1.9k行・テストのみ）と `config.rs`（約2.1k行）の
 > 分割。`capture_next_state_if_changed` はIssue起票後に既に小さくなっていたため対象外。
 
+## v0.5.1 — Reliability & Regression Gates
+
+- [x] ISSUE-384: Python監査再生・NFRトレンドの回帰テストをPR CIへ接続する。
+- [ ] ISSUE-385: npm配布ラッパーの回帰テスト・パッケージE2EをPR CIへ接続する。
+- [ ] ISSUE-381: Python監査再生のJSON Patch copy/move・境界検証を修正する。
+- [ ] ISSUE-382: 総合評価レポートの欠損・矛盾によるfalse PASSを防止する。
+- [ ] ISSUE-383: NFR閾値の欠損・未知キーによるfalse PASSを防止する。
+- [ ] ISSUE-374: navigate拒否・schema validationの診断を安全に具体化する。
+- [ ] ISSUE-380: スキルextractのJavaScript例外を失敗として扱う。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。
