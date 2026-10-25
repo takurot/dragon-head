@@ -63,6 +63,16 @@ The CI pipeline is defined in `.github/workflows/`.
 - **NFR Fidelity**: the workspace `test` profile keeps `incremental = false` and uses a modest optimization level so latency-oriented tests measure runtime behavior rather than debug-build artifacts.
 - **Latency Scope**: `nfr_latency` measures the SRE update path after obtaining the current DOM snapshot, matching the spec's focus on semantic state regeneration under subtree refinement.
 - **Threshold Enforcement**: `scripts/nfr_dashboard.py` evaluates metric thresholds from JSON outputs and fails CI on regressions.
+  Each metric must provide a nonempty `metric_id`, mode `short` or `full`, and
+  nonempty numeric `values` and `thresholds` objects. Numbers must be finite and
+  cannot be booleans. Threshold names end in `_min` or `_max` and refer to an
+  existing measured value; missing or unknown comparisons are input errors,
+  never successful checks. Metrics without thresholds are not accepted by this
+  performance gate. Optional `display` entries must name existing values.
+  Invalid or absent metrics replace the requested dashboard with a `FAIL`
+  artifact, so a previous successful run cannot leave a stale `PASS` report.
+  Run the parser and CLI regressions with
+  `python3 -m unittest discover -s scripts -p 'test_nfr_dashboard.py'`.
 - **Comprehensive Evaluation Bench**: `just evaluation-bench-smoke` runs crate-spanning feature evaluation suites and emits JSON reports plus `target/evaluation-dashboard.md`. Nightly/full runs use the same format with `DRAGON_HEAD_EVAL_MODE=full`.
 
 ## 2.1 Comprehensive Evaluation Bench

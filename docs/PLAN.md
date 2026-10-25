@@ -547,6 +547,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - CIタスク
   - [x] PRでは短尺性能テスト、nightlyではフル性能テストを実行する。
   - [x] NFR回帰ダッシュボードを生成し、しきい値超過時に失敗させる。
+  - [x] ISSUE-383: metric schema・有限数値・既知の比較閾値を検証し、欠損や未知キーをPASSにしない。実producer形式のfixtureとCLIの異常系テストで固定する。
 - Exit Criteria
   - [x] 主要NFR指標が計測可能かつ継続監視可能。
 
@@ -703,7 +704,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [x] ISSUE-385: npm配布ラッパーの回帰テスト・パッケージE2EをPR CIへ接続する。
 - [x] ISSUE-381: Python監査再生のJSON Patch copy/move・境界検証を修正する。
 - [x] ISSUE-382: 総合評価レポートの欠損・矛盾によるfalse PASSを防止する。
-- [ ] ISSUE-383: NFR閾値の欠損・未知キーによるfalse PASSを防止する。
+- [x] ISSUE-383: NFR閾値の欠損・未知キーによるfalse PASSを防止する。
 - [ ] ISSUE-374: navigate拒否・schema validationの診断を安全に具体化する。
 - [ ] ISSUE-380: スキルextractのJavaScript例外を失敗として扱う。
 
