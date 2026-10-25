@@ -1,0 +1,369 @@
+[
+  {
+    "name": "copy_inserts_array_element",
+    "document": [
+      1,
+      2,
+      3
+    ],
+    "patch": [
+      {
+        "op": "copy",
+        "from": "/0",
+        "path": "/1"
+      }
+    ],
+    "expected": [
+      1,
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "name": "copy_appends_array_element",
+    "document": [
+      1,
+      2
+    ],
+    "patch": [
+      {
+        "op": "copy",
+        "from": "/0",
+        "path": "/-"
+      }
+    ],
+    "expected": [
+      1,
+      2,
+      1
+    ]
+  },
+  {
+    "name": "copy_nested_value_is_independent",
+    "document": {
+      "a": {
+        "x": 1
+      }
+    },
+    "patch": [
+      {
+        "op": "copy",
+        "from": "/a",
+        "path": "/b"
+      },
+      {
+        "op": "replace",
+        "path": "/b/x",
+        "value": 9
+      }
+    ],
+    "expected": {
+      "a": {
+        "x": 1
+      },
+      "b": {
+        "x": 9
+      }
+    }
+  },
+  {
+    "name": "copy_array_value_is_independent",
+    "document": {
+      "a": [
+        1
+      ]
+    },
+    "patch": [
+      {
+        "op": "copy",
+        "from": "/a",
+        "path": "/b"
+      },
+      {
+        "op": "add",
+        "path": "/b/-",
+        "value": 2
+      }
+    ],
+    "expected": {
+      "a": [
+        1
+      ],
+      "b": [
+        1,
+        2
+      ]
+    }
+  },
+  {
+    "name": "copy_to_root",
+    "document": {
+      "a": {
+        "b": 1
+      }
+    },
+    "patch": [
+      {
+        "op": "copy",
+        "from": "/a",
+        "path": ""
+      }
+    ],
+    "expected": {
+      "b": 1
+    }
+  },
+  {
+    "name": "copy_missing_source",
+    "document": {},
+    "patch": [
+      {
+        "op": "copy",
+        "from": "/missing",
+        "path": "/b"
+      }
+    ],
+    "error": true
+  },
+  {
+    "name": "move_to_array_end",
+    "document": [
+      1,
+      2,
+      3
+    ],
+    "patch": [
+      {
+        "op": "move",
+        "from": "/0",
+        "path": "/-"
+      }
+    ],
+    "expected": [
+      2,
+      3,
+      1
+    ]
+  },
+  {
+    "name": "move_array_uses_post_removal_index",
+    "document": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "patch": [
+      {
+        "op": "move",
+        "from": "/0",
+        "path": "/2"
+      }
+    ],
+    "expected": [
+      2,
+      3,
+      1,
+      4
+    ]
+  },
+  {
+    "name": "move_array_to_post_removal_length",
+    "document": [
+      1,
+      2,
+      3
+    ],
+    "patch": [
+      {
+        "op": "move",
+        "from": "/0",
+        "path": "/2"
+      }
+    ],
+    "expected": [
+      2,
+      3,
+      1
+    ]
+  },
+  {
+    "name": "move_array_index_past_post_removal_length",
+    "document": [
+      1,
+      2,
+      3
+    ],
+    "patch": [
+      {
+        "op": "move",
+        "from": "/0",
+        "path": "/3"
+      }
+    ],
+    "error": true
+  },
+  {
+    "name": "move_to_same_path",
+    "document": {
+      "a": {
+        "x": 1
+      }
+    },
+    "patch": [
+      {
+        "op": "move",
+        "from": "/a",
+        "path": "/a"
+      }
+    ],
+    "expected": {
+      "a": {
+        "x": 1
+      }
+    }
+  },
+  {
+    "name": "move_missing_source_to_same_path",
+    "document": {},
+    "patch": [
+      {
+        "op": "move",
+        "from": "/missing",
+        "path": "/missing"
+      }
+    ],
+    "error": true
+  },
+  {
+    "name": "move_parent_into_descendant",
+    "document": {
+      "a": {
+        "b": 1
+      }
+    },
+    "patch": [
+      {
+        "op": "move",
+        "from": "/a",
+        "path": "/a/b/c"
+      }
+    ],
+    "error": true
+  },
+  {
+    "name": "move_root_into_descendant",
+    "document": {
+      "a": 1
+    },
+    "patch": [
+      {
+        "op": "move",
+        "from": "",
+        "path": "/b"
+      }
+    ],
+    "error": true
+  },
+  {
+    "name": "move_sibling_with_same_string_prefix",
+    "document": {
+      "a": {
+        "x": 1
+      }
+    },
+    "patch": [
+      {
+        "op": "move",
+        "from": "/a",
+        "path": "/ab"
+      }
+    ],
+    "expected": {
+      "ab": {
+        "x": 1
+      }
+    }
+  },
+  {
+    "name": "replace_missing_member",
+    "document": {},
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/missing",
+        "value": 1
+      }
+    ],
+    "error": true
+  },
+  {
+    "name": "replace_present_null_member",
+    "document": {
+      "a": null
+    },
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/a",
+        "value": 1
+      }
+    ],
+    "expected": {
+      "a": 1
+    }
+  },
+  {
+    "name": "add_array_out_of_bounds",
+    "document": [
+      1
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/9",
+        "value": 2
+      }
+    ],
+    "error": true
+  },
+  {
+    "name": "add_array_at_length",
+    "document": [
+      1
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/1",
+        "value": 2
+      }
+    ],
+    "expected": [
+      1,
+      2
+    ]
+  },
+  {
+    "name": "failed_patch_preserves_input",
+    "document": {
+      "a": [
+        1
+      ]
+    },
+    "patch": [
+      {
+        "op": "add",
+        "path": "/a/-",
+        "value": 2
+      },
+      {
+        "op": "replace",
+        "path": "/missing",
+        "value": 3
+      }
+    ],
+    "error": true
+  }
+]

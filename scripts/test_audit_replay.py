@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Unit tests for audit_replay.py using stdlib unittest (ISSUE-271)."""
 
+import copy
+import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +13,55 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import audit_replay  # noqa: E402
+
+
+PATCH_CASES = json.loads(
+    (Path(__file__).resolve().parents[1] / "core-runtime/tests/fixtures/audit_patch_contract.json")
+    .read_text(encoding="utf-8")
+)
+
+
+class TestSharedPatchContract(unittest.TestCase):
+    def test_patch_results_and_rejections(self):
+        for case in PATCH_CASES:
+            with self.subTest(case=case["name"]):
+                original = copy.deepcopy(case["document"])
+                if case.get("error"):
+                    with self.assertRaises((ValueError, KeyError, IndexError, TypeError)):
+                        audit_replay._apply_json_patch(case["document"], case["patch"])
+                else:
+                    actual = audit_replay._apply_json_patch(case["document"], case["patch"])
+                    self.assertEqual(actual, case["expected"])
+                self.assertEqual(case["document"], original, "patching must not mutate its input")
+
+    def test_ndjson_cli_accepts_valid_chains_and_rejects_invalid_patches(self):
+        for case in PATCH_CASES:
+            with self.subTest(case=case["name"]), tempfile.TemporaryDirectory() as directory:
+                patch = copy.deepcopy(case["patch"])
+                if not case.get("error"):
+                    # Replay reports omit the final snapshot: a root test verifies it
+                    # through the public CLI rather than only the private helper.
+                    patch.append({"op": "test", "path": "", "value": case["expected"]})
+                events = [
+                    {"type": "STATE_SNAPSHOT", "state_hash": "before", "page_instance_id": "fixture",
+                     "timestamp": 1, "payload": case["document"]},
+                    {"type": "STATE_PATCH", "state_hash": "after", "page_instance_id": "fixture",
+                     "timestamp": 2, "patch": patch},
+                ]
+                path = Path(directory) / "audit.ndjson"
+                path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, str(Path(audit_replay.__file__)), str(path), "--format", "json"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if case.get("error"):
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Replay failed", result.stderr)
+                    self.assertEqual(result.stdout, "")
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    report = json.loads(result.stdout)
+                    self.assertEqual(len(report["state_chain"]), 2)
 
 
 class TestApplyJsonPatch(unittest.TestCase):
@@ -66,6 +119,15 @@ class TestApplyJsonPatch(unittest.TestCase):
             {"a": {"b": 1}, "c": 2}, [{"op": "move", "from": "/a", "path": ""}]
         )
         self.assertEqual(result, {"b": 1})
+
+    def test_move_root_to_same_path_is_a_noop(self):
+        # Python-only: the pinned Rust json-patch implementation rejects a
+        # root source as InvalidFromPointer, even for a same-path move. Keep
+        # that existing Rust limitation outside the shared supported contract.
+        document = {"a": 1}
+        result = audit_replay._apply_json_patch(document, [{"op": "move", "from": "", "path": ""}])
+        self.assertEqual(result, document)
+        self.assertEqual(document, {"a": 1})
 
     def test_test_op_success_and_failure(self):
         ok = audit_replay._apply_json_patch({"a": 1}, [{"op": "test", "path": "/a", "value": 1}])

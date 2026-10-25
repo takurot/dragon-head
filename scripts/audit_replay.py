@@ -96,13 +96,17 @@ def _apply_json_patch(doc: Any, ops: list[dict]) -> Any:
                 )
         elif operation == "copy":
             from_parts = _ptr_parts(op["from"])
-            val = _patch_get(doc, from_parts)
-            doc = _patch_set(doc, parts, val)
+            val = copy.deepcopy(_patch_get(doc, from_parts))
+            doc = _patch_add(doc, parts, val)
         elif operation == "move":
             from_parts = _ptr_parts(op["from"])
             val = _patch_get(doc, from_parts)
+            if from_parts == parts:
+                continue
+            if parts[:len(from_parts)] == from_parts:
+                raise ValueError("cannot move a value into its own descendant")
             doc = _patch_remove(doc, from_parts)
-            doc = _patch_set(doc, parts, val)
+            doc = _patch_add(doc, parts, val)
         else:
             raise ValueError(f"unsupported patch op: {operation!r}")
     return doc
@@ -158,7 +162,7 @@ def _patch_get(doc: Any, parts: list[str]) -> Any:
 
 
 def _patch_set(doc: Any, parts: list[str], value: Any) -> Any:
-    """Apply "replace" (also used for "copy"/"move" targets). Returns the new doc.
+    """Apply "replace". Returns the new doc.
 
     RFC 6902 §4.3: "replace" with a root target path ("") replaces the
     entire target document with the given value — it is not an error, and
@@ -171,6 +175,8 @@ def _patch_set(doc: Any, parts: list[str], value: Any) -> Any:
     if isinstance(parent, list):
         parent[_array_index(key)] = value
     else:
+        if key not in parent:
+            raise KeyError(key)
         parent[key] = value
     return doc
 
@@ -189,7 +195,10 @@ def _patch_add(doc: Any, parts: list[str], value: Any) -> Any:
         if key == "-":
             parent.append(value)
         else:
-            parent.insert(_array_index(key), value)
+            index = _array_index(key)
+            if index > len(parent):
+                raise ValueError(f"array insertion index {index} exceeds length {len(parent)}")
+            parent.insert(index, value)
     else:
         parent[key] = value
     return doc
