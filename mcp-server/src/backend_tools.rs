@@ -288,6 +288,7 @@ impl McpBackend for CoreRuntimeBackend {
     fn ask_human(&mut self, arguments: Value) -> Result<Value> {
         let args: AskHumanArguments =
             serde_json::from_value(arguments).context("invalid ask_human arguments")?;
+        self.page.log_ask_human_tool_call(&args.reason);
 
         if !self.in_band_approval {
             // Granting is reserved for the out-of-band approver (ISSUE-371); report only
@@ -301,7 +302,7 @@ impl McpBackend for CoreRuntimeBackend {
         }
 
         // One atomic call: the payload below describes exactly the request that was granted.
-        let Some(pending) = self.page.approve_pending_policy_request()? else {
+        let Some(pending) = self.page.approve_pending_policy_request_via("ask_human")? else {
             return Ok(json!({
                 "approved": false,
                 "reason": args.reason,

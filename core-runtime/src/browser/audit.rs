@@ -48,6 +48,16 @@ impl PageSession {
         });
     }
 
+    /// Record a top-level `TOOL_CALL` audit event for an `ask_human` request (ISSUE-372), so
+    /// the trail shows when an in-band approval was asked for or attempted, granted or not.
+    pub fn log_ask_human_tool_call(&self, reason: &str) {
+        self.audit_logger.log(AuditEvent::ToolCall {
+            tool_name: "ask_human".to_string(),
+            args: serde_json::json!({ "reason": reason }),
+            timestamp: epoch_millis_u64(),
+        });
+    }
+
     // -------------------------------------------------------------------------
 
     pub(super) fn record_action_log(

@@ -415,7 +415,31 @@ fn sanitize_audit_event(event: AuditEvent) -> AuditEvent {
                 .map(|s| truncate_plugin_string(&s)),
             timestamp,
         },
+        // `reason` embeds request-derived text (rule id, target signature that may echo a
+        // caller-supplied stable key) and `user_id` an approver-supplied identity.
+        AuditEvent::HitlEvent {
+            event_type,
+            reason,
+            user_id,
+            timestamp,
+        } => AuditEvent::HitlEvent {
+            event_type,
+            reason: reason.as_deref().map(|s| sanitize_hitl_string(r, s)),
+            user_id: user_id.as_deref().map(|s| sanitize_hitl_string(r, s)),
+            timestamp,
+        },
         other => other,
+    }
+}
+
+/// Maximum characters kept in a `HITL_EVENT` `reason` / `user_id`.
+const MAX_HITL_STRING_LEN: usize = 512;
+
+fn sanitize_hitl_string(redactor: &privacy::PiiRedactor, s: &str) -> String {
+    let redacted = redactor.redact_text(s);
+    match redacted.char_indices().nth(MAX_HITL_STRING_LEN) {
+        Some((cut, _)) => format!("{} [truncated]", &redacted[..cut]),
+        None => redacted,
     }
 }
 
@@ -618,6 +642,65 @@ mod tests {
         } else {
             panic!("Expected PluginPolicyDecision event");
         }
+    }
+
+    #[test]
+    fn sanitize_hitl_event_redacts_and_bounds_reason_and_user_id() {
+        let event = AuditEvent::HitlEvent {
+            event_type: "approved".to_string(),
+            reason: Some(format!(
+                "Approved via ask_human: target a@b.example.com {}",
+                "é".repeat(600)
+            )),
+            user_id: Some("reviewer c@d.example.com".to_string()),
+            timestamp: 7,
+        };
+        let AuditEvent::HitlEvent {
+            event_type,
+            reason,
+            user_id,
+            timestamp,
+        } = sanitize_audit_event(event)
+        else {
+            panic!("Expected HitlEvent event");
+        };
+        assert_eq!((event_type.as_str(), timestamp), ("approved", 7));
+        let reason = reason.expect("reason should be present");
+        assert!(
+            !reason.contains("a@b.example.com"),
+            "email must be redacted"
+        );
+        assert!(
+            reason.ends_with(" [truncated]"),
+            "long reason must be bounded"
+        );
+        assert!(reason.chars().count() < 600);
+        let user_id = user_id.expect("user_id should be present");
+        assert!(
+            !user_id.contains("c@d.example.com"),
+            "email must be redacted"
+        );
+    }
+
+    #[test]
+    fn sanitize_hitl_event_preserves_short_reason_and_none_fields() {
+        let short = AuditEvent::HitlEvent {
+            event_type: "request".to_string(),
+            reason: Some("Requires human approval for rule r1".to_string()),
+            user_id: None,
+            timestamp: 1,
+        };
+        let AuditEvent::HitlEvent {
+            reason, user_id, ..
+        } = sanitize_audit_event(short)
+        else {
+            panic!("Expected HitlEvent event");
+        };
+        assert_eq!(
+            reason.as_deref(),
+            Some("Requires human approval for rule r1")
+        );
+        assert!(user_id.is_none());
     }
 
     #[test]
