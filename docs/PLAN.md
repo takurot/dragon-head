@@ -720,6 +720,10 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 
 ## 4. 共通 Definition of Done（全PR共通）
 
+> **Follow-up (ISSUE-382, done)**: 総合評価dashboardは7つの必須suite、report/scenarioの型・件数・一意性・mode整合性を検証する。
+> 欠損・矛盾は非0とFAIL artifactで古いPASSを置換し、正当な失敗reportはFAILとして保持する。明示的な `--allow-partial` のみ不足suiteを許し、PARTIALとcoverageを表示する。
+> Pythonのunit/CLI回帰testとRust producer由来のJSON fixtureで固定する。
+
 - [ ] 仕様トレーサビリティ（Spec Ref）がPR説明に記載されている。
 - [ ] 最低1件の新規テストが追加されている。
 - [ ] CI Required Checks が全て通過している。
