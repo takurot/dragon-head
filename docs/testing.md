@@ -37,6 +37,12 @@ The CI pipeline is defined in `.github/workflows/`.
 - **Python regression tests**: `ci.yml` runs all `scripts/test_*.py` suites with
   Python 3.12 on PRs and main pushes. Audit replay and NFR trend failures fail
   the job; the tests use only the Python standard library.
+
+- **npm distribution wrapper**: `npm-wrapper` runs the wrapper regression suite on
+  Node.js 22 for PRs and pushes to the configured branches. It checks platform metadata,
+  spawn and signal handling, and packs/installs local tarballs with a fake binary.
+  No published release binary or Chrome installation is needed. This suite is separate
+  from the `bench-playwright` Node.js benchmark tests.
 - **MCP binary stdio smoke (PR required)**: `ci.yml` starts the shipped
   `dragon-head-mcp` binary with Chrome and verifies `initialize`,
   `notifications/initialized`, and `tools/list` over real stdio. The gate rejects
@@ -92,6 +98,12 @@ completion baseline alongside exact-one approval, observed mutation and hard blo
 The HTTP fixture also tests fragmented POSTs and idle browser connections.
 
 ## 3. Running Tests Locally
+
+Run the npm distribution wrapper suite from the repository root (Node.js 22 is used in CI):
+
+```bash
+node --test npm/dragon-head-mcp/test/run.test.js
+```
 
 ### 3.1 Dev Container (Recommended)
 

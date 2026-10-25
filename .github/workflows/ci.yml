@@ -65,6 +65,18 @@ jobs:
     # EmbarkStudios/cargo-deny-action downloads a pre-built binary.
     - uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
 
+  npm-wrapper:
+    name: npm distribution wrapper
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+    - name: Test wrapper and packed-package E2E
+      run: node --test npm/dragon-head-mcp/test/run.test.js
+
   bench-playwright:
     name: Bench Playwright (Node ${{ matrix.node }})
     runs-on: ubuntu-latest

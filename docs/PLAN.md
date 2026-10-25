@@ -700,12 +700,16 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 ## v0.5.1 — Reliability & Regression Gates
 
 - [x] ISSUE-384: Python監査再生・NFRトレンドの回帰テストをPR CIへ接続する。
-- [ ] ISSUE-385: npm配布ラッパーの回帰テスト・パッケージE2EをPR CIへ接続する。
+- [x] ISSUE-385: npm配布ラッパーの回帰テスト・パッケージE2EをPR CIへ接続する。
 - [ ] ISSUE-381: Python監査再生のJSON Patch copy/move・境界検証を修正する。
 - [ ] ISSUE-382: 総合評価レポートの欠損・矛盾によるfalse PASSを防止する。
 - [ ] ISSUE-383: NFR閾値の欠損・未知キーによるfalse PASSを防止する。
 - [ ] ISSUE-374: navigate拒否・schema validationの診断を安全に具体化する。
 - [ ] ISSUE-380: スキルextractのJavaScript例外を失敗として扱う。
+
+> **Follow-up (ISSUE-385, done)**: npm配布ラッパーのテストをNode.js 22のPR/push CIゲートへ接続した。
+> ローカルtarballのpack/install E2Eに加え、実OSのSIGTERMを子プロセスへ転送し、ラッパーも同じsignalで
+> 終了することをreadiness同期・timeout・cleanup付きのsubprocess testで検証する。
 
 ## 4. 共通 Definition of Done（全PR共通）
 
