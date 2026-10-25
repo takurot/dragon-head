@@ -57,6 +57,11 @@ The CI pipeline is defined in `.github/workflows/`.
 - **Skill schema version gate**: `skill-schema-compatibility` rejects JSON definitions above
   the supported schema version, while `skill-conformance` rejects unsupported typed
   definitions before any runtime operation is invoked.
+- **Skill extraction failures**: `mcp_run_skill_extracted_outputs` exercises invalid CSS,
+  throwing DOM APIs, bounded and sanitized diagnostics, retry, and `on_failure` against
+  Chrome. Missing selectors still produce null and empty text remains an empty string.
+  The nightly `mcp-binary-e2e` suite also proves invalid CSS reports a failed skill over
+  the shipped binary's stdio protocol.
 - **`e2e.yml`**: Runs E2E tests against a headless browser.
 - **Performance Gate (PR Short)**: `ci.yml` runs a short NFR suite (`ttft`, `nfr_latency`, `nfr_bandwidth`, `nfr_capacity`) and generates `core-runtime/target/nfr-dashboard.md`.
 - **Performance Gate (Nightly Full)**: `e2e.yml` runs the full NFR suite (including long TTFT and full capacity targets) and publishes the same dashboard format for regression tracking.

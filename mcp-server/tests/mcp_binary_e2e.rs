@@ -1375,6 +1375,87 @@ fn test_mcp_binary_loads_relative_skill_and_completes_run_skill() -> anyhow::Res
 }
 
 #[test]
+#[ignore = "requires Chrome; starts the shipped MCP binary"]
+fn test_mcp_binary_skill_extract_exception_is_failed() -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !should_skip_browser_tests(),
+        "Chrome is required for this E2E"
+    );
+    let bin_path = build_binary_once()?;
+    let config_home = tempfile::tempdir()?;
+    let config_dir = config_home.path().join("dragon-head");
+    std::fs::create_dir_all(&config_dir)?;
+    std::fs::write(
+        config_dir.join("invalid-selector.json"),
+        r#"{"schema_version":1,"name":"invalid-selector","steps":[{"type":"extract","key":"value","selector":"["}]}"#,
+    )?;
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[skills]\nfiles = [\"invalid-selector.json\"]",
+    )?;
+
+    let mut command = Command::new(bin_path);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .env_remove("POLICY_FILE")
+        .env_remove("AUDIT_LOG_DIR")
+        .env_remove("HITL_BRIDGE_ENABLED");
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut raw_child = command.spawn()?;
+    let stdout = raw_child.stdout.take().expect("stdout");
+    let mut child = ChildGuard::new(raw_child);
+    let (sender, receiver) = mpsc::channel();
+    let _stdout_reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender.send(StdoutEvent::Line(line)).is_err() {
+                break;
+            }
+        }
+        let _ = sender.send(StdoutEvent::Eof);
+    });
+    for request in [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"skill-exception-e2e","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_skill","arguments":{"skill_name":"invalid-selector"}}}),
+    ] {
+        writeln!(child.stdin_mut(), "{request}")?;
+    }
+    child.stdin_mut().flush()?;
+    let initialized: Value =
+        serde_json::from_str(&receive_stdout_line(&receiver, Duration::from_secs(120))?)?;
+    assert_eq!(initialized["id"], 1);
+    assert!(initialized.get("error").is_none(), "{initialized}");
+    let response: Value =
+        serde_json::from_str(&receive_stdout_line(&receiver, Duration::from_secs(30))?)?;
+    assert_eq!(response["id"], 2);
+    assert!(response.get("error").is_none(), "{response}");
+    let result = &response["result"]["structuredContent"];
+    assert_eq!(result["status"], "failed", "{response}");
+    assert_eq!(result["trace"][0]["outcome"], "failure", "{response}");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ScriptEvalError"),
+        "{response}"
+    );
+    let fallback: Value = serde_json::from_str(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text response"),
+    )?;
+    assert_eq!(&fallback, result);
+    child.close_stdin();
+    let status = child.wait_timeout(Duration::from_secs(30))?;
+    assert!(status.success(), "dragon-head-mcp exited with {status}");
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires Chrome; starts a real browser process (~30-60s). Run with: cargo test -p mcp-server --test mcp_binary_e2e -- --ignored"]
 fn test_mcp_binary_full_handshake_and_tools_call() -> anyhow::Result<()> {
     if should_skip_browser_tests() {

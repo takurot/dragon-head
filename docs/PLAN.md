@@ -706,7 +706,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [x] ISSUE-382: 総合評価レポートの欠損・矛盾によるfalse PASSを防止する。
 - [x] ISSUE-383: NFR閾値の欠損・未知キーによるfalse PASSを防止する。
 - [x] ISSUE-374: navigate拒否・schema validationの診断を安全に具体化する。
-- [ ] ISSUE-380: スキルextractのJavaScript例外を失敗として扱う。
+- [x] ISSUE-380: スキルextractのJavaScript例外を失敗として扱う。
 
 > **Follow-up (ISSUE-385, done)**: npm配布ラッパーのテストをNode.js 22のPR/push CIゲートへ接続した。
 > ローカルtarballのpack/install E2Eに加え、実OSのSIGTERMを子プロセスへ転送し、ラッパーも同じsignalで
@@ -718,6 +718,10 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > `audit_patch_contract.json` で最終状態と受理/拒否を照合し、NDJSON CLIの終了コードと入力不変も検証する。
 > 共通fixtureは両実装の対応範囲を扱う。Rustの既存 `json-patch` はrootをsourceにするmoveを
 > `InvalidFromPointer` で拒否するため、正当なroot同一pathのno-opはPython側の専用回帰testで維持する。
+> **Follow-up (ISSUE-380, done)**: スキルextractをchecked JSON envelopeで実行し、JavaScript例外・
+> 欠損value・不正なshapeを失敗へ変換する。ページ由来診断は既存の長さ制限・PII redaction・
+> prompt-injection検査を経て返し、未一致nullと空文字の成功契約は維持した。実Chromeのretry/
+> on_failure回帰とshipped binaryのstdio E2Eで検証する。
 
 ## 4. 共通 Definition of Done（全PR共通）
 
