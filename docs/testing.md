@@ -243,3 +243,5 @@ automatically files or updates a GitHub Issue labelled **`nightly-failure`**.
 
 If the issue was a flake (not reproducible locally), add a comment explaining why and close
 the issue; the next nightly run will re-open it if the problem persists.
+
+**ISSUE-374 diagnostics:** JSON-RPC invalid-argument errors identify static schema paths or missing required properties without echoing input values or unknown property names. Navigation validation returns a fixed rejection reason. The ignored binary test `test_mcp_binary_rejection_diagnostics_do_not_disclose_inputs` checks response and stderr secrecy with real Chrome.

@@ -619,3 +619,67 @@ fn checked_in_mcp_response_examples_match_the_tool_result_contract() -> Result<(
 
     Ok(())
 }
+
+#[test]
+fn invalid_arguments_identify_schema_constraint_without_echoing_values() {
+    for (name, args, expected) in [
+        ("navigate", json!({}), "url"),
+        (
+            "get_state",
+            json!({"delivery":"SECRET_ENUM_SENTINEL"}),
+            "delivery",
+        ),
+        (
+            "act",
+            json!({"action":"click","zzz":"SECRET_VALUE_SENTINEL"}),
+            "additionalProperties",
+        ),
+        (
+            "verify",
+            json!({"target_id":1,"expected":{"text":false}}),
+            "text",
+        ),
+        (
+            "get_state",
+            json!({"SECRET_KEY_SENTINEL":"SECRET_VALUE_SENTINEL"}),
+            "additionalProperties",
+        ),
+    ] {
+        let mut server = McpServer::new(CountingBackend::default());
+        let response = call_tool_jsonrpc(&mut server, name, args);
+        assert_eq!(response["error"]["code"], -32602);
+        let message = response["error"]["message"].as_str().unwrap();
+        assert!(message.contains(expected), "{response}");
+        for secret in [
+            "SECRET_ENUM_SENTINEL",
+            "SECRET_VALUE_SENTINEL",
+            "SECRET_KEY_SENTINEL",
+        ] {
+            assert!(!message.contains(secret), "{response}");
+        }
+        assert_eq!(server.backend_mut().calls, 0);
+    }
+}
+
+#[test]
+fn navigation_network_rejections_explain_policy_without_url_secrets() -> Result<()> {
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+    let client = core_runtime::BrowserClient::new()?;
+    let page = client.new_page()?;
+    let mut server = McpServer::new(mcp_server::CoreRuntimeBackend::new_with_client(
+        client, page,
+    ));
+    for url in [
+        "http://127.0.0.1/?token=SECRET_QUERY_SENTINEL",
+        "http://169.254.169.254/latest/?token=SECRET_QUERY_SENTINEL",
+    ] {
+        let response = call_tool_jsonrpc(&mut server, "navigate", json!({"url":url}));
+        assert_eq!(response["error"]["code"], -32000);
+        let message = response["error"]["message"].as_str().unwrap();
+        assert!(message.contains("public network"), "{response}");
+        assert!(!message.contains("SECRET_QUERY_SENTINEL"));
+    }
+    Ok(())
+}

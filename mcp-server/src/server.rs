@@ -1,9 +1,10 @@
 use super::*;
 
 #[derive(Debug, thiserror::Error)]
-#[error("invalid arguments for tool `{tool}`")]
+#[error("invalid arguments for tool `{tool}`: {detail}")]
 pub(crate) struct InvalidToolArguments {
     pub(crate) tool: String,
+    pub(crate) detail: String,
 }
 
 pub(crate) fn is_known_tool(name: &str) -> bool {
@@ -56,13 +57,27 @@ pub(crate) fn validate_tool_arguments(name: &str, arguments: &Value) -> Result<(
     let Some(validator) = validators.get(name) else {
         anyhow::bail!("unknown MCP tool: {name}");
     };
-    if validator.is_valid(arguments) {
-        Ok(())
-    } else {
-        Err(InvalidToolArguments {
+    if let Some(error) = validator.iter_errors(arguments).next() {
+        // Schema paths and required property names come from our static schemas.
+        // Never format ValidationError: its instance and unknown property names
+        // are client-controlled and may contain credentials or injection text.
+        let detail = match error.kind() {
+            jsonschema::error::ValidationErrorKind::Required { property } => {
+                format!(
+                    "missing required property {property} (schema {})",
+                    error.schema_path()
+                )
+            }
+            _ => format!("constraint failed at schema {}", error.schema_path()),
+        };
+        let error = InvalidToolArguments {
             tool: name.to_string(),
-        }
-        .into())
+            detail,
+        };
+        tracing::warn!(tool = name, reason = %error, "MCP arguments rejected");
+        Err(error.into())
+    } else {
+        Ok(())
     }
 }
 

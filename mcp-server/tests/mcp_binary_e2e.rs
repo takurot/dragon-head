@@ -1495,3 +1495,83 @@ fn binary_self_test_passes_and_reports_version_protocol_tools_and_plan() -> anyh
     );
     Ok(())
 }
+
+#[test]
+#[ignore = "requires Chrome; starts the shipped MCP binary"]
+fn test_mcp_binary_rejection_diagnostics_do_not_disclose_inputs() -> anyhow::Result<()> {
+    assert!(
+        !should_skip_browser_tests(),
+        "Chrome required for diagnostics E2E"
+    );
+    let config_home = tempfile::tempdir()?;
+    let stderr_file = tempfile::NamedTempFile::new()?;
+    let mut command = Command::new(build_binary_once()?);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(stderr_file.reopen()?)
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .env("NAVIGATION_ALLOW_PRIVATE_NETWORK", "false")
+        .env_remove("POLICY_FILE")
+        .env_remove("HITL_BRIDGE_ENABLED")
+        .env_remove("AUDIT_LOG_DIR");
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut raw_child = command.spawn()?;
+    let stdout = raw_child.stdout.take().unwrap();
+    let mut child = ChildGuard::new(raw_child);
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender.send(StdoutEvent::Line(line)).is_err() {
+                break;
+            }
+        }
+        let _ = sender.send(StdoutEvent::Eof);
+    });
+    let cases = [
+        (
+            "navigate",
+            json!({"url":"http://127.0.0.1/?token=SECRET_QUERY_SENTINEL"}),
+            "public network",
+        ),
+        (
+            "navigate",
+            json!({"url":"http://name:SECRET_CREDENTIAL_SENTINEL@127.0.0.1/"}),
+            "credentials",
+        ),
+        ("navigate", json!({}), "url"),
+        (
+            "get_state",
+            json!({"delivery":"SECRET_ENUM_SENTINEL"}),
+            "delivery",
+        ),
+        (
+            "get_state",
+            json!({"SECRET_KEY_SENTINEL":"SECRET_VALUE_SENTINEL"}),
+            "additionalProperties",
+        ),
+    ];
+    for (id, (tool, arguments, expected)) in cases.into_iter().enumerate() {
+        let request = json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":tool,"arguments":arguments}});
+        writeln!(child.stdin_mut(), "{request}")?;
+        child.stdin_mut().flush()?;
+        let response = receive_stdout_line(&receiver, Duration::from_secs(120))?;
+        let value: Value = serde_json::from_str(&response)?;
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{response}"
+        );
+        assert!(!response.contains("SECRET_"), "{response}");
+    }
+    child.close_stdin();
+    assert!(child.wait_timeout(Duration::from_secs(30))?.success());
+    let stderr = std::fs::read_to_string(stderr_file.path())?;
+    assert!(stderr.contains("navigation rejected"));
+    assert!(stderr.contains("MCP arguments rejected"));
+    assert!(!stderr.contains("SECRET_"), "{stderr}");
+    Ok(())
+}

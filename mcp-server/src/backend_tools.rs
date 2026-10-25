@@ -8,7 +8,11 @@ impl McpBackend for CoreRuntimeBackend {
         // lookup. `navigate_public` applies the configured network policy before browser I/O and
         // repeats it for redirects.
         let requested =
-            validate_public_navigation_url(&args.url, NavigationNetworkPolicy::AllowPrivate)?;
+            validate_public_navigation_url(&args.url, NavigationNetworkPolicy::AllowPrivate)
+                .map_err(|error| {
+                    tracing::warn!(reason = %error, "navigation rejected");
+                    error
+                })?;
         let requested_url = requested.canonical_url().to_string();
         let attempts_before = self.page.public_navigation_attempt_count();
 
@@ -34,6 +38,13 @@ impl McpBackend for CoreRuntimeBackend {
             Err(err) => {
                 if let Some(action_err) = err.downcast_ref::<ActionError>() {
                     return Ok(action_error_payload(action_err));
+                }
+                if let Some(reason) = err.downcast_ref::<core_runtime::NavigationValidationError>()
+                {
+                    // This typed error contains a fixed reason and, at most, a
+                    // byte limit. Unrestricted CDP/anyhow chains may echo URLs.
+                    tracing::warn!(reason = %reason, "navigation rejected");
+                    anyhow::bail!("navigate tool failed: {reason}");
                 }
                 Err(err.context("navigate tool failed"))
             }
