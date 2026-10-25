@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 const {
   PLATFORM_PACKAGES,
@@ -280,4 +280,71 @@ test('registerSignalForwarding survives child.kill() throwing (already-exited ra
   const { forwardSignal, markExited } = registerSignalForwarding(fakeChild);
   assert.doesNotThrow(() => forwardSignal('SIGINT'));
   markExited();
+});
+
+test('wrapper forwards an OS SIGTERM and preserves the child termination signal', {
+  skip: process.platform === 'win32',
+  timeout: 20000,
+}, async (t) => {
+  const pkgName = PLATFORM_PACKAGES[`${process.platform},${process.arch}`];
+  assert.ok(pkgName, 'this test requires a supported platform');
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dragon-head-mcp-signal-'));
+  const wrapperPath = path.join(tmpRoot, 'run.js');
+  fs.copyFileSync(path.join(__dirname, '..', 'bin', 'run.js'), wrapperPath);
+  const pkgDir = path.join(tmpRoot, 'node_modules', pkgName);
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ dragonHeadBinary: 'fake.js' }));
+  const markerPath = path.join(tmpRoot, 'signal.txt');
+  fs.writeFileSync(path.join(pkgDir, 'fake.js'), `#!/usr/bin/env node
+const fs = require('node:fs');
+process.on('SIGTERM', () => {
+  fs.writeFileSync(${JSON.stringify(markerPath)}, 'SIGTERM');
+  process.removeAllListeners('SIGTERM');
+  process.kill(process.pid, 'SIGTERM');
+});
+console.log('READY ' + process.pid);
+setInterval(() => {}, 1000);
+`);
+  fs.chmodSync(path.join(pkgDir, 'fake.js'), 0o755);
+
+  const wrapper = spawn(process.execPath, [wrapperPath], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const closed = new Promise((resolve) => wrapper.once('close', resolve));
+  t.after(async () => {
+    if (wrapper.pid) {
+      // Kill the whole test-owned group even when the child never announced its PID.
+      try { process.kill(-wrapper.pid, 'SIGKILL'); } catch (err) {
+        if (err.code !== 'ESRCH') throw err;
+      }
+    }
+    await closed;
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+  let stderr = '';
+  wrapper.stderr.on('data', (chunk) => { stderr += chunk; });
+  const exited = new Promise((resolve) => wrapper.once('exit', (...result) => resolve(result)));
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`child readiness timed out: ${stderr}`)), 10000);
+    let stdout = '';
+    wrapper.stdout.on('data', (chunk) => {
+      stdout += chunk;
+      const ready = stdout.match(/READY (\d+)\n/);
+      if (ready) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    wrapper.once('error', (err) => { clearTimeout(timer); reject(err); });
+    wrapper.once('exit', () => {
+      clearTimeout(timer);
+      reject(new Error(`wrapper exited before readiness: ${stderr}`));
+    });
+  });
+  wrapper.kill('SIGTERM');
+  const [code, signal] = await exited;
+  assert.equal(fs.readFileSync(markerPath, 'utf8'), 'SIGTERM', 'the child must receive the forwarded signal');
+  assert.equal(code, null);
+  assert.equal(signal, 'SIGTERM', stderr);
 });
