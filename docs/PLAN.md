@@ -729,7 +729,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [x] ISSUE-400: Justfile/CIの検証範囲と非破壊性を整合し、main pushでも評価・NFRを実行する。
 - [x] ISSUE-399: architectureの通常workspace依存を文書化し、metadataとの不整合をCIで検出する。
 - [x] ISSUE-395: HITLのexpected要求identityをcoreのapprove/rejectと原子的に照合する。
-- [ ] ISSUE-394: act/ページ起因のmain-frame navigationを送信前に検査する。
+- [x] ISSUE-394: act/ページ起因のmain-frame navigationを送信前に検査する。
 - [ ] ISSUE-396: 承認要求・grantを作成元のpage/document/originへ束縛する。
 
 > **Follow-up (ISSUE-398, done)**: Vitestと関連packageを4.1.12、Viteを8.1.6、
@@ -750,6 +750,12 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > approve/rejectのcommit時に同じUUIDで原子的に照合する。公開requestの既存field/APIは維持した。
 > changed/same-shape/未観測cycle/session差替えを実gatewayで検証し、古いIDの署名付きcallbackも拒否する。
 > 合成E2Eは新しい通知IDで承認後、明示retryで支払い1回・秘匿監査を確認する。
+
+> **Follow-up (ISSUE-394, done)**: MCP sessionでmain-frame Document interceptorを継続し、
+> link/form/script/metaをHTTP送信前に検証する。private opt-in、startup/recoveryのfail-closed、
+> 遅延拒否の一度だけの通知とfull/delta/speculative cache失効を実Chrome/stdioで確認した。
+> 拒否先を許可済みcacheへ入れず、明示navigation完了時の承認失効を維持する。
+> 無効URLはbrowser I/O前に拒否し、同一navigation試行の承認照合元URLを中間documentでも固定する。
 
 ## 4. 共通 Definition of Done（全PR共通）
 
