@@ -145,6 +145,23 @@ impl NavigationObservation {
                 || state.document.loader_id != previous.loader_id)
     }
 
+    fn fallback_navigation_complete(
+        state: &ObservationState,
+        previous: &DocumentSnapshot,
+        sampled: &DocumentSnapshot,
+        ready_state: Option<&str>,
+        elapsed: Duration,
+    ) -> bool {
+        elapsed >= NAVIGATION_PRIMARY_TIMEOUT
+            && !state.awaiting_document_commit
+            && state.document.revision == sampled.revision
+            && state.document.frame_id == sampled.frame_id
+            && state.document.loader_id == sampled.loader_id
+            && state.document.url == sampled.url
+            && (sampled.loader_id != previous.loader_id || sampled.url != previous.url)
+            && matches!(ready_state, Some("interactive" | "complete"))
+    }
+
     fn record_frame(&self, state: &mut ObservationState, frame: &Page::Frame) {
         if state.document.frame_id != frame.id || state.document.loader_id != frame.loader_id {
             state.primary_navigation_complete = false;
@@ -164,6 +181,19 @@ impl NavigationObservation {
         state.awaiting_document_commit = true;
         state.document.revision += 1;
         self.generation.fetch_add(1, Ordering::Release);
+    }
+}
+
+fn expire_navigation_approvals(
+    approvals: &mut PolicyApprovalState,
+    initial_pending_id: Option<uuid::Uuid>,
+    requires_approval: bool,
+) {
+    approvals.granted.clear();
+    if !requires_approval
+        && approvals.pending.as_ref().map(|pending| pending.id) == initial_pending_id
+    {
+        approvals.pending = None;
     }
 }
 
@@ -448,6 +478,15 @@ impl PageSession {
             .public_navigation_lock
             .lock()
             .map_err(|_| anyhow::anyhow!("public navigation lock is unavailable"))?;
+        // Completion may expire only the pending cycle present at entry, not
+        // an independent request created by the persistent callback later.
+        let initial_pending_id = {
+            let approvals = self
+                .policy_approvals
+                .lock()
+                .map_err(|_| anyhow::anyhow!("navigation approval state is unavailable"))?;
+            approvals.pending.as_ref().map(|pending| pending.id)
+        };
         self.check_navigation_rejection()?;
         let policy = if allow_private_network {
             NavigationNetworkPolicy::AllowPrivate
@@ -502,7 +541,8 @@ impl PageSession {
             .navigate_to(requested.canonical_url())
             .map(|_| ())
             .and_then(|_| {
-                let primary_deadline = Instant::now() + NAVIGATION_PRIMARY_TIMEOUT;
+                let started = Instant::now();
+                let primary_deadline = started + NAVIGATION_PRIMARY_TIMEOUT;
                 let fallback_deadline = primary_deadline + NAVIGATION_FALLBACK_TIMEOUT;
                 loop {
                     self.check_navigation_rejection()?;
@@ -518,13 +558,20 @@ impl PageSession {
                     // the weaker fallback only after the primary wait expires.
                     if Instant::now() >= primary_deadline {
                         let current = self.live_document_snapshot()?;
-                        if (current.loader_id != snapshot.loader_id || current.url != snapshot.url)
-                            && matches!(
-                                self.document_ready_state().ok().as_deref(),
-                                Some("interactive" | "complete")
-                            )
+                        let ready_state = self.document_ready_state().ok();
                         {
-                            return Ok(());
+                            let state = self.navigation_observation.state.lock().map_err(|_| {
+                                anyhow::anyhow!("navigation observation is unavailable")
+                            })?;
+                            if NavigationObservation::fallback_navigation_complete(
+                                &state,
+                                &snapshot,
+                                &current,
+                                ready_state.as_deref(),
+                                started.elapsed(),
+                            ) {
+                                return Ok(());
+                            }
                         }
                         if Instant::now() >= fallback_deadline {
                             anyhow::bail!("public navigation timed out");
@@ -558,10 +605,7 @@ impl PageSession {
         // Preserve explicit-navigation scope expiry. Intermediate document
         // observations must not clear a capability needed by the same retry.
         if let Ok(mut approvals) = self.policy_approvals.lock() {
-            approvals.granted.clear();
-            if !requires_approval {
-                approvals.pending = None;
-            }
+            expire_navigation_approvals(&mut approvals, initial_pending_id, requires_approval);
         }
         if let Some(failure) = interception_failure {
             return Err(failure.into_error());
@@ -681,6 +725,166 @@ mod tests {
         assert!(NavigationObservation::primary_navigation_complete(
             &state, &previous
         ));
+    }
+
+    #[test]
+    fn fallback_rejects_pending_commit_and_stale_samples_after_primary_deadline() {
+        let observation = observation();
+        let mut state = observation.state.lock().unwrap();
+        let previous = state.document.clone();
+        let mut committed = serde_json::from_value(serde_json::json!({
+            "id": "main", "loaderId": "intermediate", "url": "https://example.test/intermediate",
+            "secureContextType": "Secure", "crossOriginIsolatedContextType": "NotIsolated",
+            "gatedAPIFeatures": []
+        }))
+        .unwrap();
+        observation.record_frame(&mut state, &committed);
+        let sampled = state.document.clone();
+        assert!(!NavigationObservation::fallback_navigation_complete(
+            &state,
+            &previous,
+            &sampled,
+            Some("complete"),
+            NAVIGATION_PRIMARY_TIMEOUT - Duration::from_millis(1)
+        ));
+        observation.starting_request(&mut state);
+        // A live same-loader GetFrameTree reconciliation is not a new commit.
+        observation.record_frame(&mut state, &committed);
+        let sampled = state.document.clone();
+        assert!(!NavigationObservation::fallback_navigation_complete(
+            &state,
+            &previous,
+            &sampled,
+            Some("complete"),
+            NAVIGATION_PRIMARY_TIMEOUT
+        ));
+        committed.loader_id = "final".to_string();
+        committed.url = "https://example.test/final".to_string();
+        observation.record_frame(&mut state, &committed);
+        let sampled = state.document.clone();
+        assert!(NavigationObservation::fallback_navigation_complete(
+            &state,
+            &previous,
+            &sampled,
+            Some("complete"),
+            NAVIGATION_PRIMARY_TIMEOUT
+        ));
+        observation.record_url(
+            &mut state,
+            "https://example.test/changed-during-dom-sample".to_string(),
+        );
+        assert!(!NavigationObservation::fallback_navigation_complete(
+            &state,
+            &previous,
+            &sampled,
+            Some("complete"),
+            NAVIGATION_PRIMARY_TIMEOUT
+        ));
+    }
+
+    #[test]
+    fn completion_preserves_a_new_approval_created_after_the_outcome_snapshot() {
+        for initially_pending in [false, true] {
+            let observation = Arc::new(observation());
+            let mut initial = PolicyApprovalState::default();
+            let old_request = PolicyApprovalRequest {
+                rule_id: "old-request".to_string(),
+                scope: ApprovalScope::Timeboxed { ms: 60_000 },
+                action: "click".to_string(),
+                target_signature: "old-button".to_string(),
+                outcome: None,
+            };
+            if initially_pending {
+                initial.replace_pending(old_request.clone());
+            }
+            initial.granted.push(GrantedPolicyApproval {
+                request: old_request,
+                granted_navigation_epoch: 0,
+                granted_url: "https://example.test/page".to_string(),
+                expires_at_epoch_ms: Some(epoch_millis() + 60_000),
+                remaining_uses: None,
+            });
+            let initial_id = initial.pending.as_ref().map(|pending| pending.id);
+            let context = Arc::new(NavigationPolicyContext {
+                policy_engine: Arc::new(Mutex::new(
+                    PolicyEngine::try_new(vec![PolicyRule {
+                        id: "new-navigation".to_string(),
+                        domain: None,
+                        path_prefix: Some("/new".to_string()),
+                        role: None,
+                        text_regex: None,
+                        context_regex: None,
+                        action: PolicyAction::RequireHumanApproval,
+                        scope: Some(ApprovalScope::ActionOnly),
+                        outcome_projector: None,
+                    }])
+                    .unwrap(),
+                )),
+                policy_approvals: Arc::new(Mutex::new(initial)),
+                navigation_epoch: Arc::new(AtomicU64::new(0)),
+                audit_logger: Arc::new(AuditLogger::new()),
+                plugin_hooks: Arc::new(PluginHookConfig::default()),
+                approval_context_url: String::new(),
+            });
+            let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
+            let (result_tx, result_rx) = std::sync::mpsc::sync_channel(0);
+            let callback_observation = Arc::clone(&observation);
+            let callback_context = Arc::clone(&context);
+            let callback = thread::spawn(move || {
+                start_rx.recv().unwrap();
+                let event = serde_json::from_value(serde_json::json!({
+                    "requestId": "new-after-outcome", "frameId": "main", "resourceType": "Document",
+                    "request": {"url": "http://93.184.216.34/new", "method": "GET", "headers": {},
+                        "initialPriority": "High", "referrerPolicy": "no-referrer"}
+                }))
+                .unwrap();
+                let decision =
+                    intercept_navigation_request(&callback_observation, &callback_context, &event);
+                let id = callback_context
+                    .policy_approvals
+                    .lock()
+                    .unwrap()
+                    .pending
+                    .as_ref()
+                    .map(|pending| pending.id);
+                result_tx
+                    .send((
+                        matches!(
+                            decision,
+                            headless_chrome::browser::tab::RequestPausedDecision::Fail(_)
+                        ),
+                        id,
+                    ))
+                    .unwrap();
+            });
+            // Explicit completion already observed no rejection, then released
+            // observation state while the persistent callback starts a new B.
+            assert!(observation.state.lock().unwrap().rejection.take().is_none());
+            start_tx.send(()).unwrap();
+            let (rejected, new_id) = result_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            callback.join().unwrap();
+            assert!(rejected);
+            let new_id = new_id.expect("new pending approval");
+            assert_ne!(Some(new_id), initial_id);
+            let mut approvals = context.policy_approvals.lock().unwrap();
+            expire_navigation_approvals(&mut approvals, initial_id, false);
+            assert!(
+                approvals.granted.is_empty(),
+                "explicit completion still expires old grants"
+            );
+            assert_eq!(
+                approvals.pending.as_ref().map(|pending| pending.id),
+                Some(new_id)
+            );
+            expire_navigation_approvals(&mut approvals, Some(new_id), true);
+            assert_eq!(
+                approvals.pending.as_ref().map(|pending| pending.id),
+                Some(new_id)
+            );
+            // A later explicit attempt may still expire its own initial cycle.
+            expire_navigation_approvals(&mut approvals, Some(new_id), false);
+            assert!(approvals.pending.is_none());
+        }
     }
 
     #[test]
