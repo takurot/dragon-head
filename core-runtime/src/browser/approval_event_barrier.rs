@@ -1,18 +1,18 @@
 use super::*;
 use headless_chrome::{
     browser::tab::EventListener,
-    protocol::{
-        cdp::{Page, Runtime},
-        Event,
-    },
+    protocol::cdp::{types::Event, Page, Runtime},
 };
 use std::sync::{mpsc, Weak};
+
+#[cfg(test)]
+type BeforeMarkerHook = Arc<dyn Fn(&DocumentSnapshot) + Send + Sync>;
 
 #[derive(Default)]
 pub(super) struct ApprovalEventBarrier {
     world: Mutex<Option<IsolatedWorld>>,
     #[cfg(test)]
-    before_marker: Mutex<Option<Arc<dyn Fn(&DocumentSnapshot) + Send + Sync>>>,
+    before_marker: Mutex<Option<BeforeMarkerHook>>,
 }
 
 struct IsolatedWorld {
