@@ -68,12 +68,31 @@ The canonical MCP tool names are:
 
 ## Dependency direction
 
-`mcp-server` depends on `core-runtime`, `skills-engine`, and `plugin-host`.
-`core-runtime` depends on `plugin-host` for the concrete loaded-plugin adapters
-implemented in `plugin_hooks`; `plugin-host` does not depend on `core-runtime`,
-so this edge remains acyclic. `hitl-bridge`, `bench`, and `marketplace` are
-independent binaries/libraries that don't feed back into `core-runtime`. There
-is no cyclic dependency between workspace crates.
+The following declared production dependencies form an acyclic workspace graph.
+Each edge points from the dependent crate to its dependency. This list covers
+normal workspace path dependencies, including optional and target-specific
+declarations; development, build, registry, and external path dependencies are
+excluded. `plugin-host`, `skills-engine`, and `test-bench-support` have no outgoing
+edges in this production graph.
+
+```workspace-dependencies
+bench -> core-runtime
+bench -> mcp-server
+core-runtime -> plugin-host
+hitl-bridge -> core-runtime
+marketplace -> plugin-host
+marketplace -> skills-engine
+mcp-server -> core-runtime
+mcp-server -> hitl-bridge
+mcp-server -> plugin-host
+mcp-server -> skills-engine
+```
+
+`core-runtime` depends on `plugin-host` for concrete plugin adapters; the embedded
+HITL path connects `mcp-server` to `hitl-bridge`, which itself uses `core-runtime`.
+The benchmark harness uses both runtime and MCP APIs, while marketplace primitives
+compose plugin packages and skills. Run `python3 scripts/check_architecture_dependencies.py`
+to compare this fenced list with `cargo metadata --locked --no-deps`.
 
 ## Data flow: `get_state`
 

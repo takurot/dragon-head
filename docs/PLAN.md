@@ -727,7 +727,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 
 - [x] ISSUE-398: bench-playwrightの開発依存を更新し、対応Node境界でnpm audit・既存テストを成功させる。
 - [x] ISSUE-400: Justfile/CIの検証範囲と非破壊性を整合し、main pushでも評価・NFRを実行する。
-- [ ] ISSUE-399: architectureの通常workspace依存を文書化し、metadataとの不整合をCIで検出する。
+- [x] ISSUE-399: architectureの通常workspace依存を文書化し、metadataとの不整合をCIで検出する。
 - [ ] ISSUE-395: HITLのexpected要求identityをcoreのapprove/rejectと原子的に照合する。
 - [ ] ISSUE-394: act/ページ起因のmain-frame navigationを送信前に検査する。
 - [ ] ISSUE-396: 承認要求・grantを作成元のpage/document/originへ束縛する。
@@ -741,6 +741,10 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > nextest CI profile・doc・deny・Python・bench/npm wrapperを検証し、moderate以上のnpm監査指摘を拒否する。
 > 明示的なfmtだけがsourceを書き換え、ignored MCP stdio E2Eは別recipeで実行する。
 > short NFR / evaluation smokeはPRとmain pushの双方で実行する。
+
+> **Follow-up (ISSUE-399, done)**: ARCHITECTURE.mdの依存方向を8 workspace member・10 normal path edgeへ整合した。
+> optional/target-specificを含め、dev/build/registry/external pathを除く比較契約を明記した。
+> `cargo metadata --locked --no-deps`との実比較とedge追加/削除のCLI negative testをPython CIへ接続した。
 
 ## 4. 共通 Definition of Done（全PR共通）
 
