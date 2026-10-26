@@ -257,6 +257,8 @@ MCP sessionではmain-frame Document requestのinterceptorをsession全体で保
 navigation policy/plugin検証を行う。private-network opt-inも同じ設定を共有する。
 同期的なnavigation拒否はbounded settlement内で `act` へ返す。遅延timer/metaによる拒否は
 request自体を常に送信前に止め、次のtool callで一度だけ報告し、別actionの実行前に扱う。
+遅延navigationの承認要求を受け取ったtoolは `requires_human_approval` と
+`outcome_projection` を保持して返し、HITL requestを1 event加算する。承認eventは別途加算する。
 main-frame document/URL observationのgenerationが変わったら、MCPのfull/delta/speculative
 cacheを失効させる。startup/restartでinterceptorを設定できなければ未保護sessionを公開しない。
 iframe/subresourceとDNS rebindingは引き続き本境界の保護済み範囲に含めない。

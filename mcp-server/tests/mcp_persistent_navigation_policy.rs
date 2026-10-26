@@ -364,3 +364,144 @@ fn public_navigation_waits_for_deferred_initialization_before_state_capture() ->
     );
     Ok(())
 }
+
+#[test]
+fn delayed_navigation_hitl_preserves_response_ticket_and_usage() -> anyhow::Result<()> {
+    use core_runtime::policy::{ApprovalScope, OutcomeProjectorConfig, PolicyAction, PolicyRule};
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+    for trigger in ["act", "get_state", "get_visual"] {
+        let destination = PrivateDestination::start()?;
+        let target = serde_json::to_string(&destination.url)?;
+        let html = format!("<button onclick='setTimeout(() => location.href={target}, 500)'>delayed</button><button onclick='window.name=\"unrelated-action-executed\"'>safe</button>");
+        let mut server = server_for_html(&html, true)?;
+        server
+            .backend_mut()
+            .page()
+            .set_policy_rules(vec![PolicyRule {
+                id: "approve-delayed-navigation".to_string(),
+                domain: None,
+                path_prefix: Some("/private".to_string()),
+                role: None,
+                text_regex: None,
+                context_regex: None,
+                action: PolicyAction::RequireHumanApproval,
+                scope: Some(ApprovalScope::ActionOnly),
+                outcome_projector: Some(OutcomeProjectorConfig {
+                    amount_regex: None,
+                    block_if_amount_exceeds: None,
+                    warn_if_amount_exceeds: None,
+                }),
+            }])?;
+        let state = server.call_tool("get_state", json!({}))?;
+        let delayed = state["interactive_elements"][0]["id"].as_i64().unwrap();
+        let safe = state["interactive_elements"][1]["id"].as_i64().unwrap();
+        if trigger == "get_visual" {
+            // Leave an earlier backend image unconsumed to verify that the
+            // approval response cannot attach stale visual bytes.
+            let stale =
+                mcp_server::McpBackend::get_visual(server.backend_mut(), json!({"mode": "som"}))?;
+            assert!(stale.get("image_sha256").is_some());
+        }
+        assert_eq!(
+            server.call_tool("act", json!({"action": "click", "target_id": delayed}))?["status"],
+            "ok"
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while server
+            .backend_mut()
+            .page()
+            .pending_policy_approval_snapshot()
+            .is_none()
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let pending = server
+            .backend_mut()
+            .page()
+            .pending_policy_approval_snapshot()
+            .expect("delayed navigation approval");
+        assert_eq!(pending.request.action, "navigate");
+        let arguments = match trigger {
+            "act" => json!({"action": "click", "target_id": safe}),
+            "get_visual" => json!({"mode": "som"}),
+            _ => json!({}),
+        };
+        let request = json!({"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": {"name": trigger, "arguments": arguments}});
+        let response: Value =
+            serde_json::from_str(&server.handle_jsonrpc(&request.to_string()).unwrap())?;
+        assert!(
+            response.get("error").is_none(),
+            "{trigger}: unexpected RPC error: {response}"
+        );
+        let payload = &response["result"]["structuredContent"];
+        assert_eq!(payload["status"], "requires_human_approval", "{trigger}");
+        assert_eq!(payload["rule_id"], "approve-delayed-navigation");
+        assert_eq!(payload["scope"], "action_only");
+        assert_eq!(
+            payload["outcome_projection"],
+            serde_json::to_value(pending.request.outcome.as_ref().unwrap())?
+        );
+        assert_eq!(
+            response["result"]["content"].as_array().unwrap().len(),
+            1,
+            "HITL must not attach a visual image"
+        );
+        assert_eq!(
+            server
+                .backend_mut()
+                .page()
+                .pending_policy_approval_snapshot()
+                .unwrap()
+                .id,
+            pending.id
+        );
+        assert_eq!(destination.count.load(Ordering::Acquire), 0);
+        assert_eq!(
+            server
+                .backend_mut()
+                .page()
+                .evaluate_script_json("window.name")?,
+            json!("")
+        );
+        let usage = server.call_tool("get_usage_report", json!({}))?;
+        assert_eq!(usage["hitl_events"], 1, "{trigger}");
+        assert_eq!(
+            usage["actions_executed"], 1,
+            "unrelated action must not execute"
+        );
+        assert_eq!(
+            usage["state_generations"]["full"], 1,
+            "approval response is not a state capture"
+        );
+        assert_eq!(usage["visual_captures"], 0);
+        assert_eq!(
+            server.call_tool("get_usage_report", json!({}))?["hitl_events"],
+            1
+        );
+        assert_eq!(
+            server.call_tool("ask_human", json!({"reason": "review delayed navigation"}))?
+                ["approved"],
+            true
+        );
+        assert_eq!(
+            server.call_tool("navigate", json!({"url": destination.url}))?["status"],
+            "ok"
+        );
+        assert_eq!(destination.count.load(Ordering::Acquire), 1);
+        assert!(server
+            .backend_mut()
+            .page()
+            .pending_policy_approval_snapshot()
+            .is_none());
+        let usage = server.call_tool("get_usage_report", json!({}))?;
+        assert_eq!(
+            usage["hitl_events"], 2,
+            "request and approval are separate events"
+        );
+        assert_eq!(usage["actions_executed"], 2);
+    }
+    Ok(())
+}
