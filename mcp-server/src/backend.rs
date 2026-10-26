@@ -1,8 +1,27 @@
 use super::*;
 
+#[cfg(test)]
+thread_local! {
+    static FAIL_NAVIGATION_SETUP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn configure_runtime_navigation(page: &PageSession, allow_private: bool) -> Result<()> {
+    #[cfg(test)]
+    if FAIL_NAVIGATION_SETUP.with(std::cell::Cell::get) {
+        anyhow::bail!("injected navigation protection failure");
+    }
+    page.configure_public_navigation(allow_private)
+}
+
 impl CoreRuntimeBackend {
     pub fn new(page: PageSession) -> Self {
         let page = Arc::new(page);
+        // Keep the infallible library constructor, but do not allow tools to
+        // use an unprotected page if Fetch setup fails.
+        let navigation_protection_error = configure_runtime_navigation(&page, false)
+            .err()
+            .map(|_| "failed to install navigation protection".to_string());
+        let observed_navigation_revision = page.navigation_revision();
         Self {
             shared_page: Arc::new(std::sync::RwLock::new(Arc::clone(&page))),
             page,
@@ -20,6 +39,8 @@ impl CoreRuntimeBackend {
             client: None,
             policy_rules: Vec::new(),
             navigation_allow_private_network: false,
+            navigation_protection_error,
+            observed_navigation_revision,
             in_band_approval: true,
             browser_restarts: 0,
             restart_history: VecDeque::new(),
@@ -73,6 +94,34 @@ impl CoreRuntimeBackend {
 
     pub fn set_navigation_allow_private_network(&mut self, allow: bool) {
         self.navigation_allow_private_network = allow;
+        self.navigation_protection_error = configure_runtime_navigation(&self.page, allow)
+            .err()
+            .map(|_| "failed to configure navigation protection".to_string());
+    }
+
+    pub fn ensure_navigation_protection(&self) -> Result<()> {
+        if let Some(error) = &self.navigation_protection_error {
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_navigation_tool(&mut self) -> Result<()> {
+        self.ensure_navigation_protection()?;
+        let revision = self.page.navigation_revision();
+        if revision != self.observed_navigation_revision {
+            self.reset_navigation_state();
+            self.observed_navigation_revision = revision;
+        }
+        // Consume a previously blocked asynchronous navigation before the
+        // next tool can read stale state or perform an unrelated action.
+        self.page.check_navigation_rejection()?;
+        let revision = self.page.synchronize_navigation_observation()?;
+        if revision != self.observed_navigation_revision {
+            self.reset_navigation_state();
+            self.observed_navigation_revision = revision;
+        }
+        Ok(())
     }
 
     /// Whether the agent-callable `ask_human` tool may grant a pending policy approval.
@@ -445,5 +494,50 @@ impl CoreRuntimeBackend {
             policy_flags,
             security_flags,
         })
+    }
+}
+
+#[cfg(test)]
+mod navigation_setup_tests {
+    use super::*;
+
+    #[test]
+    fn navigation_setup_failure_keeps_legacy_constructor_tools_closed() -> Result<()> {
+        if test_bench_support::should_skip_browser_tests() {
+            return Ok(());
+        }
+        let client = BrowserClient::new()?;
+        let page = client.new_page()?;
+        FAIL_NAVIGATION_SETUP.with(|failure| failure.set(true));
+        let mut backend = CoreRuntimeBackend::new_with_client(client, page);
+        FAIL_NAVIGATION_SETUP.with(|failure| failure.set(false));
+        assert!(backend.ensure_navigation_protection().is_err());
+        let error = backend
+            .get_state(json!({}))
+            .expect_err("unprotected backend cannot read");
+        assert!(error.to_string().contains("navigation protection"));
+        Ok(())
+    }
+
+    #[test]
+    fn navigation_setup_failure_does_not_publish_recovered_page() -> Result<()> {
+        if test_bench_support::should_skip_browser_tests() {
+            return Ok(());
+        }
+        let client = BrowserClient::new()?;
+        let page = client.new_page()?;
+        let mut backend = CoreRuntimeBackend::new_with_client(client, page);
+        let before = (backend.page_provider())();
+        FAIL_NAVIGATION_SETUP.with(|failure| failure.set(true));
+        let result = backend.handle_browser_disconnect();
+        FAIL_NAVIGATION_SETUP.with(|failure| failure.set(false));
+        assert!(result.is_err(), "failed protection must fail recovery");
+        let after = (backend.page_provider())();
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "unprotected replacement was published"
+        );
+        assert_eq!(backend.browser_restarts, 0);
+        Ok(())
     }
 }

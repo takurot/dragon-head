@@ -14,6 +14,7 @@ impl McpBackend for CoreRuntimeBackend {
                     error
                 })?;
         let requested_url = requested.canonical_url().to_string();
+        self.ensure_navigation_protection()?;
         let attempts_before = self.page.public_navigation_attempt_count();
 
         let result = self
@@ -52,6 +53,7 @@ impl McpBackend for CoreRuntimeBackend {
     }
 
     fn get_state(&mut self, arguments: Value) -> Result<Value> {
+        self.prepare_navigation_tool()?;
         let args = parse_get_state_arguments(&arguments)?;
 
         match args.delivery {
@@ -147,6 +149,7 @@ impl McpBackend for CoreRuntimeBackend {
     }
 
     fn act(&mut self, arguments: Value) -> Result<Value> {
+        self.prepare_navigation_tool()?;
         let args: ActArguments =
             serde_json::from_value(arguments).context("invalid act arguments")?;
 
@@ -231,6 +234,7 @@ impl McpBackend for CoreRuntimeBackend {
     }
 
     fn verify(&mut self, arguments: Value) -> Result<Value> {
+        self.prepare_navigation_tool()?;
         let args: VerifyArguments =
             serde_json::from_value(arguments).context("invalid verify arguments")?;
 
@@ -261,6 +265,7 @@ impl McpBackend for CoreRuntimeBackend {
     }
 
     fn get_visual(&mut self, arguments: Value) -> Result<Value> {
+        self.prepare_navigation_tool()?;
         self.pending_visual_image = None;
         let args: GetVisualArguments =
             serde_json::from_value(arguments).context("invalid get_visual arguments")?;
@@ -297,6 +302,7 @@ impl McpBackend for CoreRuntimeBackend {
     }
 
     fn ask_human(&mut self, arguments: Value) -> Result<Value> {
+        self.prepare_navigation_tool()?;
         let args: AskHumanArguments =
             serde_json::from_value(arguments).context("invalid ask_human arguments")?;
         self.page.log_ask_human_tool_call(&args.reason);
@@ -340,6 +346,7 @@ impl McpBackend for CoreRuntimeBackend {
     }
 
     fn run_skill(&mut self, arguments: Value) -> Result<Value> {
+        self.prepare_navigation_tool()?;
         let args: RunSkillArguments =
             serde_json::from_value(arguments).context("invalid run_skill arguments")?;
 
@@ -418,6 +425,7 @@ impl McpBackend for CoreRuntimeBackend {
     }
 
     fn extract(&mut self, arguments: Value) -> Result<Value> {
+        self.prepare_navigation_tool()?;
         let args: ExtractArguments =
             serde_json::from_value(arguments).context("invalid extract arguments")?;
 
@@ -554,7 +562,17 @@ impl McpBackend for CoreRuntimeBackend {
                 .map_err(|err| format!("failed to reapply policy rules after restart: {err}"))?;
         }
 
+        // Configure Fetch before publishing the replacement to either MCP
+        // tools or the HITL session provider.
+        crate::backend::configure_runtime_navigation(
+            &new_page,
+            self.navigation_allow_private_network,
+        )
+        .map_err(|_| "failed to protect browser after restart".to_string())?;
+
         self.page = Arc::new(new_page);
+        self.observed_navigation_revision = self.page.navigation_revision();
+        self.navigation_protection_error = None;
         *self.shared_page.write().unwrap_or_else(|e| e.into_inner()) = Arc::clone(&self.page);
         self.state_cache = None;
         self.previous_semantic_state = None;

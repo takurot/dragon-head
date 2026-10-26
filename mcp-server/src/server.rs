@@ -188,7 +188,7 @@ impl<B: McpBackend> McpServer<B> {
     /// [`call_tool_output`](Self::call_tool_output) so the ISSUE-260
     /// transport-error retry can invoke the same call twice.
     pub(crate) fn dispatch_tool(&mut self, name: &str, arguments: &Value) -> Result<Value> {
-        match name {
+        let result = match name {
             "navigate" => self.backend.navigate(arguments.clone()),
             "get_state" => self.backend.get_state(arguments.clone()),
             "act" => self.backend.act(arguments.clone()),
@@ -198,7 +198,15 @@ impl<B: McpBackend> McpServer<B> {
             "run_skill" => self.backend.run_skill(arguments.clone()),
             "extract" => self.backend.extract(arguments.clone()),
             _ => anyhow::bail!("unknown MCP tool: {name}"),
-        }
+        };
+        result.or_else(|err| {
+            if let Some(action_err @ ActionError::HumanApprovalRequired { .. }) =
+                err.downcast_ref::<ActionError>()
+            {
+                return Ok(action_error_payload(action_err));
+            }
+            Err(err)
+        })
     }
 
     pub(crate) fn call_tool_output(
@@ -294,7 +302,9 @@ impl<B: McpBackend> McpServer<B> {
             anyhow::bail!("MCP structuredContent must be a JSON object");
         }
         let visual_image = if name == "get_visual" {
-            self.backend.take_visual_image()
+            self.backend.take_visual_image().filter(|_| {
+                payload.get("status").and_then(Value::as_str) != Some("requires_human_approval")
+            })
         } else {
             None
         };
@@ -505,6 +515,12 @@ impl<B: McpBackend> McpServer<B> {
         payload: &Value,
         speculative_hit: bool,
     ) {
+        // A delayed navigation request may be surfaced before any tool runs.
+        // Count its request once, without claiming a state/visual/action result.
+        if payload.get("status").and_then(Value::as_str) == Some("requires_human_approval") {
+            self.usage_meters.hitl_events += 1;
+            return;
+        }
         match name {
             "get_state" => {
                 let args = parse_get_state_arguments(arguments)
@@ -536,15 +552,9 @@ impl<B: McpBackend> McpServer<B> {
                     self.usage_meters.visual_captures += 1;
                 }
             }
-            "act" | "navigate" => match payload.get("status").and_then(Value::as_str) {
-                Some("ok") => {
-                    self.usage_meters.actions_executed += 1;
-                }
-                Some("requires_human_approval") => {
-                    self.usage_meters.hitl_events += 1;
-                }
-                _ => {}
-            },
+            "act" | "navigate" if payload.get("status").and_then(Value::as_str) == Some("ok") => {
+                self.usage_meters.actions_executed += 1;
+            }
             "ask_human"
                 if payload
                     .get("approved")
