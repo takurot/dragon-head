@@ -63,7 +63,7 @@ The CI pipeline is defined in `.github/workflows/`.
   The nightly `mcp-binary-e2e` suite also proves invalid CSS reports a failed skill over
   the shipped binary's stdio protocol.
 - **`e2e.yml`**: Runs E2E tests against a headless browser.
-- **Performance Gate (PR Short)**: `ci.yml` runs a short NFR suite (`ttft`, `nfr_latency`, `nfr_bandwidth`, `nfr_capacity`) and generates `core-runtime/target/nfr-dashboard.md`.
+- **Performance Gate (PR and Push Short)**: `ci.yml` runs a short NFR suite (`ttft`, `nfr_latency`, `nfr_bandwidth`, `nfr_capacity`) and generates `core-runtime/target/nfr-dashboard.md` on PRs and every configured push, including `main`.
 - **Performance Gate (Nightly Full)**: `e2e.yml` runs the full NFR suite (including long TTFT and full capacity targets) and publishes the same dashboard format for regression tracking.
 - **NFR Fidelity**: the workspace `test` profile keeps `incremental = false` and uses a modest optimization level so latency-oriented tests measure runtime behavior rather than debug-build artifacts.
 - **Latency Scope**: `nfr_latency` measures the SRE update path after obtaining the current DOM snapshot, matching the spec's focus on semantic state regeneration under subtree refinement.
@@ -84,7 +84,7 @@ The CI pipeline is defined in `.github/workflows/`.
 
 - **Goal**: Provide a single dashboard that verifies the main Dragon Head feature areas across `core-runtime`, `mcp-server`, `skills-engine`, `plugin-host`, `marketplace`, `hitl-bridge`, and `bench`.
 - **Modes**:
-- `smoke`: Required on PRs. Covers representative scenarios for state capture, action recovery, wait semantics, policy/HITL, audit/session, MCP flow (including visual image content delivery and standalone configured-skill loading), skill execution, plugin validation, marketplace accounting, HITL approval-lock concurrency and prompt/resolution flow (`hitl-bridge`), and ROI/cost-savings accounting and report generation (`bench`).
+- `smoke`: Runs on PRs and every configured push, including `main`. Covers representative scenarios for state capture, action recovery, wait semantics, policy/HITL, audit/session, MCP flow (including visual image content delivery and standalone configured-skill loading), skill execution, plugin validation, marketplace accounting, HITL approval-lock concurrency and prompt/resolution flow (`hitl-bridge`), and ROI/cost-savings accounting and report generation (`bench`).
   - `full`: Runs on nightly/manual workflows. Uses the same report format and is reserved for expanded scenario sets and longer-running variants.
 - **Scope note**: The new `hitl-bridge` and `bench` evaluation scenarios run without a browser. Their browser-backed end-to-end tests (`PageSessionGateway` E2E, live-Chrome ROI runs) remain `#[ignore]`-gated in their crate-local `tests/` suites; other comprehensive evaluation suites do exercise Chrome.
 - **Artifacts**:
@@ -131,6 +131,23 @@ completion baseline alongside exact-one approval, observed mutation and hard blo
 The HTTP fixture also tests fragmented POSTs and idle browser connections.
 
 ## 3. Running Tests Locally
+
+`just ci` (also `just test-all`) runs the source-preserving local checks: formatting
+with `--check`, Clippy for all targets including tests, the workspace nextest CI
+profile, doc tests, `cargo deny check`, Python regression tests, the Playwright
+benchmark tests and moderate-or-higher npm audit gate, and npm wrapper tests.
+Install `just`, `cargo-nextest`, `cargo-deny`, Python 3.12, and a supported Node.js
+runtime with npm first. The benchmark supports Node 20.19, 22.12, and 24 boundaries;
+CI tests and audits all three. `just fmt` remains the explicit formatting command
+that rewrites source files; validation recipes never run it.
+
+The local aggregate does not run the explicitly ignored browser/process suites or
+generate NFR/evaluation dashboards. For the full MCP stdio suite, run
+`just test-mcp-e2e` with Chrome installed (`CHROME_PATH` can select the binary).
+Run `just evaluation-bench-smoke` and the NFR commands below for those reports;
+GitHub CI runs their smoke jobs on both PRs and pushes to `main`, and the full
+variants run in the nightly workflow. The Python CI job installs `just` so its
+recipe contract tests execute the actual dependency graph with fake tool commands.
 
 Run the npm distribution wrapper suite from the repository root (Node.js 22 is used in CI):
 

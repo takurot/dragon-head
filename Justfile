@@ -12,16 +12,43 @@ test-ci:
     cargo nextest run --workspace --profile ci
 
 lint:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 fmt:
     cargo fmt --all
 
+fmt-check:
+    cargo fmt --all -- --check
+
 check:
     cargo check --workspace
 
-test-all: test lint fmt
+test-doc:
+    cargo test --workspace --doc
+
+deny:
+    cargo deny check
+
+test-python:
+    python3 -m unittest discover -s scripts -p 'test_*.py'
+
+test-npm-bench:
+    npm --prefix bench-playwright ci
+    npm --prefix bench-playwright test
+    npm --prefix bench-playwright audit --audit-level=moderate
+
+test-npm-wrapper:
+    node --test npm/dragon-head-mcp/test/run.test.js
+
+# Nonmutating source checks; browser prerequisites follow the normal test suite.
+ci: fmt-check lint test-ci test-doc deny test-python test-npm-bench test-npm-wrapper
+
+test-all: ci
     @echo "All checks passed!"
+
+# Additional full stdio E2E suite; requires Chrome and explicitly runs ignored tests.
+test-mcp-e2e:
+    cargo test -p mcp-server --test mcp_binary_e2e -- --ignored --nocapture
 
 # Real MCP binary + Chrome; local fixture and Slack API double, no live credentials.
 demo-high-risk-action:
