@@ -276,3 +276,17 @@ and target-specific declarations, and excludes dev/build and external dependenci
 metadata fixtures and the real CLI, including added and removed edges. These standard
 library tests are also collected by the existing Python CI job; they need Cargo but
 do not build or launch a browser.
+
+### HITL approval identity regression (ISSUE-395)
+
+The gateway unit suite uses a test-only callback immediately after bridge-ID validation to
+replace the pending request before the core mutation. Real-Chrome tests cover approval and
+rejection of changed and identical replacements, unobserved approval cycles, scope/outcome
+changes, navigation requests, and session-provider swaps. Stale decisions must leave the
+replacement pending, with no grant or successful approval/rejection audit. Pure core tests
+also verify that replacement and clear/recreate cycles receive distinct runtime identities.
+
+```bash
+CHROME_INSTALLED=true cargo test -p hitl-bridge --lib gateway::tests -- --test-threads=1
+cargo test -p core-runtime --lib approval_identity_tests
+```

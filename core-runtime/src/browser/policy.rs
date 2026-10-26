@@ -34,6 +34,13 @@ impl PageSession {
 
     /// Returns the current pending human-approval request, if any.
     pub fn pending_policy_approval(&self) -> Option<PolicyApprovalRequest> {
+        self.pending_policy_approval_snapshot()
+            .map(|snapshot| snapshot.request)
+    }
+
+    /// Returns the pending request with the identity of its exact approval cycle.
+    /// Bridges must pass this identity back when applying a human's decision.
+    pub fn pending_policy_approval_snapshot(&self) -> Option<PolicyApprovalRequestSnapshot> {
         self.policy_approvals
             .lock()
             .ok()
@@ -58,14 +65,40 @@ impl PageSession {
         &self,
         channel: &str,
     ) -> Result<Option<PolicyApprovalRequest>> {
+        self.approve_pending_policy_request_with_expected(None, channel)
+    }
+
+    /// Approve only the identified pending cycle. A stale identity never grants or audits
+    /// a replacement request, including one with identical review data.
+    pub fn approve_pending_policy_request_if_current(
+        &self,
+        expected_id: uuid::Uuid,
+        channel: &str,
+    ) -> Result<PolicyApprovalRequest> {
+        self.approve_pending_policy_request_with_expected(Some(expected_id), channel)?
+            .ok_or_else(|| anyhow::anyhow!("No pending policy approval request"))
+    }
+
+    fn approve_pending_policy_request_with_expected(
+        &self,
+        expected_id: Option<uuid::Uuid>,
+        channel: &str,
+    ) -> Result<Option<PolicyApprovalRequest>> {
         let guard = self
             .policy_approvals
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
 
-        let Some(request) = guard.pending.clone() else {
+        let Some(snapshot) = guard.pending.clone() else {
+            if expected_id.is_some() {
+                anyhow::bail!("Expected policy approval request is no longer pending");
+            }
             return Ok(None);
         };
+        if expected_id.is_some_and(|expected| expected != snapshot.id) {
+            anyhow::bail!("Expected policy approval request is no longer pending");
+        }
+        let request = snapshot.request;
 
         // Drop the lock before calling current_url() to avoid potential deadlock.
         drop(guard);
@@ -83,7 +116,7 @@ impl PageSession {
             .policy_approvals
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
-        if guard.pending.as_ref() != Some(&request) {
+        if guard.pending.as_ref().map(|pending| pending.id) != Some(snapshot.id) {
             anyhow::bail!("Pending policy approval request changed before commit");
         }
         guard.pending = None;
@@ -130,11 +163,27 @@ impl PageSession {
     ///
     /// [`approve_pending_policy_action`]: Self::approve_pending_policy_action
     pub fn reject_pending_policy_action(&self) -> Result<()> {
+        self.reject_pending_policy_request_with_expected(None)
+    }
+
+    /// Reject only the identified pending approval cycle; a replacement stays pending.
+    pub fn reject_pending_policy_request_if_current(&self, expected_id: uuid::Uuid) -> Result<()> {
+        self.reject_pending_policy_request_with_expected(Some(expected_id))
+    }
+
+    fn reject_pending_policy_request_with_expected(
+        &self,
+        expected_id: Option<uuid::Uuid>,
+    ) -> Result<()> {
         let mut guard = self
             .policy_approvals
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
 
+        if expected_id.is_some() && guard.pending.as_ref().map(|pending| pending.id) != expected_id
+        {
+            anyhow::bail!("Expected policy approval request is no longer pending");
+        }
         if guard.pending.take().is_none() {
             anyhow::bail!("No pending policy approval request");
         }
@@ -292,7 +341,7 @@ impl PageSession {
             .policy_approvals
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock policy approval state"))?;
-        guard.pending = Some(request);
+        guard.replace_pending(request);
         Ok(())
     }
 
@@ -348,5 +397,46 @@ impl PageSession {
         }
 
         true
+    }
+}
+
+#[cfg(test)]
+mod approval_identity_tests {
+    use super::*;
+
+    fn request() -> PolicyApprovalRequest {
+        PolicyApprovalRequest {
+            rule_id: "review".to_string(),
+            scope: ApprovalScope::ActionOnly,
+            action: "click".to_string(),
+            target_signature: "same-target".to_string(),
+            outcome: None,
+        }
+    }
+
+    #[test]
+    fn pending_replacement_always_receives_a_new_identity() {
+        let approvals = Mutex::new(PolicyApprovalState::default());
+        let mut guard = approvals.lock().unwrap();
+        guard.replace_pending(request());
+        let original = guard.pending.clone().unwrap();
+        assert_eq!(guard.pending.as_ref().unwrap().id, original.id);
+        guard.replace_pending(request());
+        let replacement = guard.pending.as_ref().unwrap();
+        assert_eq!(original.request, replacement.request);
+        assert_ne!(original.id, replacement.id);
+        assert!(guard.granted.is_empty());
+    }
+
+    #[test]
+    fn clearing_and_recreating_identical_request_changes_identity() {
+        let approvals = Mutex::new(PolicyApprovalState::default());
+        let mut guard = approvals.lock().unwrap();
+        guard.replace_pending(request());
+        let original_id = guard.pending.as_ref().unwrap().id;
+        guard.pending = None;
+        guard.replace_pending(request());
+        assert_ne!(guard.pending.as_ref().unwrap().id, original_id);
+        assert!(guard.granted.is_empty());
     }
 }

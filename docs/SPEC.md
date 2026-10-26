@@ -262,6 +262,7 @@ TOOL_CALL/POLICY_DECISION audit evidenceはscheme/host/explicit port/pathまた�
 
 **ACT-05: HITL Concurrency & Safety**
 - **Session Lock**: Slack/Teams 等のチャットツール連携において、複数人による同時承認を防ぐ排他ロック機構。
+- **Request Identity**: 保留リクエストの各生成・置換時にruntimeが一意なIDを付与する。bridgeの承認・却下は、レビューしたIDをapproval-state lock内で比較してから適用する。内容が同一の再生成やscope/Outcome Projectionだけの変更も別の承認サイクルであり、古いIDは新しい保留を変更せず、grantや成功auditを生成しない。
 - **Approver Trust Model**: 埋め込み HITL bridge 有効時、`ask_human` は承認を付与せず `approved=false, pending=true, awaiting="out_of_band_approval"` を返す（付与は bridge の署名付き callback のみ）。bridge 無効時は `ask_human` が保留中の承認を付与するため、承認の強度は MCP クライアントの `ask_human` ツール権限確認に依存する。
 - **Audit Trace**: 承認・却下を行ったユーザー ID、タイムスタンプ、およびその際の `Outcome Projection` データを不変ログに記録。
 

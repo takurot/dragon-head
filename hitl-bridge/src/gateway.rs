@@ -12,10 +12,9 @@ use uuid::Uuid;
 
 /// A pending human-approval request, identified by a bridge-minted [`Uuid`].
 ///
-/// `core_runtime::PolicyApprovalRequest` has no stable identifier of its own —
-/// the gateway mints `id` the first time it observes a given request (keyed by
-/// `(rule_id, target_signature, action)`) so the chat notification, the lock
-/// registry, and the audit trail can all refer to the same approval by ID.
+/// The gateway maps the runtime's approval-cycle identity and session to a bridge ID,
+/// so the chat notification, lock registry, and audit trail refer to exactly the
+/// request that was reviewed, including replacements with identical display data.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingApproval {
     pub id: Uuid,
@@ -68,7 +67,7 @@ impl PartialEq for SessionToken {
 
 impl Eq for SessionToken {}
 
-/// Identifies a [`core_runtime::PolicyApprovalRequest`] independent of the
+/// Identifies a [`core_runtime::browser::PolicyApprovalRequestSnapshot`] independent of the
 /// bridge-minted [`Uuid`], so repeated polls of the same request resolve to
 /// the same ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,9 +76,7 @@ struct RequestKey {
     /// an ID minted for the crashed session never validates against, or is reused for, a
     /// request on its replacement even if the rule/target/action happen to match.
     session: SessionToken,
-    rule_id: String,
-    target_signature: String,
-    action: String,
+    request_id: Uuid,
 }
 
 /// Single-slot cache mapping the most recently observed [`RequestKey`] to a
@@ -87,10 +84,9 @@ struct RequestKey {
 ///
 /// Because the underlying session only ever tracks a single pending request at
 /// a time, a single slot (rather than a full map) is sufficient and avoids
-/// unbounded growth. The slot is cleared whenever no request is pending — see
-/// [`clear`](Self::clear) — so that a *later* approval cycle on the same
-/// control (same `rule_id`/`target_signature`/`action`) mints a fresh ID
-/// rather than reusing one the lock registry has already recorded as resolved.
+/// unbounded growth. Every replacement has a new runtime identity, so an unobserved
+/// clear-and-replace cycle also mints a fresh bridge ID. Observing no pending request
+/// clears the slot to discard the previous session token promptly.
 #[derive(Default)]
 struct MintedIdCache {
     slot: Option<(RequestKey, Uuid)>,
@@ -139,6 +135,8 @@ pub type SessionProvider = Arc<dyn Fn() -> Arc<PageSession> + Send + Sync>;
 pub struct PageSessionGateway {
     session: SessionProvider,
     minted: std::sync::Mutex<MintedIdCache>,
+    #[cfg(test)]
+    before_resolve: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl PageSessionGateway {
@@ -152,6 +150,16 @@ impl PageSessionGateway {
         Self {
             session,
             minted: std::sync::Mutex::new(MintedIdCache::default()),
+            #[cfg(test)]
+            before_resolve: std::sync::Mutex::new(None),
+        }
+    }
+
+    #[cfg(test)]
+    fn run_before_resolve(&self) {
+        let callback = self.before_resolve.lock().unwrap().take();
+        if let Some(callback) = callback {
+            callback();
         }
     }
 
@@ -162,28 +170,27 @@ impl PageSessionGateway {
             .id_for(key)
     }
 
-    /// Returns the bridge-minted ID for `session`'s current pending request, without minting
-    /// one. Used to validate a caller-supplied ID against the current pending request; a
-    /// validation lookup must not mutate cache state (see [`MintedIdCache::peek`]).
-    fn current_id(&self, session: &Arc<PageSession>) -> Option<Uuid> {
-        let pending = session.pending_policy_approval()?;
+    /// Validate the bridge ID without minting, then return the runtime identity that
+    /// must still match when the decision commits under the session's approval lock.
+    fn expected_request_id(&self, session: &Arc<PageSession>, id: Uuid) -> Option<Uuid> {
+        let pending = session.pending_policy_approval_snapshot()?;
         let key = RequestKey {
             session: SessionToken::of(session),
-            rule_id: pending.rule_id,
-            target_signature: pending.target_signature,
-            action: pending.action,
+            request_id: pending.id,
         };
-        self.minted
+        let current_id = self
+            .minted
             .lock()
             .expect("minted-id mutex poisoned")
-            .peek(&key)
+            .peek(&key);
+        (current_id == Some(id)).then_some(pending.id)
     }
 }
 
 impl ApprovalGateway for PageSessionGateway {
     fn pending_request(&self) -> Option<PendingApproval> {
         let session = (self.session)();
-        let Some(pending) = session.pending_policy_approval() else {
+        let Some(snapshot) = session.pending_policy_approval_snapshot() else {
             self.minted
                 .lock()
                 .expect("minted-id mutex poisoned")
@@ -192,11 +199,10 @@ impl ApprovalGateway for PageSessionGateway {
         };
         let key = RequestKey {
             session: SessionToken::of(&session),
-            rule_id: pending.rule_id.clone(),
-            target_signature: pending.target_signature.clone(),
-            action: pending.action.clone(),
+            request_id: snapshot.id,
         };
         let id = self.id_for(&key);
+        let pending = snapshot.request;
         Some(PendingApproval {
             id,
             rule_id: pending.rule_id,
@@ -211,21 +217,24 @@ impl ApprovalGateway for PageSessionGateway {
     // decision to another (after a restart swap) would resolve an unvalidated request.
     fn approve(&self, id: Uuid) -> Result<()> {
         let session = (self.session)();
-        if self.current_id(&session) != Some(id) {
-            anyhow::bail!("Approval request {id} is no longer pending");
-        }
+        let expected_id = self
+            .expected_request_id(&session, id)
+            .ok_or_else(|| anyhow::anyhow!("Approval request {id} is no longer pending"))?;
+        #[cfg(test)]
+        self.run_before_resolve();
         session
-            .approve_pending_policy_request_via("hitl_bridge")?
+            .approve_pending_policy_request_if_current(expected_id, "hitl_bridge")
             .map(|_| ())
-            .ok_or_else(|| anyhow::anyhow!("No pending policy approval request"))
     }
 
     fn reject(&self, id: Uuid) -> Result<()> {
         let session = (self.session)();
-        if self.current_id(&session) != Some(id) {
-            anyhow::bail!("Approval request {id} is no longer pending");
-        }
-        session.reject_pending_policy_action()
+        let expected_id = self
+            .expected_request_id(&session, id)
+            .ok_or_else(|| anyhow::anyhow!("Approval request {id} is no longer pending"))?;
+        #[cfg(test)]
+        self.run_before_resolve();
+        session.reject_pending_policy_request_if_current(expected_id)
     }
 }
 
@@ -309,6 +318,258 @@ mod tests {
     use super::mock::{MockGateway, Resolution};
     use super::*;
 
+    fn approval_rule(scope: ApprovalScope, projected: bool) -> core_runtime::PolicyRule {
+        core_runtime::PolicyRule {
+            id: "approve-pay".to_string(),
+            domain: None,
+            path_prefix: None,
+            role: None,
+            text_regex: None,
+            context_regex: None,
+            action: core_runtime::PolicyAction::RequireHumanApproval,
+            scope: Some(scope),
+            outcome_projector: projected.then_some(core_runtime::OutcomeProjectorConfig {
+                amount_regex: Some(r"\$(?P<amount>\d+)".to_string()),
+                block_if_amount_exceeds: None,
+                warn_if_amount_exceeds: Some(100.0),
+            }),
+        }
+    }
+
+    fn approval_page() -> Result<(core_runtime::BrowserClient, Arc<PageSession>)> {
+        let client = core_runtime::BrowserClient::new()?;
+        let page = Arc::new(client.new_page()?);
+        page.navigate(&format!("data:text/html,{}", urlencoding::encode(
+            r#"<html><body><div>Total: $900<button id="x">Pay X</button><button id="y">Pay Y</button></div></body></html>"#
+        )))?;
+        page.set_policy_rules(vec![approval_rule(ApprovalScope::ActionOnly, false)])?;
+        Ok((client, page))
+    }
+
+    fn require_approval(page: &PageSession, id: &str) -> Result<()> {
+        fn find<'a>(
+            node: &'a core_runtime::sre::SemanticNode,
+            id: &str,
+        ) -> Option<&'a core_runtime::sre::SemanticNode> {
+            if node
+                .attributes
+                .as_ref()
+                .and_then(|attributes| attributes.get("id"))
+                .map(String::as_str)
+                == Some(id)
+            {
+                return Some(node);
+            }
+            node.children.iter().find_map(|child| find(child, id))
+        }
+        let state = page.capture_semantic_state(core_runtime::sre::LoadProfile::Interactive)?;
+        let target = find(state.root(), id).expect("fixture target");
+        let error = page
+            .act(
+                Some(target.backend_node_id),
+                target.stable_key.as_deref(),
+                "click",
+                None,
+            )
+            .expect_err("fixture action must require approval");
+        assert!(matches!(
+            error.downcast_ref::<core_runtime::ActionError>(),
+            Some(core_runtime::ActionError::HumanApprovalRequired { .. })
+        ));
+        Ok(())
+    }
+
+    fn replaced_request_is_not_resolved(
+        approve: bool,
+        replacement_target: &'static str,
+    ) -> Result<()> {
+        if test_bench_support::should_skip_browser_tests() {
+            return Ok(());
+        }
+        let (_client, page) = approval_page()?;
+        require_approval(&page, "x")?;
+        let gateway = PageSessionGateway::new(Arc::clone(&page));
+        let original = gateway.pending_request().expect("original request");
+        let callback_page = Arc::clone(&page);
+        *gateway.before_resolve.lock().unwrap() = Some(Box::new(move || {
+            require_approval(&callback_page, replacement_target)
+                .expect("replace pending after gateway validation");
+        }));
+        page.clear_audit_events();
+        let result = if approve {
+            gateway.approve(original.id)
+        } else {
+            gateway.reject(original.id)
+        };
+        assert!(
+            result.is_err(),
+            "a decision on X must not resolve replacement Y"
+        );
+        let replacement = page
+            .pending_policy_approval()
+            .expect("Y must remain pending");
+        if replacement_target == "y" {
+            assert_ne!(replacement.target_signature, original.target_signature);
+        } else {
+            assert_eq!(replacement.target_signature, original.target_signature);
+        }
+        assert!(!page.audit_events().iter().any(|event| matches!(event,
+            core_runtime::audit::AuditEvent::HitlEvent { event_type, .. } if event_type == "approved" || event_type == "rejected"
+        )), "stale decisions must not emit successful resolution audit");
+        require_approval(&page, replacement_target)?;
+        let current = gateway
+            .pending_request()
+            .expect("replacement still requires human decision");
+        assert_ne!(current.id, original.id);
+        gateway.approve(current.id)?;
+        assert!(page.pending_policy_approval().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_approve_rejects_replacement_after_id_validation() -> Result<()> {
+        replaced_request_is_not_resolved(true, "y")
+    }
+
+    #[test]
+    fn gateway_reject_rejects_replacement_after_id_validation() -> Result<()> {
+        replaced_request_is_not_resolved(false, "y")
+    }
+
+    #[test]
+    fn gateway_approve_rejects_same_shape_replacement_after_id_validation() -> Result<()> {
+        replaced_request_is_not_resolved(true, "x")
+    }
+
+    #[test]
+    fn gateway_reject_rejects_same_shape_replacement_after_id_validation() -> Result<()> {
+        replaced_request_is_not_resolved(false, "x")
+    }
+
+    #[test]
+    fn core_expected_decisions_preserve_replacement_without_grant_or_audit() -> Result<()> {
+        if test_bench_support::should_skip_browser_tests() {
+            return Ok(());
+        }
+        let (_client, page) = approval_page()?;
+        require_approval(&page, "x")?;
+        let original = page.pending_policy_approval_snapshot().unwrap();
+        assert_eq!(
+            page.pending_policy_approval_snapshot().unwrap().id,
+            original.id
+        );
+        require_approval(&page, "y")?;
+        let replacement = page.pending_policy_approval_snapshot().unwrap();
+        page.clear_audit_events();
+        assert!(page
+            .approve_pending_policy_request_if_current(original.id, "hitl_bridge")
+            .is_err());
+        assert!(page
+            .reject_pending_policy_request_if_current(original.id)
+            .is_err());
+        assert_eq!(page.pending_policy_approval_snapshot(), Some(replacement));
+        assert!(page.audit_events().is_empty());
+        require_approval(&page, "y")?;
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_rejects_old_session_id_after_provider_swap() -> Result<()> {
+        if test_bench_support::should_skip_browser_tests() {
+            return Ok(());
+        }
+        let (_first_client, first) = approval_page()?;
+        let (_second_client, second) = approval_page()?;
+        require_approval(&first, "x")?;
+        require_approval(&second, "x")?;
+        let active = Arc::new(std::sync::Mutex::new(Arc::clone(&first)));
+        let provider_active = Arc::clone(&active);
+        let gateway = PageSessionGateway::with_provider(Arc::new(move || {
+            Arc::clone(&provider_active.lock().unwrap())
+        }));
+        let original = gateway.pending_request().unwrap();
+        *active.lock().unwrap() = Arc::clone(&second);
+        let replacement = second.pending_policy_approval_snapshot().unwrap();
+        second.clear_audit_events();
+        assert!(gateway.approve(original.id).is_err());
+        assert!(gateway.reject(original.id).is_err());
+        assert_eq!(second.pending_policy_approval_snapshot(), Some(replacement));
+        assert!(second.audit_events().is_empty());
+        let current = gateway.pending_request().unwrap();
+        assert_ne!(current.id, original.id);
+        gateway.reject(current.id)?;
+        assert!(second.pending_policy_approval().is_none());
+        assert!(first.pending_policy_approval().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_does_not_reuse_id_for_unobserved_same_shape_approval_cycle() -> Result<()> {
+        if test_bench_support::should_skip_browser_tests() {
+            return Ok(());
+        }
+        let (_client, page) = approval_page()?;
+        require_approval(&page, "x")?;
+        let gateway = PageSessionGateway::new(Arc::clone(&page));
+        let original = gateway.pending_request().unwrap();
+        page.reject_pending_policy_action()?;
+        require_approval(&page, "x")?;
+        let replacement = gateway.pending_request().unwrap();
+        assert_eq!(original.target_signature, replacement.target_signature);
+        assert_ne!(
+            original.id, replacement.id,
+            "new approval cycle needs a new identity even without polling None"
+        );
+        assert!(gateway.approve(original.id).is_err());
+        assert!(gateway.reject(original.id).is_err());
+        assert!(page.pending_policy_approval().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_changes_id_for_scope_and_outcome_only_replacements() -> Result<()> {
+        if test_bench_support::should_skip_browser_tests() {
+            return Ok(());
+        }
+        let (_client, page) = approval_page()?;
+        let gateway = PageSessionGateway::new(Arc::clone(&page));
+        require_approval(&page, "x")?;
+        let original = gateway.pending_request().unwrap();
+        page.set_policy_rules(vec![approval_rule(ApprovalScope::UntilNavigation, false)])?;
+        require_approval(&page, "x")?;
+        let scoped = gateway.pending_request().unwrap();
+        assert_ne!(original.scope, scoped.scope);
+        assert_ne!(original.id, scoped.id);
+        page.set_policy_rules(vec![approval_rule(ApprovalScope::UntilNavigation, true)])?;
+        require_approval(&page, "x")?;
+        let projected = gateway.pending_request().unwrap();
+        assert_eq!(scoped.scope, projected.scope);
+        assert_ne!(scoped.outcome, projected.outcome);
+        assert_ne!(scoped.id, projected.id);
+        assert!(gateway.approve(scoped.id).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_changes_id_when_navigation_replaces_pending_request() -> Result<()> {
+        if test_bench_support::should_skip_browser_tests() {
+            return Ok(());
+        }
+        let (_client, page) = approval_page()?;
+        let gateway = PageSessionGateway::new(Arc::clone(&page));
+        page.navigate_public("http://127.0.0.1:1/review", true)
+            .expect_err("approval precedes network access");
+        let original = gateway.pending_request().unwrap();
+        page.navigate_public("http://127.0.0.1:1/review", true)
+            .expect_err("fresh navigation attempt requires review");
+        let replacement = gateway.pending_request().unwrap();
+        assert_eq!(original.action, "navigate");
+        assert_eq!(original.target_signature, replacement.target_signature);
+        assert_ne!(original.id, replacement.id);
+        assert!(gateway.approve(original.id).is_err());
+        Ok(())
+    }
+
     fn sample_pending(id: Uuid) -> PendingApproval {
         PendingApproval {
             id,
@@ -332,9 +593,7 @@ mod tests {
     fn sample_key_on(session: &Arc<()>) -> RequestKey {
         RequestKey {
             session: SessionToken::of(session),
-            rule_id: "approve-pay".to_string(),
-            target_signature: "sig-123".to_string(),
-            action: "click".to_string(),
+            request_id: Uuid::from_u128(1),
         }
     }
 
@@ -354,9 +613,7 @@ mod tests {
         let mut cache = MintedIdCache::default();
         let other_key = RequestKey {
             session: SessionToken::of(&SESSION_A),
-            rule_id: "approve-pay".to_string(),
-            target_signature: "sig-456".to_string(),
-            action: "click".to_string(),
+            request_id: Uuid::from_u128(2),
         };
 
         let first = cache.id_for(&sample_key());
@@ -412,9 +669,7 @@ mod tests {
         let cached_key = sample_key();
         let other_key = RequestKey {
             session: SessionToken::of(&SESSION_A),
-            rule_id: "approve-pay".to_string(),
-            target_signature: "sig-456".to_string(),
-            action: "click".to_string(),
+            request_id: Uuid::from_u128(2),
         };
         cache.id_for(&cached_key);
 
