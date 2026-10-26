@@ -88,7 +88,7 @@ mcp-server -> plugin-host
 mcp-server -> skills-engine
 ```
 
-`core-runtime` loads concrete plugin adapters through `plugin-host`; the embedded
+`core-runtime` depends on `plugin-host` for concrete plugin adapters; the embedded
 HITL path connects `mcp-server` to `hitl-bridge`, which itself uses `core-runtime`.
 The benchmark harness uses both runtime and MCP APIs, while marketplace primitives
 compose plugin packages and skills. Run `python3 scripts/check_architecture_dependencies.py`
