@@ -254,7 +254,13 @@ fn navigation_capability_retry(scope: ApprovalScope) -> anyhow::Result<()> {
     }
     assert_eq!(
         page.pending_policy_approval_snapshot()
-            .expect("script redirect must require approval")
+            .unwrap_or_else(|| {
+                let result = match &first {
+                    Err(error) => format!("Err({error:#})"),
+                    Ok(url) => format!("Ok({url:?})"),
+                };
+                panic!("script redirect must require approval; first navigation result: {result}");
+            })
             .request
             .scope,
         scope
