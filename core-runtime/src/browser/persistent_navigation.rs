@@ -23,7 +23,6 @@ struct ObservationState {
     protected: bool,
     allow_private_network: bool,
     attempt: Option<NavigationAttempt>,
-    automatic_origin: Option<String>,
     rejection: Option<(u64, NavigationPolicyFailure)>,
 }
 
@@ -78,7 +77,6 @@ impl NavigationObservation {
                 protected: false,
                 allow_private_network: false,
                 attempt: None,
-                automatic_origin: None,
                 rejection: None,
             }),
             generation: AtomicU64::new(0),
@@ -231,12 +229,8 @@ fn intercept_navigation_request(
         .is_some_and(|attempt| attempt.explicit)
         && !continues_chain
     {
-        let original_url = state
-            .automatic_origin
-            .clone()
-            .unwrap_or_else(|| destination.canonical_url().to_string());
         state.attempt = Some(NavigationAttempt {
-            original_url,
+            original_url: destination.canonical_url().to_string(),
             explicit: false,
             approval_context_url: None,
             initial_seen: false,
@@ -442,7 +436,6 @@ impl PageSession {
             .lock()
             .map_err(|_| anyhow::anyhow!("navigation observation is unavailable"))?;
         state.attempt = None;
-        state.automatic_origin = None;
         Ok(())
     }
 
@@ -500,7 +493,6 @@ impl PageSession {
                 requests: HashSet::new(),
                 evaluated: HashSet::from([requested.destination_digest().to_string()]),
             });
-            state.automatic_origin = Some(requested.canonical_url().to_string());
             self.navigation_observation.starting_request(&mut state);
         }
         self.public_navigation_attempts
@@ -605,7 +597,6 @@ mod tests {
                 protected: true,
                 allow_private_network: false,
                 attempt: None,
-                automatic_origin: None,
                 rejection: None,
             }),
             generation: AtomicU64::new(0),
@@ -763,6 +754,64 @@ mod tests {
                 .evaluated
                 .is_empty());
         }
+    }
+
+    #[test]
+    fn independent_automatic_navigation_uses_direct_destination_identity() {
+        let source = "http://93.184.216.34/source";
+        let destination = "http://93.184.216.34/approved";
+        let observation = observation();
+        {
+            let mut state = observation.state.lock().unwrap();
+            state.document.url = source.to_string();
+            assert!(state.attempt.is_none());
+        }
+        let context = NavigationPolicyContext {
+            policy_engine: Arc::new(Mutex::new(
+                PolicyEngine::try_new(vec![PolicyRule {
+                    id: "approve-independent".to_string(),
+                    domain: None,
+                    path_prefix: Some("/approved".to_string()),
+                    role: None,
+                    text_regex: None,
+                    context_regex: None,
+                    action: PolicyAction::RequireHumanApproval,
+                    scope: Some(ApprovalScope::ActionOnly),
+                    outcome_projector: None,
+                }])
+                .unwrap(),
+            )),
+            policy_approvals: Arc::new(Mutex::new(PolicyApprovalState::default())),
+            navigation_epoch: Arc::new(AtomicU64::new(0)),
+            audit_logger: Arc::new(AuditLogger::new()),
+            plugin_hooks: Arc::new(PluginHookConfig::default()),
+            approval_context_url: source.to_string(),
+        };
+        let event = serde_json::from_value(serde_json::json!({
+            "requestId": "independent", "frameId": "main", "resourceType": "Document",
+            "request": {"url": destination, "method": "GET", "headers": {},
+                "initialPriority": "High", "referrerPolicy": "no-referrer"}
+        }))
+        .unwrap();
+        assert!(matches!(
+            intercept_navigation_request(&observation, &context, &event),
+            headless_chrome::browser::tab::RequestPausedDecision::Fail(_)
+        ));
+        let direct =
+            validate_public_navigation_url(destination, NavigationNetworkPolicy::PublicOnly)
+                .unwrap();
+        assert_eq!(
+            context
+                .policy_approvals
+                .lock()
+                .unwrap()
+                .pending
+                .as_ref()
+                .unwrap()
+                .request
+                .target_signature,
+            direct.destination_digest()
+        );
     }
 
     #[test]

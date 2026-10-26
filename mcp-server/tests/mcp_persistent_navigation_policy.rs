@@ -505,3 +505,92 @@ fn delayed_navigation_hitl_preserves_response_ticket_and_usage() -> anyhow::Resu
     }
     Ok(())
 }
+
+#[test]
+fn independent_automatic_navigation_approval_is_retryable_after_explicit_navigation(
+) -> anyhow::Result<()> {
+    use core_runtime::policy::{ApprovalScope, PolicyAction, PolicyRule};
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+    let destination = PrivateDestination::start()?;
+    let source = format!(
+        "{}/source",
+        destination.url.strip_suffix("/private").unwrap()
+    );
+    let mut server = server_for_html("<button>initial</button>", true)?;
+    server
+        .backend_mut()
+        .page()
+        .set_policy_rules(vec![PolicyRule {
+            id: "approve-independent-navigation".to_string(),
+            domain: None,
+            path_prefix: Some("/private".to_string()),
+            role: None,
+            text_regex: None,
+            context_regex: None,
+            action: PolicyAction::RequireHumanApproval,
+            scope: Some(ApprovalScope::ActionOnly),
+            outcome_projector: None,
+        }])?;
+    assert_eq!(
+        server.call_tool("navigate", json!({"url": source}))?["status"],
+        "ok"
+    );
+    // Schedule an independent page timer only after the explicit tool completed.
+    server.backend_mut().page().evaluate_script(&format!(
+        "setTimeout(() => location.href = {}, 100)",
+        serde_json::to_string(&destination.url)?
+    ))?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while server
+        .backend_mut()
+        .page()
+        .pending_policy_approval_snapshot()
+        .is_none()
+        && Instant::now() < deadline
+    {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let pending = server
+        .backend_mut()
+        .page()
+        .pending_policy_approval_snapshot()
+        .expect("independent navigation approval");
+    assert_eq!(destination.count.load(Ordering::Acquire), 0);
+    assert_eq!(
+        server.call_tool("get_state", json!({}))?["status"],
+        "requires_human_approval"
+    );
+    assert_eq!(
+        server
+            .backend_mut()
+            .page()
+            .pending_policy_approval_snapshot()
+            .unwrap()
+            .id,
+        pending.id
+    );
+    assert_eq!(
+        server.call_tool(
+            "ask_human",
+            json!({"reason": "approve independent navigation"})
+        )?["approved"],
+        true
+    );
+    let retry = server.call_tool("navigate", json!({"url": destination.url}))?;
+    assert_eq!(
+        retry["status"], "ok",
+        "approved independent destination must be directly retryable: {retry}"
+    );
+    assert_eq!(destination.count.load(Ordering::Acquire), 1);
+    assert!(server
+        .backend_mut()
+        .page()
+        .pending_policy_approval_snapshot()
+        .is_none());
+    let usage = server.call_tool("get_usage_report", json!({}))?;
+    assert_eq!(usage["hitl_events"], 2);
+    assert_eq!(usage["actions_executed"], 2);
+    Ok(())
+}
