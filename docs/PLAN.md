@@ -726,7 +726,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 ## v0.5.2 — Navigation & Approval Security
 
 - [x] ISSUE-398: bench-playwrightの開発依存を更新し、対応Node境界でnpm audit・既存テストを成功させる。
-- [ ] ISSUE-400: Justfile/CIの検証範囲と非破壊性を整合し、main pushでも評価・NFRを実行する。
+- [x] ISSUE-400: Justfile/CIの検証範囲と非破壊性を整合し、main pushでも評価・NFRを実行する。
 - [ ] ISSUE-399: architectureの通常workspace依存を文書化し、metadataとの不整合をCIで検出する。
 - [ ] ISSUE-395: HITLのexpected要求identityをcoreのapprove/rejectと原子的に照合する。
 - [ ] ISSUE-394: act/ページ起因のmain-frame navigationを送信前に検査する。
@@ -736,6 +736,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > source-map-jsを1.2.2へ更新した。実Node 20.19.0/22.12.0/24.0.0それぞれで通常の
 > npm ci、既存47テスト、moderate以上を拒否するnpm auditが成功し、指摘総数0件を確認した。
 > Rust配布バイナリの依存や性能閾値は変更しない。監査の継続ゲートはISSUE-400で接続する。
+
+> **Follow-up (ISSUE-400, done)**: `just ci` / `test-all`はfmt --check、Clippy --all-targets、
+> nextest CI profile・doc・deny・Python・bench/npm wrapperを検証し、moderate以上のnpm監査指摘を拒否する。
+> 明示的なfmtだけがsourceを書き換え、ignored MCP stdio E2Eは別recipeで実行する。
+> short NFR / evaluation smokeはPRとmain pushの双方で実行する。
 
 ## 4. 共通 Definition of Done（全PR共通）
 

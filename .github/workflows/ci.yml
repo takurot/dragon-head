@@ -28,6 +28,9 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: '3.12'
+    - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+      with:
+        tool: just@1.58.0
     - name: Run Python regression tests
       run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
@@ -100,11 +103,6 @@ jobs:
     - name: Run benchmark harness tests
       run: npm test
     - name: Audit benchmark dependencies
-      if: matrix.node == '22.12.0'
-      # Informational only: a moderate advisory in a transitive dev dependency
-      # (e.g. a test tool) shouldn't block every PR. Findings still surface in
-      # the job log for review.
-      continue-on-error: true
       run: npm audit --audit-level=moderate
 
   plugin-sandbox:
@@ -530,7 +528,6 @@ jobs:
       run: cargo test -p mcp-server --test mcp_pricing_snapshot --verbose
 
   nfr-benchmark-short:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -552,8 +549,7 @@ jobs:
       NFR_CAPACITY_MIN_SUCCESS_RATE_PERCENT: "100"
     steps:
     - uses: actions/checkout@v4
-    # PR-only job: read cache but do not write back to avoid polluting the
-    # main-branch cache with benchmark-specific target artifacts.
+    # PRs only read the cache; main pushes may save validated benchmark artifacts.
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
       with:
         save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -592,7 +588,6 @@ jobs:
           core-runtime/target/nfr-metrics/*.json
 
   evaluation-bench-smoke:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -602,8 +597,7 @@ jobs:
       DRAGON_HEAD_EVAL_DASHBOARD_PATH: "${{ github.workspace }}/target/evaluation-dashboard.md"
     steps:
     - uses: actions/checkout@v4
-    # PR-only job: read cache but do not write back to avoid polluting the
-    # main-branch cache with evaluation-specific target artifacts.
+    # PRs only read the cache; main pushes may save validated evaluation artifacts.
     - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2.8.1
       with:
         save-if: ${{ github.ref == 'refs/heads/main' }}
