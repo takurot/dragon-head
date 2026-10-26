@@ -730,7 +730,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [x] ISSUE-399: architectureの通常workspace依存を文書化し、metadataとの不整合をCIで検出する。
 - [x] ISSUE-395: HITLのexpected要求identityをcoreのapprove/rejectと原子的に照合する。
 - [x] ISSUE-394: act/ページ起因のmain-frame navigationを送信前に検査する。
-- [ ] ISSUE-396: 承認要求・grantを作成元のpage/document/originへ束縛する。
+- [x] ISSUE-396: 承認要求・grantを作成元のpage/document/originへ束縛する。
 
 > **Follow-up (ISSUE-398, done)**: Vitestと関連packageを4.1.12、Viteを8.1.6、
 > source-map-jsを1.2.2へ更新した。実Node 20.19.0/22.12.0/24.0.0それぞれで通常の
@@ -756,6 +756,12 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > 遅延拒否の一度だけの通知とfull/delta/speculative cache失効を実Chrome/stdioで確認した。
 > 拒否先を許可済みcacheへ入れず、明示navigation完了時の承認失効を維持する。
 > 無効URLはbrowser I/O前に拒否し、同一navigation試行の承認照合元URLを中間documentでも固定する。
+
+> **Follow-up (ISSUE-396, done)**: PageActionのpending/grantをDocument revision・frame/loader・URL fingerprintへ束縛し、
+> 別origin・reload・path/query・SPA A→B→Aで承認の流用を拒否する。Timeboxedの同一page再利用、ActionOnlyの1回使用、
+> UntilNavigationのfull URL/epoch条件と、承認済みnavigationの中間Documentを3scopeで検証した。
+> isolated worldのnonce eventで観測queueを同期し、snapshot/承認commit時のDocumentと既存UUIDを照合する。
+> fixtureの分割HTTP requestも4096バイト・合計1秒以内にheader完了まで読み、未完requestの早期応答を回帰テストで防ぐ。
 
 ## 4. 共通 Definition of Done（全PR共通）
 
