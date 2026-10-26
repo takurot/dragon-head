@@ -1,5 +1,6 @@
 //! ISSUE-396: element approvals belong to the document reviewed by the human.
 
+use anyhow::Context;
 use core_runtime::{
     audit::AuditEvent,
     policy::{ApprovalScope, PolicyAction, PolicyRule},
@@ -218,13 +219,29 @@ fn reload_and_a_b_a_navigation_expire_timeboxed_grants_at_the_original_url() -> 
 
 #[test]
 fn navigation_capability_retries_across_an_intermediate_script_document() -> anyhow::Result<()> {
+    navigation_capability_retry(ApprovalScope::ActionOnly)
+}
+
+#[test]
+fn navigation_capability_until_navigation_retries_across_an_intermediate_script_document(
+) -> anyhow::Result<()> {
+    navigation_capability_retry(ApprovalScope::UntilNavigation)
+}
+
+#[test]
+fn navigation_capability_timeboxed_retries_across_an_intermediate_script_document(
+) -> anyhow::Result<()> {
+    navigation_capability_retry(ApprovalScope::Timeboxed { ms: 60_000 })
+}
+
+fn navigation_capability_retry(scope: ApprovalScope) -> anyhow::Result<()> {
     if test_bench_support::should_skip_browser_tests() {
         return Ok(());
     }
     let fixture = Fixture::new(true)?;
     let client = BrowserClient::new()?;
     let page = client.new_page()?;
-    let mut navigation_rule = rule(ApprovalScope::ActionOnly);
+    let mut navigation_rule = rule(scope);
     navigation_rule.role = None;
     navigation_rule.path_prefix = Some("/approved".to_string());
     page.set_policy_rules(vec![navigation_rule])?;
@@ -235,7 +252,13 @@ fn navigation_capability_retries_across_an_intermediate_script_document() -> any
     {
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(page.pending_policy_approval_snapshot().is_some());
+    assert_eq!(
+        page.pending_policy_approval_snapshot()
+            .expect("script redirect must require approval")
+            .request
+            .scope,
+        scope
+    );
     let error = match first {
         Err(error) => error,
         Ok(_) => page
@@ -246,8 +269,15 @@ fn navigation_capability_retries_across_an_intermediate_script_document() -> any
         error.downcast_ref::<ActionError>(),
         Some(ActionError::HumanApprovalRequired { .. })
     ));
+    eprintln!(
+        "navigation retry: scope={scope:?}, source={:?}, requested={:?}",
+        page.current_url()?,
+        fixture.url
+    );
     page.approve_pending_policy_action()?;
-    let final_url = page.navigate_public(&fixture.url, true)?;
+    let final_url = page
+        .navigate_public(&fixture.url, true)
+        .with_context(|| format!("approved retry for {scope:?}"))?;
     assert!(
         final_url.ends_with("/approved"),
         "approved retry must reach its destination"
