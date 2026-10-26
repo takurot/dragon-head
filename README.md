@@ -508,6 +508,15 @@ the audit-retention snapshot, but does not meter itself or emit an action audit 
 `navigate` accepts absolute HTTP(S) URLs without embedded credentials, strips
 fragments, evaluates the requested destination and each top-level redirect before
 network access, and logs only a sanitized destination projection without query data.
+The MCP session keeps this main-frame protection active after the tool returns:
+link clicks, form submissions, script navigation, and meta refresh receive the same
+network and navigation-policy checks before the destination request is sent.
+A directly observed rejection is returned by `act`; delayed timer/meta navigation
+is still blocked and is reported once by the next tool call, before another action
+can execute. New document observations invalidate cached full/delta/speculative
+state. The trusted private-network opt-in applies to these paths as well.
+Iframe/subresource traffic remains outside this main-frame boundary, and these
+application checks do not eliminate DNS rebinding or replace network isolation.
 <!-- mcp-tool-semantics:end -->
 
 ## Developer Examples

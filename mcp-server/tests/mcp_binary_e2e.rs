@@ -10,6 +10,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 use test_bench_support::should_skip_browser_tests;
 
+#[path = "common/navigation_fixture.rs"]
+mod navigation_fixture;
+
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
@@ -1095,6 +1098,92 @@ fn test_mcp_binary_stdio_smoke() -> anyhow::Result<()> {
     );
     assert!(stdout_lines.iter().all(|line| !line.trim().is_empty()));
     eprintln!("[timing] total: {:?}", t0.elapsed());
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Chrome; starts the shipped MCP binary"]
+fn test_mcp_binary_navigation_policy_remains_active_after_navigate() -> anyhow::Result<()> {
+    anyhow::ensure!(!should_skip_browser_tests(), "Chrome is required");
+    let destination = navigation_fixture::PrivateDestination::start()?;
+    let config_home = tempfile::tempdir()?;
+    let policy = config_home.path().join("policy.json");
+    std::fs::write(
+        &policy,
+        r#"[{"id":"deny-private-path","path_prefix":"/private","action":"block"}]"#,
+    )?;
+    let mut command = Command::new(build_binary_once()?);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .env("NAVIGATION_ALLOW_PRIVATE_NETWORK", "true")
+        .env("POLICY_FILE", &policy)
+        .env_remove("HITL_BRIDGE_ENABLED");
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut raw = command.spawn()?;
+    let stdout = raw.stdout.take().expect("stdout");
+    let mut child = ChildGuard::new(raw);
+    let (sender, receiver) = mpsc::channel();
+    let _reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender.send(StdoutEvent::Line(line)).is_err() {
+                break;
+            }
+        }
+        let _ = sender.send(StdoutEvent::Eof);
+    });
+    {
+        let mut call = |request: Value| -> anyhow::Result<Value> {
+            writeln!(child.stdin_mut(), "{request}")?;
+            child.stdin_mut().flush()?;
+            if request.get("id").is_none() {
+                return Ok(Value::Null);
+            }
+            Ok(serde_json::from_str(&receive_stdout_line(
+                &receiver,
+                Duration::from_secs(30),
+            )?)?)
+        };
+        let initialized = call(
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"persistent-navigation-e2e","version":"1"}}}),
+        )?;
+        assert!(initialized.get("error").is_none(), "{initialized}");
+        call(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))?;
+        let source = destination.url.replace("/private", "/source");
+        let navigation = call(
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"navigate","arguments":{"url":source}}}),
+        )?;
+        assert_eq!(
+            navigation["result"]["structuredContent"]["status"], "ok",
+            "{navigation}"
+        );
+        let state = call(
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_state","arguments":{}}}),
+        )?;
+        let id = state["result"]["structuredContent"]["interactive_elements"][0]["id"]
+            .as_i64()
+            .expect("link id");
+        let action = call(
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"act","arguments":{"action":"click","target_id":id}}}),
+        )?;
+        assert_eq!(
+            action["result"]["structuredContent"]["status"], "blocked",
+            "{action}"
+        );
+        assert_eq!(
+            action["result"]["structuredContent"]["rule_id"], "deny-private-path",
+            "{action}"
+        );
+        assert_eq!(
+            destination.count.load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+    }
+    child.close_stdin();
+    assert!(child.wait_timeout(Duration::from_secs(30))?.success());
     Ok(())
 }
 

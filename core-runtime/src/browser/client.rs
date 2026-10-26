@@ -141,6 +141,8 @@ impl BrowserClient {
             apply_viewport_size(&tab, width, height)?;
         }
         Ok(PageSession {
+            navigation_observation: NavigationObservation::install(&tab)?,
+            navigation_interception: Mutex::new(None),
             inner: tab,
             som_pipeline: Arc::new(Mutex::new(SomPipelineState::default())),
             stable_key_index: Arc::new(Mutex::new(HashMap::new())),

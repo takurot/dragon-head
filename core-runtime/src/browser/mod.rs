@@ -8,6 +8,7 @@ mod helpers;
 mod navigation;
 mod navigation_policy;
 mod page_navigation;
+mod persistent_navigation;
 mod policy;
 #[cfg(test)]
 mod tests;
@@ -29,6 +30,7 @@ pub use navigation::{
     NavigationValidationError, ValidatedNavigationUrl, MAX_PUBLIC_NAVIGATION_URL_BYTES,
 };
 use navigation_policy::*;
+use persistent_navigation::*;
 
 use anyhow::{Context, Result};
 use headless_chrome::{Browser, LaunchOptions};
@@ -230,17 +232,6 @@ impl NavigationPolicyFailure {
     }
 }
 
-struct RedirectInterceptionState {
-    main_frame_id: String,
-    initial_url: String,
-    initial_request_seen: bool,
-    original_url: String,
-    network_policy: NavigationNetworkPolicy,
-    request_chain: HashSet<String>,
-    evaluated_destinations: HashSet<String>,
-    failure: Option<NavigationPolicyFailure>,
-}
-
 struct NavigationPolicyContext {
     policy_engine: Arc<Mutex<PolicyEngine>>,
     policy_approvals: Arc<Mutex<PolicyApprovalState>>,
@@ -266,6 +257,8 @@ pub struct BrowserClient {
 
 pub struct PageSession {
     inner: Arc<headless_chrome::Tab>,
+    navigation_observation: Arc<NavigationObservation>,
+    navigation_interception: Mutex<Option<NavigationInterceptionGuard>>,
     som_pipeline: Arc<Mutex<SomPipelineState>>,
     stable_key_index: Arc<Mutex<HashMap<String, StableKeyIndexEntry>>>,
     action_logs: Arc<Mutex<VecDeque<ActionLogEntry>>>,
@@ -290,6 +283,7 @@ impl PageSession {
         &self,
         script: &str,
     ) -> Result<headless_chrome::protocol::cdp::Runtime::RemoteObject> {
+        self.check_navigation_rejection()?;
         self.inner
             .evaluate(script, false)
             .context("Failed to evaluate script")
@@ -298,6 +292,7 @@ impl PageSession {
     /// Evaluate a JS expression and return its value as a JSON `Value`.
     /// Uses `return_by_value: true` so arrays and objects are fully serialized.
     pub fn evaluate_script_json(&self, script: &str) -> Result<serde_json::Value> {
+        self.check_navigation_rejection()?;
         self.evaluate_script_value(script, false)
     }
 

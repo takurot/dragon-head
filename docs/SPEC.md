@@ -252,6 +252,15 @@ network・policy/plugin検証を繰り返すが、initial requestを二重評価
 full destinationのdigestへ束縛し、redirect承認はoriginal requested URLとredirect destination
 の組へ束縛する。
 
+MCP sessionではmain-frame Document requestのinterceptorをsession全体で保持する。
+`act` のlink/form、page scriptのlocation変更、meta refreshも送信前に同じnetwork・
+navigation policy/plugin検証を行う。private-network opt-inも同じ設定を共有する。
+同期的なnavigation拒否はbounded settlement内で `act` へ返す。遅延timer/metaによる拒否は
+request自体を常に送信前に止め、次のtool callで一度だけ報告し、別actionの実行前に扱う。
+main-frame document/URL observationのgenerationが変わったら、MCPのfull/delta/speculative
+cacheを失効させる。startup/restartでinterceptorを設定できなければ未保護sessionを公開しない。
+iframe/subresourceとDNS rebindingは引き続き本境界の保護済み範囲に含めない。
+
 成功responseは `status="ok"`, fragment-free `requested_url`, live `final_url` を返す。
 成功のみ `actions_executed` を1増加し、redirect数は加算しない。HITL requestと後続の
 `ask_human` approvalは既存`act`同様に各1 eventを加算する。navigation I/O開始後は成功・失敗

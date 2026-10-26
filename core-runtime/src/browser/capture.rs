@@ -254,6 +254,7 @@ impl PageSession {
 
     /// Capture semantic state with the requested load profile.
     pub fn capture_semantic_state(&self, profile: LoadProfile) -> Result<SemanticState> {
+        self.check_navigation_rejection()?;
         self.capture_state(profile)
     }
 

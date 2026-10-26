@@ -20,6 +20,7 @@ impl PageSession {
         stable_key: Option<&str>,
         expected_text: &str,
     ) -> Result<()> {
+        self.check_navigation_rejection()?;
         self.audit_logger.log(AuditEvent::ToolCall {
             tool_name: "verify_text".to_string(),
             args: serde_json::json!({
@@ -72,6 +73,25 @@ impl PageSession {
     /// Uses `target_id` (backend_node_id) preferentially.
     /// If `target_id` is invalid (stale), attempts fallback using `stable_key` by re-scanning the DOM.
     pub fn act(
+        &self,
+        target_id: Option<i64>,
+        stable_key: Option<&str>,
+        action: &str,
+        value: Option<&str>,
+    ) -> Result<()> {
+        // Consume an earlier asynchronous rejection before this action can
+        // mutate the page. A later timer/meta navigation is reported on the
+        // next tool call while its request remains blocked by Fetch.
+        self.check_navigation_rejection()?;
+        self.begin_action_navigation()?;
+        let result = self.act_inner(target_id, stable_key, action, value);
+        if result.is_ok() {
+            self.finish_action_navigation()?;
+        }
+        result
+    }
+
+    fn act_inner(
         &self,
         target_id: Option<i64>,
         stable_key: Option<&str>,

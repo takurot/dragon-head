@@ -3,6 +3,7 @@ use super::*;
 impl PageSession {
     /// Explicitly request a visual capture with SoM marks.
     pub fn get_visual(&self) -> Result<VisualCapture> {
+        self.check_navigation_rejection()?;
         self.capture_som(SomTrigger::GetVisual)
     }
 

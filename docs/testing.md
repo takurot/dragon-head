@@ -47,6 +47,12 @@ The CI pipeline is defined in `.github/workflows/`.
   `dragon-head-mcp` binary with Chrome and verifies `initialize`,
   `notifications/initialized`, and `tools/list` over real stdio. The gate rejects
   stdout contamination, missing required tools, startup hangs, and unclean shutdowns.
+- **Persistent navigation boundary**: `mcp_persistent_navigation_policy` uses
+  controlled data-page fixtures and counted loopback destinations to cover
+  link/form/script/meta navigation, explicit private-network opt-in, delayed
+  rejection reporting, and autonomous navigation cache invalidation. Backend
+  setup/recovery failure injection verifies unprotected sessions remain unusable.
+  Run it with `CHROME_INSTALLED=true cargo test --workspace --test mcp_persistent_navigation_policy`.
 - **Playwright comparison harness**: `ci.yml` installs and tests `bench-playwright` at the
   supported Node.js 20.19, 22.12, and 24 boundaries, and rejects moderate-or-higher npm
   audit findings.
