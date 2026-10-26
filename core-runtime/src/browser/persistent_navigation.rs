@@ -28,6 +28,8 @@ struct ObservationState {
 struct NavigationAttempt {
     original_url: String,
     explicit: bool,
+    // Explicit retries keep the source reviewed before intermediate commits.
+    approval_context_url: Option<String>,
     initial_seen: bool,
     requests: HashSet<String>,
     evaluated: HashSet<String>,
@@ -203,12 +205,18 @@ fn intercept_navigation_request(
         state.attempt = Some(NavigationAttempt {
             original_url,
             explicit: false,
+            approval_context_url: None,
             initial_seen: false,
             requests: HashSet::new(),
             evaluated: HashSet::new(),
         });
     }
-    let source_url = state.document.url.clone();
+    let source_url = state
+        .attempt
+        .as_ref()
+        .and_then(|attempt| attempt.approval_context_url.as_ref())
+        .unwrap_or(&state.document.url)
+        .clone();
     let attempt = state.attempt.as_mut().expect("navigation attempt");
     let signature = if !attempt.initial_seen && destination.canonical_url() == attempt.original_url
     {
@@ -454,6 +462,7 @@ impl PageSession {
             state.attempt = Some(NavigationAttempt {
                 original_url: requested.canonical_url().to_string(),
                 explicit: true,
+                approval_context_url: Some(snapshot.url.clone()),
                 initial_seen: false,
                 requests: HashSet::new(),
                 evaluated: HashSet::from([requested.destination_digest().to_string()]),
@@ -592,6 +601,7 @@ mod tests {
                 state.attempt = Some(NavigationAttempt {
                     original_url: "http://127.0.0.1/start".to_string(),
                     explicit: true,
+                    approval_context_url: Some(state.document.url.clone()),
                     initial_seen: true,
                     requests: HashSet::new(),
                     evaluated: HashSet::new(),
@@ -640,6 +650,80 @@ mod tests {
                 .evaluated
                 .is_empty());
         }
+    }
+
+    #[test]
+    fn explicit_intermediate_navigation_preserves_until_navigation_approval_context() {
+        use headless_chrome::browser::tab::RequestPausedDecision;
+        let source = "chrome-error://chromewebdata/";
+        let original = "http://93.184.216.34/start";
+        let destination = "http://93.184.216.34/approved";
+        let observation = observation();
+        {
+            let mut state = observation.state.lock().unwrap();
+            state.document.url = original.to_string();
+            state.attempt = Some(NavigationAttempt {
+                original_url: original.to_string(),
+                explicit: true,
+                approval_context_url: Some(source.to_string()),
+                initial_seen: true,
+                requests: HashSet::new(),
+                evaluated: HashSet::new(),
+            });
+        }
+        let context = NavigationPolicyContext {
+            policy_engine: Arc::new(Mutex::new(
+                PolicyEngine::try_new(vec![PolicyRule {
+                    id: "approve-redirect".to_string(),
+                    domain: None,
+                    path_prefix: Some("/approved".to_string()),
+                    role: None,
+                    text_regex: None,
+                    context_regex: None,
+                    action: PolicyAction::RequireHumanApproval,
+                    scope: Some(ApprovalScope::UntilNavigation),
+                    outcome_projector: None,
+                }])
+                .unwrap(),
+            )),
+            policy_approvals: Arc::new(Mutex::new(PolicyApprovalState {
+                pending: None,
+                granted: vec![GrantedPolicyApproval {
+                    request: PolicyApprovalRequest {
+                        rule_id: "approve-redirect".to_string(),
+                        scope: ApprovalScope::UntilNavigation,
+                        action: "navigate".to_string(),
+                        target_signature: navigation::redirect_approval_digest(
+                            original,
+                            destination,
+                        ),
+                        outcome: None,
+                    },
+                    granted_navigation_epoch: 0,
+                    granted_url: source.to_string(),
+                    expires_at_epoch_ms: None,
+                    remaining_uses: None,
+                }],
+            })),
+            navigation_epoch: Arc::new(AtomicU64::new(0)),
+            audit_logger: Arc::new(AuditLogger::new()),
+            plugin_hooks: Arc::new(PluginHookConfig::default()),
+            approval_context_url: source.to_string(),
+        };
+        let event = serde_json::from_value(serde_json::json!({
+            "requestId": "script-redirect", "frameId": "main", "resourceType": "Document",
+            "request": {"url": destination, "method": "GET", "headers": {},
+                "initialPriority": "High", "referrerPolicy": "no-referrer"}
+        }))
+        .unwrap();
+        assert!(
+            matches!(
+                intercept_navigation_request(&observation, &context, &event),
+                RequestPausedDecision::Continue(_)
+            ),
+            "intermediate document must not change the explicit retry approval context"
+        );
+        assert!(context.policy_approvals.lock().unwrap().pending.is_none());
     }
 
     #[test]
