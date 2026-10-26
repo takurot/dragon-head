@@ -723,6 +723,20 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > prompt-injection検査を経て返し、未一致nullと空文字の成功契約は維持した。実Chromeのretry/
 > on_failure回帰とshipped binaryのstdio E2Eで検証する。
 
+## v0.5.2 — Navigation & Approval Security
+
+- [x] ISSUE-398: bench-playwrightの開発依存を更新し、対応Node境界でnpm audit・既存テストを成功させる。
+- [ ] ISSUE-400: Justfile/CIの検証範囲と非破壊性を整合し、main pushでも評価・NFRを実行する。
+- [ ] ISSUE-399: architectureの通常workspace依存を文書化し、metadataとの不整合をCIで検出する。
+- [ ] ISSUE-395: HITLのexpected要求identityをcoreのapprove/rejectと原子的に照合する。
+- [ ] ISSUE-394: act/ページ起因のmain-frame navigationを送信前に検査する。
+- [ ] ISSUE-396: 承認要求・grantを作成元のpage/document/originへ束縛する。
+
+> **Follow-up (ISSUE-398, done)**: Vitestと関連packageを4.1.12、Viteを8.1.6、
+> source-map-jsを1.2.2へ更新した。実Node 20.19.0/22.12.0/24.0.0それぞれで通常の
+> npm ci、既存47テスト、moderate以上を拒否するnpm auditが成功し、指摘総数0件を確認した。
+> Rust配布バイナリの依存や性能閾値は変更しない。監査の継続ゲートはISSUE-400で接続する。
+
 ## 4. 共通 Definition of Done（全PR共通）
 
 > **Follow-up (ISSUE-382, done)**: 総合評価dashboardは7つの必須suite、report/scenarioの型・件数・一意性・mode整合性を検証する。
