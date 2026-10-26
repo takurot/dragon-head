@@ -548,6 +548,44 @@ mod approval_identity_tests {
     }
 
     #[test]
+    fn fragment_change_between_capture_and_commit_preserves_the_pending_request() -> Result<()> {
+        if test_bench_support::should_skip_browser_tests() {
+            return Ok(());
+        }
+        let client = BrowserClient::new()?;
+        let page = client.new_page()?;
+        page.navigate("data:text/html,<button>Delete</button>#a")?;
+        let captured = page.approval_document_snapshot()?;
+        let mut reviewed = request();
+        reviewed.scope = ApprovalScope::UntilNavigation;
+        page.set_pending_policy_approval_for_document(reviewed, &captured)?;
+        let pending = page
+            .policy_approvals
+            .lock()
+            .unwrap()
+            .pending
+            .clone()
+            .unwrap();
+        page.evaluate_script("history.replaceState(null, '', '#b')")?;
+        let current = page.approval_document_snapshot()?;
+        assert!(captured.url.ends_with("#a"));
+        assert!(current.url.ends_with("#b"));
+        assert_eq!(current.frame_id, captured.frame_id);
+        assert_eq!(current.loader_id, captured.loader_id);
+        assert_eq!(current.revision, captured.revision);
+        page.clear_audit_events();
+        assert!(page
+            .commit_pending_policy_approval(pending.clone(), &captured, "test")
+            .is_err());
+        let approvals = page.policy_approvals.lock().unwrap();
+        assert_eq!(approvals.pending.as_ref(), Some(&pending));
+        assert!(approvals.granted.is_empty());
+        assert!(!page.audit_events().iter().any(|event| matches!(event,
+            AuditEvent::HitlEvent { event_type, .. } if event_type == "approved")));
+        Ok(())
+    }
+
+    #[test]
     fn stale_semantic_target_cannot_be_published_for_a_new_document() -> Result<()> {
         if test_bench_support::should_skip_browser_tests() {
             return Ok(());
