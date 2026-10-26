@@ -267,3 +267,12 @@ If the issue was a flake (not reproducible locally), add a comment explaining wh
 the issue; the next nightly run will re-open it if the problem persists.
 
 **ISSUE-374 diagnostics:** JSON-RPC invalid-argument errors identify static schema paths or missing required properties without echoing input values or unknown property names. Navigation validation returns a fixed rejection reason. The ignored binary test `test_mcp_binary_rejection_diagnostics_do_not_disclose_inputs` checks response and stderr secrecy with real Chrome.
+
+**Architecture dependency contract:** `python3 scripts/check_architecture_dependencies.py`
+compares the fenced production edge list in `docs/ARCHITECTURE.md` with locked Cargo
+metadata. It includes declared normal workspace path dependencies, including optional
+and target-specific declarations, and excludes dev/build and external dependencies.
+`python3 -m unittest discover -s scripts -p 'test_architecture_dependencies.py'` checks
+metadata fixtures and the real CLI, including added and removed edges. These standard
+library tests are also collected by the existing Python CI job; they need Cargo but
+do not build or launch a browser.
