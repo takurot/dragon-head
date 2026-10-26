@@ -263,3 +263,63 @@ fn explicit_navigation_expires_preexisting_timeboxed_action_approval() -> anyhow
     ));
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn invalid_navigation_is_rejected_before_disconnected_browser_io() -> anyhow::Result<()> {
+    use core_runtime::NavigationValidationError;
+    use mcp_server::McpBackend;
+    anyhow::ensure!(
+        !test_bench_support::should_skip_browser_tests(),
+        "Chrome is required"
+    );
+    let client = BrowserClient::new()?;
+    let page = client.new_page()?;
+    let pid = client.process_id().expect("managed Chrome process");
+    let mut server = McpServer::new(CoreRuntimeBackend::new_with_client(client, page));
+    let status = std::process::Command::new("kill")
+        .arg("-9")
+        .arg(pid.to_string())
+        .status()?;
+    anyhow::ensure!(status.success(), "failed to kill managed Chrome");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while server.backend_mut().is_chrome_process_alive() != Some(false) && Instant::now() < deadline
+    {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(server.backend_mut().is_chrome_process_alive(), Some(false));
+    for (url, reason) in [
+        (
+            "file:///private/secret",
+            NavigationValidationError::InvalidUrl,
+        ),
+        (
+            "http://user:secret@example.com/",
+            NavigationValidationError::CredentialsNotAllowed,
+        ),
+        (
+            "http://127.0.0.1/private",
+            NavigationValidationError::NonPublicAddress,
+        ),
+    ] {
+        let error = server
+            .call_tool("navigate", json!({"url": url}))
+            .expect_err("invalid URL must fail before touching the disconnected browser");
+        assert!(
+            error.to_string().contains(&reason.to_string()),
+            "expected validation reason {reason}, got {error:?}"
+        );
+        assert_eq!(
+            server.backend_mut().browser_restart_count(),
+            0,
+            "invalid URL must not recover the disconnected browser"
+        );
+        if reason != NavigationValidationError::NonPublicAddress {
+            assert_eq!(
+                error.downcast_ref::<NavigationValidationError>(),
+                Some(&reason)
+            );
+        }
+    }
+    Ok(())
+}

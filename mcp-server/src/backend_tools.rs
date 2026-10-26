@@ -2,7 +2,6 @@ use super::*;
 
 impl McpBackend for CoreRuntimeBackend {
     fn navigate(&mut self, arguments: Value) -> Result<Value> {
-        self.prepare_navigation_tool()?;
         let args: NavigateArguments =
             serde_json::from_value(arguments).context("invalid navigate arguments")?;
         // Produce the fragment-free public response identity without performing a duplicate DNS
@@ -15,6 +14,7 @@ impl McpBackend for CoreRuntimeBackend {
                     error
                 })?;
         let requested_url = requested.canonical_url().to_string();
+        self.ensure_navigation_protection()?;
         let attempts_before = self.page.public_navigation_attempt_count();
 
         let result = self
