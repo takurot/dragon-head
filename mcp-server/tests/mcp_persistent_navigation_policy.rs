@@ -342,3 +342,25 @@ fn public_navigation_waits_for_a_slow_parser_blocking_script() -> anyhow::Result
     );
     Ok(())
 }
+
+#[test]
+fn public_navigation_waits_for_deferred_initialization_before_state_capture() -> anyhow::Result<()>
+{
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+    let destination = PrivateDestination::start()?;
+    let url = format!(
+        "{}/deferred-page",
+        destination.url.strip_suffix("/private").unwrap()
+    );
+    let mut server = server_for_html("<button>initial</button>", true)?;
+    let result = server.call_tool("navigate", json!({"url": url}))?;
+    assert_eq!(result["status"], "ok");
+    let state = server.call_tool("get_state", json!({}))?;
+    assert!(
+        state.to_string().contains("DEFER INITIALIZATION COMPLETE"),
+        "navigation returned before deferred initialization; immediate state: {state}"
+    );
+    Ok(())
+}

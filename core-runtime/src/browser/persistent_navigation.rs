@@ -18,6 +18,8 @@ pub(super) struct NavigationObservation {
 struct ObservationState {
     document: DocumentSnapshot,
     child_frames: HashSet<String>,
+    primary_navigation_complete: bool,
+    awaiting_document_commit: bool,
     protected: bool,
     allow_private_network: bool,
     attempt: Option<NavigationAttempt>,
@@ -71,6 +73,8 @@ impl NavigationObservation {
                     revision: 0,
                 },
                 child_frames,
+                primary_navigation_complete: false,
+                awaiting_document_commit: false,
                 protected: false,
                 allow_private_network: false,
                 attempt: None,
@@ -87,6 +91,14 @@ impl NavigationObservation {
             match event {
                 Event::PageFrameNavigated(event) if event.params.frame.parent_id.is_none() => {
                     observer.record_frame(&mut state, &event.params.frame);
+                }
+                Event::PageLifecycleEvent(event) => {
+                    Self::record_lifecycle(
+                        &mut state,
+                        &event.params.frame_id,
+                        &event.params.loader_id,
+                        &event.params.name,
+                    );
                 }
                 Event::PageFrameAttached(event) => {
                     state.child_frames.insert(event.params.frame_id.clone());
@@ -118,8 +130,27 @@ impl NavigationObservation {
         }
     }
 
+    fn record_lifecycle(state: &mut ObservationState, frame_id: &str, loader_id: &str, name: &str) {
+        if frame_id == state.document.frame_id && loader_id == state.document.loader_id {
+            match name {
+                "init" => state.primary_navigation_complete = false,
+                "networkAlmostIdle" => state.primary_navigation_complete = true,
+                _ => {}
+            }
+        }
+    }
+
+    fn primary_navigation_complete(state: &ObservationState, previous: &DocumentSnapshot) -> bool {
+        state.primary_navigation_complete
+            && !state.awaiting_document_commit
+            && (state.document.frame_id != previous.frame_id
+                || state.document.loader_id != previous.loader_id)
+    }
+
     fn record_frame(&self, state: &mut ObservationState, frame: &Page::Frame) {
         if state.document.frame_id != frame.id || state.document.loader_id != frame.loader_id {
+            state.primary_navigation_complete = false;
+            state.awaiting_document_commit = false;
             state.document.frame_id = frame.id.clone();
             state.document.loader_id = frame.loader_id.clone();
             state.document.revision += 1;
@@ -131,6 +162,8 @@ impl NavigationObservation {
     fn starting_request(&self, state: &mut ObservationState) {
         // Synchronous with the Fetch decision, before Chrome may send the request.
         // Scope binding cannot depend only on a later frameNavigated callback.
+        state.primary_navigation_complete = false;
+        state.awaiting_document_commit = true;
         state.document.revision += 1;
         self.generation.fetch_add(1, Ordering::Release);
     }
@@ -477,23 +510,33 @@ impl PageSession {
             .navigate_to(requested.canonical_url())
             .map(|_| ())
             .and_then(|_| {
-                // Match the previous Tab primary wait plus the fallback budget,
-                // while continuing to observe policy rejection on every poll.
-                let deadline =
-                    Instant::now() + NAVIGATION_PRIMARY_TIMEOUT + NAVIGATION_FALLBACK_TIMEOUT;
+                let primary_deadline = Instant::now() + NAVIGATION_PRIMARY_TIMEOUT;
+                let fallback_deadline = primary_deadline + NAVIGATION_FALLBACK_TIMEOUT;
                 loop {
                     self.check_navigation_rejection()?;
-                    let current = self.live_document_snapshot()?;
-                    if (current.loader_id != snapshot.loader_id || current.url != snapshot.url)
-                        && matches!(
-                            self.document_ready_state().ok().as_deref(),
-                            Some("interactive" | "complete")
-                        )
                     {
-                        return Ok(());
+                        let state = self.navigation_observation.state.lock().map_err(|_| {
+                            anyhow::anyhow!("navigation observation is unavailable")
+                        })?;
+                        if NavigationObservation::primary_navigation_complete(&state, &snapshot) {
+                            return Ok(());
+                        }
                     }
-                    if Instant::now() >= deadline {
-                        anyhow::bail!("public navigation timed out");
+                    // Preserve Tab's lifecycle readiness wait. DOM readiness is
+                    // the weaker fallback only after the primary wait expires.
+                    if Instant::now() >= primary_deadline {
+                        let current = self.live_document_snapshot()?;
+                        if (current.loader_id != snapshot.loader_id || current.url != snapshot.url)
+                            && matches!(
+                                self.document_ready_state().ok().as_deref(),
+                                Some("interactive" | "complete")
+                            )
+                        {
+                            return Ok(());
+                        }
+                        if Instant::now() >= fallback_deadline {
+                            anyhow::bail!("public navigation timed out");
+                        }
                     }
                     thread::sleep(NAVIGATION_FALLBACK_POLL_INTERVAL);
                 }
@@ -557,6 +600,8 @@ mod tests {
                     revision: 0,
                 },
                 child_frames: HashSet::new(),
+                primary_navigation_complete: false,
+                awaiting_document_commit: false,
                 protected: true,
                 allow_private_network: false,
                 attempt: None,
@@ -580,6 +625,71 @@ mod tests {
         );
         assert_eq!(state.document.revision, 1);
         assert_eq!(observation.generation.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn primary_readiness_requires_current_root_loader_and_a_new_document() {
+        let observation = observation();
+        let mut state = observation.state.lock().unwrap();
+        let previous = state.document.clone();
+        observation.record_url(&mut state, "https://example.test/other".to_string());
+        NavigationObservation::record_lifecycle(&mut state, "main", "loader", "networkAlmostIdle");
+        assert!(state.primary_navigation_complete);
+        assert!(!NavigationObservation::primary_navigation_complete(
+            &state, &previous
+        ));
+        observation.starting_request(&mut state);
+        assert!(!state.primary_navigation_complete);
+        NavigationObservation::record_lifecycle(&mut state, "main", "loader", "networkAlmostIdle");
+        let committed_frame = serde_json::from_value(serde_json::json!({
+            "id": "main", "loaderId": "new-loader", "url": "https://example.test/other",
+            "secureContextType": "Secure", "crossOriginIsolatedContextType": "NotIsolated",
+            "gatedAPIFeatures": []
+        }))
+        .unwrap();
+        observation.record_frame(&mut state, &committed_frame);
+        assert!(!state.primary_navigation_complete);
+        for (frame, loader) in [("child", "new-loader"), ("main", "loader")] {
+            NavigationObservation::record_lifecycle(&mut state, frame, loader, "networkAlmostIdle");
+            assert!(!NavigationObservation::primary_navigation_complete(
+                &state, &previous
+            ));
+        }
+        NavigationObservation::record_lifecycle(
+            &mut state,
+            "main",
+            "new-loader",
+            "networkAlmostIdle",
+        );
+        assert!(NavigationObservation::primary_navigation_complete(
+            &state, &previous
+        ));
+        NavigationObservation::record_lifecycle(&mut state, "main", "new-loader", "init");
+        assert!(!state.primary_navigation_complete);
+        // A -> committed B -> pending C -> late idle(B) must not
+        // complete at B while the latest main-frame request has not committed.
+        observation.starting_request(&mut state);
+        NavigationObservation::record_lifecycle(
+            &mut state,
+            "main",
+            "new-loader",
+            "networkAlmostIdle",
+        );
+        assert!(!NavigationObservation::primary_navigation_complete(
+            &state, &previous
+        ));
+        let mut final_frame = committed_frame;
+        final_frame.loader_id = "final-loader".to_string();
+        observation.record_frame(&mut state, &final_frame);
+        NavigationObservation::record_lifecycle(
+            &mut state,
+            "main",
+            "final-loader",
+            "networkAlmostIdle",
+        );
+        assert!(NavigationObservation::primary_navigation_complete(
+            &state, &previous
+        ));
     }
 
     #[test]

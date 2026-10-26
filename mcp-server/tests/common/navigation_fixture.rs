@@ -41,7 +41,12 @@ impl PrivateDestination {
                                 .next()
                                 .and_then(|line| line.split_whitespace().nth(1))
                                 .unwrap_or("/");
-                            let (content_type, body) = if target == "/slow-page" {
+                            let (content_type, body) = if target == "/deferred-page" {
+                                ("text/html", "<html><head><script defer src='/deferred.js'></script></head><body>initializing</body></html>")
+                            } else if target == "/deferred.js" {
+                                thread::sleep(Duration::from_secs(4));
+                                ("application/javascript", "document.body.insertAdjacentHTML('beforeend', '<button>DEFER INITIALIZATION COMPLETE</button>');")
+                            } else if target == "/slow-page" {
                                 ("text/html", "<html><head><script src='/slow.js'></script></head><body>loaded</body></html>")
                             } else if target == "/slow.js" {
                                 thread::sleep(Duration::from_secs(4));
