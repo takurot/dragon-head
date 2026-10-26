@@ -41,15 +41,23 @@ impl PrivateDestination {
                                 .next()
                                 .and_then(|line| line.split_whitespace().nth(1))
                                 .unwrap_or("/");
-                            let body = if target.starts_with("/source") {
-                                "<html><body><a href='/private'>go private</a></body></html>"
+                            let (content_type, body) = if target == "/slow-page" {
+                                ("text/html", "<html><head><script src='/slow.js'></script></head><body>loaded</body></html>")
+                            } else if target == "/slow.js" {
+                                thread::sleep(Duration::from_secs(4));
+                                ("application/javascript", "window.slowScriptLoaded = true;")
+                            } else if target.starts_with("/source") {
+                                (
+                                    "text/html",
+                                    "<html><body><a href='/private'>go private</a></body></html>",
+                                )
                             } else {
                                 if target.starts_with("/private") {
                                     requests.fetch_add(1, Ordering::AcqRel);
                                 }
-                                "<html><body><button>PRIVATE DESTINATION</button></body></html>"
+                                ("text/html", "<html><body><button>PRIVATE DESTINATION</button></body></html>")
                             };
-                            let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                            let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {

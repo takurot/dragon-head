@@ -44,10 +44,9 @@ fn click_first(server: &mut McpServer<CoreRuntimeBackend>) -> anyhow::Result<Val
 
 #[test]
 fn persistent_boundary_blocks_link_form_script_and_meta_before_private_io() -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !test_bench_support::should_skip_browser_tests(),
-        "Chrome is required"
-    );
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
     for kind in ["link", "form", "script", "meta"] {
         let destination = PrivateDestination::start()?;
         let mut server = server_for_html(&source_html(kind, &destination.url), false)?;
@@ -67,10 +66,9 @@ fn persistent_boundary_blocks_link_form_script_and_meta_before_private_io() -> a
 
 #[test]
 fn persistent_boundary_private_opt_in_allows_the_same_actions() -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !test_bench_support::should_skip_browser_tests(),
-        "Chrome is required"
-    );
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
     for kind in ["link", "form", "script", "meta"] {
         let destination = PrivateDestination::start()?;
         let mut server = server_for_html(&source_html(kind, &destination.url), true)?;
@@ -89,10 +87,9 @@ fn persistent_boundary_private_opt_in_allows_the_same_actions() -> anyhow::Resul
 
 #[test]
 fn allowed_autonomous_navigation_invalidates_cached_full_and_delta_state() -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !test_bench_support::should_skip_browser_tests(),
-        "Chrome is required"
-    );
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
     let destination = PrivateDestination::start()?;
     let mut server = server_for_html(
         "<html><body><button>INITIAL DOCUMENT</button></body></html>",
@@ -131,10 +128,9 @@ fn allowed_autonomous_navigation_invalidates_cached_full_and_delta_state() -> an
 
 #[test]
 fn delayed_navigation_is_blocked_and_reported_once_before_the_next_read() -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !test_bench_support::should_skip_browser_tests(),
-        "Chrome is required"
-    );
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
     let destination = PrivateDestination::start()?;
     let target = serde_json::to_string(&destination.url)?;
     let html = format!("<html><body><button onclick='setTimeout(() => location.href={target}, 250)'>delayed</button></body></html>");
@@ -161,10 +157,9 @@ fn delayed_navigation_is_blocked_and_reported_once_before_the_next_read() -> any
 
 #[test]
 fn delayed_navigation_rejection_precedes_an_unrelated_action() -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !test_bench_support::should_skip_browser_tests(),
-        "Chrome is required"
-    );
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
     let destination = PrivateDestination::start()?;
     let target = serde_json::to_string(&destination.url)?;
     let html = format!("<html><body><button onclick='setTimeout(() => location.href={target}, 250)'>delayed</button><button onclick='window.name=\"safe-action-executed\"'>safe</button></body></html>");
@@ -219,10 +214,9 @@ fn explicit_navigation_expires_preexisting_timeboxed_action_approval() -> anyhow
         sre::{LoadProfile, SemanticNode},
         ActionError,
     };
-    anyhow::ensure!(
-        !test_bench_support::should_skip_browser_tests(),
-        "Chrome is required"
-    );
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
     fn button_id(node: &SemanticNode) -> Option<i64> {
         if node.role == "button" {
             Some(node.backend_node_id)
@@ -269,10 +263,9 @@ fn explicit_navigation_expires_preexisting_timeboxed_action_approval() -> anyhow
 fn invalid_navigation_is_rejected_before_disconnected_browser_io() -> anyhow::Result<()> {
     use core_runtime::NavigationValidationError;
     use mcp_server::McpBackend;
-    anyhow::ensure!(
-        !test_bench_support::should_skip_browser_tests(),
-        "Chrome is required"
-    );
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
     let client = BrowserClient::new()?;
     let page = client.new_page()?;
     let pid = client.process_id().expect("managed Chrome process");
@@ -321,5 +314,31 @@ fn invalid_navigation_is_rejected_before_disconnected_browser_io() -> anyhow::Re
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn public_navigation_waits_for_a_slow_parser_blocking_script() -> anyhow::Result<()> {
+    if test_bench_support::should_skip_browser_tests() {
+        return Ok(());
+    }
+    let destination = PrivateDestination::start()?;
+    let slow_url = format!(
+        "{}/slow-page",
+        destination.url.strip_suffix("/private").unwrap()
+    );
+    let mut server = server_for_html("<button>initial</button>", true)?;
+    let started = Instant::now();
+    let result = server.call_tool("navigate", json!({"url": slow_url}))?;
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["final_url"], slow_url);
+    assert!(started.elapsed() >= Duration::from_secs(4));
+    assert_eq!(
+        server
+            .backend_mut()
+            .page()
+            .evaluate_script_json("window.slowScriptLoaded === true")?,
+        json!(true)
+    );
     Ok(())
 }

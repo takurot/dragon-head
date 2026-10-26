@@ -65,6 +65,7 @@ use crate::session_vault::{CookieData, SessionData};
 
 const DEFAULT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_TRANSIENT_ERROR_BACKOFF: Duration = Duration::from_millis(250);
+const NAVIGATION_PRIMARY_TIMEOUT: Duration = Duration::from_secs(20);
 const NAVIGATION_FALLBACK_TIMEOUT: Duration = Duration::from_secs(3);
 const NAVIGATION_FALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SRE_EVENT_BRIDGE_SYMBOL: &str = "neural_browser.runtime.sre_event_bridge";

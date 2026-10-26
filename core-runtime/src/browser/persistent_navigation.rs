@@ -477,7 +477,10 @@ impl PageSession {
             .navigate_to(requested.canonical_url())
             .map(|_| ())
             .and_then(|_| {
-                let deadline = Instant::now() + NAVIGATION_FALLBACK_TIMEOUT;
+                // Match the previous Tab primary wait plus the fallback budget,
+                // while continuing to observe policy rejection on every poll.
+                let deadline =
+                    Instant::now() + NAVIGATION_PRIMARY_TIMEOUT + NAVIGATION_FALLBACK_TIMEOUT;
                 loop {
                     self.check_navigation_rejection()?;
                     let current = self.live_document_snapshot()?;
