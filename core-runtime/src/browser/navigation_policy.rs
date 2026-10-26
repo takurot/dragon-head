@@ -317,7 +317,7 @@ pub(super) fn evaluate_navigation_destination(
                 .map_err(|_| NavigationPolicyFailure::Rejected {
                     message: "navigation approval state is unavailable".to_string(),
                 })?
-                .replace_pending(request);
+                .replace_pending(request, ApprovalBinding::NavigationCapability);
             context.audit_logger.log(AuditEvent::HitlEvent {
                 event_type: "request".to_string(),
                 reason: Some(format!("Requires human approval for rule {rule_id}")),
@@ -353,7 +353,8 @@ pub(super) fn consume_navigation_approval(
         )
     });
     let Some(index) = approvals.granted.iter().position(|grant| {
-        grant.request.rule_id == rule_id
+        grant.binding == ApprovalBinding::NavigationCapability
+            && grant.request.rule_id == rule_id
             && grant.request.scope == scope
             && grant.request.action == "navigate"
             && grant.request.target_signature == approval_signature
@@ -403,7 +404,8 @@ pub(super) fn is_grant_valid(
         // UntilNavigation expires when either the explicit navigate() increments the epoch
         // OR the URL changed due to a click-driven navigation (which does not increment epoch).
         ApprovalScope::UntilNavigation => {
-            grant.granted_navigation_epoch == navigation_epoch && grant.granted_url == current_url
+            grant.granted_navigation_epoch == navigation_epoch
+                && grant.granted_url_fingerprint == approval_url_fingerprint(current_url)
         }
         ApprovalScope::Timeboxed { .. } => grant
             .expires_at_epoch_ms

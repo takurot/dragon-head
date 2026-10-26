@@ -794,13 +794,18 @@ mod tests {
                 target_signature: "old-button".to_string(),
                 outcome: None,
             };
+            let binding = ApprovalBinding::PageAction(
+                PageApprovalContext::from_snapshot(&observation.state.lock().unwrap().document)
+                    .unwrap(),
+            );
             if initially_pending {
-                initial.replace_pending(old_request.clone());
+                initial.replace_pending(old_request.clone(), binding.clone());
             }
             initial.granted.push(GrantedPolicyApproval {
                 request: old_request,
+                binding,
                 granted_navigation_epoch: 0,
-                granted_url: "https://example.test/page".to_string(),
+                granted_url_fingerprint: approval_url_fingerprint("https://example.test/page"),
                 expires_at_epoch_ms: Some(epoch_millis() + 60_000),
                 remaining_uses: None,
             });
@@ -1065,8 +1070,9 @@ mod tests {
                         ),
                         outcome: None,
                     },
+                    binding: ApprovalBinding::NavigationCapability,
                     granted_navigation_epoch: 0,
-                    granted_url: source.to_string(),
+                    granted_url_fingerprint: approval_url_fingerprint(source),
                     expires_at_epoch_ms: None,
                     remaining_uses: None,
                 }],
