@@ -728,7 +728,7 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 - [x] ISSUE-398: bench-playwrightの開発依存を更新し、対応Node境界でnpm audit・既存テストを成功させる。
 - [x] ISSUE-400: Justfile/CIの検証範囲と非破壊性を整合し、main pushでも評価・NFRを実行する。
 - [x] ISSUE-399: architectureの通常workspace依存を文書化し、metadataとの不整合をCIで検出する。
-- [ ] ISSUE-395: HITLのexpected要求identityをcoreのapprove/rejectと原子的に照合する。
+- [x] ISSUE-395: HITLのexpected要求identityをcoreのapprove/rejectと原子的に照合する。
 - [ ] ISSUE-394: act/ページ起因のmain-frame navigationを送信前に検査する。
 - [ ] ISSUE-396: 承認要求・grantを作成元のpage/document/originへ束縛する。
 
@@ -745,6 +745,11 @@ MVPは「外部クライアントから安全に利用可能な Neural-Browser R
 > **Follow-up (ISSUE-399, done)**: ARCHITECTURE.mdの依存方向を8 workspace member・10 normal path edgeへ整合した。
 > optional/target-specificを含め、dev/build/registry/external pathを除く比較契約を明記した。
 > `cargo metadata --locked --no-deps`との実比較とedge追加/削除のCLI negative testをPython CIへ接続した。
+
+> **Follow-up (ISSUE-395, done)**: pendingの各置換へcore UUIDを発行し、gatewayが確認した要求を
+> approve/rejectのcommit時に同じUUIDで原子的に照合する。公開requestの既存field/APIは維持した。
+> changed/same-shape/未観測cycle/session差替えを実gatewayで検証し、古いIDの署名付きcallbackも拒否する。
+> 合成E2Eは新しい通知IDで承認後、明示retryで支払い1回・秘匿監査を確認する。
 
 ## 4. 共通 Definition of Done（全PR共通）
 

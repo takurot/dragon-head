@@ -317,7 +317,7 @@ pub(super) fn evaluate_navigation_destination(
                 .map_err(|_| NavigationPolicyFailure::Rejected {
                     message: "navigation approval state is unavailable".to_string(),
                 })?
-                .pending = Some(request);
+                .replace_pending(request);
             context.audit_logger.log(AuditEvent::HitlEvent {
                 event_type: "request".to_string(),
                 reason: Some(format!("Requires human approval for rule {rule_id}")),

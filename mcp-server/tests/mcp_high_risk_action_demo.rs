@@ -314,6 +314,27 @@ fn action_arguments(node: &Value, action: &str, value: Option<&str>) -> Value {
     arguments
 }
 
+fn approval_id(prompt: &Value) -> Result<&str> {
+    let buttons = prompt["blocks"]
+        .as_array()
+        .context("prompt blocks missing")?
+        .iter()
+        .find_map(|block| block.get("elements").and_then(Value::as_array))
+        .context("approval buttons missing")?;
+    let id = buttons
+        .iter()
+        .find(|button| button["action_id"] == "approve")
+        .and_then(|button| button["value"].as_str())
+        .context("approval UUID missing")?;
+    ensure!(
+        buttons
+            .iter()
+            .any(|button| button["action_id"] == "reject" && button["value"] == id),
+        "reject button UUID mismatch"
+    );
+    Ok(id)
+}
+
 fn callback(address: SocketAddr, id: &str, decision: &str, secret: &str) -> Result<u16> {
     let payload = json!({"user":{"id":"demo-reviewer","username":"demo-reviewer"},
         "actions":[{"action_id":decision,"value":id}]})
@@ -439,23 +460,7 @@ fn high_risk_payment_requires_signed_approval_and_records_redacted_audit() -> Re
         "unexpected projection: {gated}"
     );
     let prompt = services.next_request("chat.postMessage")?;
-    let buttons = prompt["blocks"]
-        .as_array()
-        .context("prompt blocks missing")?
-        .iter()
-        .find_map(|block| block.get("elements").and_then(Value::as_array))
-        .context("approval buttons missing")?;
-    let id = buttons
-        .iter()
-        .find(|button| button["action_id"] == "approve")
-        .and_then(|button| button["value"].as_str())
-        .context("approval UUID missing")?;
-    ensure!(
-        buttons
-            .iter()
-            .any(|button| button["action_id"] == "reject" && button["value"] == id),
-        "reject button UUID mismatch"
-    );
+    let original_id = approval_id(&prompt)?;
     ensure!(
         prompt.to_string().contains("$900.00") && prompt.to_string().contains("High"),
         "Slack prompt lacks projection"
@@ -465,7 +470,7 @@ fn high_risk_payment_requires_signed_approval_and_records_redacted_audit() -> Re
         "unapproved submit executed"
     );
     ensure!(
-        callback(webhook, id, "approve", "wrong-secret")? == 401,
+        callback(webhook, original_id, "approve", "wrong-secret")? == 401,
         "invalid signature accepted"
     );
     ensure!(
@@ -480,8 +485,28 @@ fn high_risk_payment_requires_signed_approval_and_records_redacted_audit() -> Re
         "bad signature granted approval"
     );
     ensure!(
+        callback(webhook, original_id, "approve", SECRET)? == 409,
+        "a signed decision on the replaced request must be rejected"
+    );
+    ensure!(
+        std::fs::metadata(&bridge_audit).map_or(true, |meta| meta.len() == 0)
+            && services.submissions.load(Ordering::SeqCst) == 0,
+        "stale signed approval changed approval/page"
+    );
+    let replacement_prompt = services.next_request("chat.postMessage")?;
+    let id = approval_id(&replacement_prompt)?;
+    ensure!(
+        id != original_id,
+        "replacement reused the reviewed request ID"
+    );
+    ensure!(
+        replacement_prompt.to_string().contains("$900.00")
+            && replacement_prompt.to_string().contains("High"),
+        "replacement prompt lacks projection"
+    );
+    ensure!(
         callback(webhook, id, "approve", SECRET)? == 200,
-        "signed approval failed"
+        "signed approval of the current request failed"
     );
     let update = services.next_request("chat.update")?;
     ensure!(update["ts"] == MESSAGE_TS, "updated wrong Slack message");
@@ -603,6 +628,6 @@ fn high_risk_payment_requires_signed_approval_and_records_redacted_audit() -> Re
         ensure!(!serialized.contains(sensitive), "PII leaked in audit");
     }
     mcp.finish()?;
-    eprintln!("PASS: shipped MCP + Chrome; $900 threshold blocked submit; invalid signature rejected; signed approval updated chat; explicit retry submitted once; runtime/bridge audits redacted and correlated.");
+    eprintln!("PASS: shipped MCP + Chrome; $900 threshold blocked submit; invalid signature and stale signed approval rejected; fresh signed approval updated chat; explicit retry submitted once; runtime/bridge audits redacted and correlated.");
     Ok(())
 }

@@ -34,8 +34,11 @@ Chrome is unavailable. CI's `high-risk-action-demo` job runs it explicitly too.
    `chat.postMessage` request to the local API double. The test extracts the
    actual approval UUID from its buttons rather than manufacturing an approval.
 4. An invalid signature is rejected without executing the action or recording
-   a resolution. A valid, signed `/slack/interactions` callback grants approval
-   and updates the same prompt with the scripted reviewer's decision.
+   a resolution. Retrying the held action creates a fresh notification ID, even
+   when its target and projection are unchanged. A signed callback for the old ID
+   is rejected without a payment or successful decision audit. A valid, signed
+   `/slack/interactions` callback for the current ID grants approval and updates
+   that prompt with the scripted reviewer's decision.
 5. Approval alone does not submit. Retrying the MCP action submits exactly once
    and produces the fixture receipt.
 6. Persisted runtime NDJSON contains the ordered action attempts, policy

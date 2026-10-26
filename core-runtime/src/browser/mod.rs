@@ -161,6 +161,14 @@ pub struct PolicyApprovalRequest {
     pub outcome: Option<OutcomeProjection>,
 }
 
+/// Identity and review data for one pending approval cycle. The identity changes whenever
+/// the pending slot is replaced, even when every displayed field is unchanged.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PolicyApprovalRequestSnapshot {
+    pub id: uuid::Uuid,
+    pub request: PolicyApprovalRequest,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct GrantedPolicyApproval {
     request: PolicyApprovalRequest,
@@ -174,8 +182,18 @@ struct GrantedPolicyApproval {
 
 #[derive(Default)]
 struct PolicyApprovalState {
-    pending: Option<PolicyApprovalRequest>,
+    pending: Option<PolicyApprovalRequestSnapshot>,
     granted: Vec<GrantedPolicyApproval>,
+}
+
+impl PolicyApprovalState {
+    /// Called with the approval-state mutex held by both action and navigation paths.
+    fn replace_pending(&mut self, request: PolicyApprovalRequest) {
+        self.pending = Some(PolicyApprovalRequestSnapshot {
+            id: uuid::Uuid::new_v4(),
+            request,
+        });
+    }
 }
 
 #[derive(Debug, Clone)]
