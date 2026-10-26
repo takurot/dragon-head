@@ -1,4 +1,6 @@
 mod act;
+mod approval_context;
+mod approval_event_barrier;
 mod audit;
 #[cfg(test)]
 mod browser_tests;
@@ -33,6 +35,8 @@ use navigation_policy::*;
 use persistent_navigation::*;
 
 use anyhow::{Context, Result};
+use approval_context::{approval_url_fingerprint, ApprovalBinding, PageApprovalContext};
+use approval_event_barrier::ApprovalEventBarrier;
 use headless_chrome::{Browser, LaunchOptions};
 use std::{
     cmp::min,
@@ -173,28 +177,36 @@ pub struct PolicyApprovalRequestSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct PendingPolicyApproval {
+    id: uuid::Uuid,
+    request: PolicyApprovalRequest,
+    binding: ApprovalBinding,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 struct GrantedPolicyApproval {
     request: PolicyApprovalRequest,
+    binding: ApprovalBinding,
     granted_navigation_epoch: u64,
-    /// URL at the time of approval grant. Used to detect click-driven navigations
-    /// that bypass `navigate()` and thus do not increment `navigation_epoch`.
-    granted_url: String,
+    /// Preserve UntilNavigation's exact URL comparison without storing query strings.
+    granted_url_fingerprint: String,
     expires_at_epoch_ms: Option<u128>,
     remaining_uses: Option<u32>,
 }
 
 #[derive(Default)]
 struct PolicyApprovalState {
-    pending: Option<PolicyApprovalRequestSnapshot>,
+    pending: Option<PendingPolicyApproval>,
     granted: Vec<GrantedPolicyApproval>,
 }
 
 impl PolicyApprovalState {
     /// Called with the approval-state mutex held by both action and navigation paths.
-    fn replace_pending(&mut self, request: PolicyApprovalRequest) {
-        self.pending = Some(PolicyApprovalRequestSnapshot {
+    fn replace_pending(&mut self, request: PolicyApprovalRequest, binding: ApprovalBinding) {
+        self.pending = Some(PendingPolicyApproval {
             id: uuid::Uuid::new_v4(),
             request,
+            binding,
         });
     }
 }
@@ -257,6 +269,7 @@ pub struct BrowserClient {
 }
 
 pub struct PageSession {
+    approval_event_barrier: ApprovalEventBarrier,
     inner: Arc<headless_chrome::Tab>,
     navigation_observation: Arc<NavigationObservation>,
     navigation_interception: Mutex<Option<NavigationInterceptionGuard>>,

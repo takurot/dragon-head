@@ -103,6 +103,19 @@ VLMとLLMの認識を一致させ、要素特定を堅牢にする。
 - **評価基準**: ドメイン、パス、要素Role、テキスト（正規表現）、周辺テキスト（金額等）。
 - **Action**: `allow`, `block`, `require_human_approval`.
 - **Approval Scope**: `action_only` | `until_navigation` | `timeboxed(ms)` を指定可能。
+  - 要素操作の承認は、request作成時・grant時・使用時で同じmain-frame/document identityと
+    canonical URL（origin/path/queryを含みfragmentを除く）に束縛する。古いpage Aのrequestを
+    page Bへ移動してから承認してもBのgrantへ読み替えない。
+  - 別documentへの遷移、同じURLのreload、A→B→Aで失効する。stable_keyのhash自体は変更しない。
+    同一document内でもpath/queryの変更は失効させ、元URLへ戻っても古いgrantを再利用しない。
+  - `action_only` は1回限りで、明示的navigation epochの制約も維持する。
+    `until_navigation` はdocumentの束縛に加えて完全なURL一致を要求し、fragment変更でも失効する。
+    `timeboxed(ms)` は同じdocument/URLの期限内再利用を許可し、fragmentだけの変更では失効しない。
+  - navigation destination/redirectの承認は要素操作とは別のcapabilityとする。既存のoriginal URLと
+    destination digestへの束縛を保ち、その同じnavigationを再試行する間の中間HTML/meta/script
+    document commitでは失効させない。1回制限と期限は維持し、この例外を要素操作へ適用しない。
+  - document identityの取得・イベント同期に失敗した場合はgrantを発行・消費しない。
+    document URL/query/data本文は新しい承認診断やauditへ追加しない。
 
 **AUD-01: Structured Audit Log**
 - **仕様**: 再現・追跡可能なイベントスキーマを定義する。

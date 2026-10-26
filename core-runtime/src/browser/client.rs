@@ -143,6 +143,7 @@ impl BrowserClient {
         Ok(PageSession {
             navigation_observation: NavigationObservation::install(&tab)?,
             navigation_interception: Mutex::new(None),
+            approval_event_barrier: ApprovalEventBarrier::default(),
             inner: tab,
             som_pipeline: Arc::new(Mutex::new(SomPipelineState::default())),
             stable_key_index: Arc::new(Mutex::new(HashMap::new())),

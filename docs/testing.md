@@ -283,6 +283,19 @@ metadata fixtures and the real CLI, including added and removed edges. These sta
 library tests are also collected by the existing Python CI job; they need Cargo but
 do not build or launch a browser.
 
+**ISSUE-396 approval documents:**
+`cargo test --workspace --test approval_document_binding -- --test-threads=1`
+checks two local origins with identical stable keys, old pending requests, path/query
+changes, reload/A-B-A, same-page/fragment reuse, and navigation-capability retry after
+an intermediate script document. These browser tests use controlled local fixtures.
+The `approval_context` and `approval_event_barrier` library tests cover scope identities,
+queued SPA A-B-A events, nonce/context validation, bounded synchronization failure,
+and listener cleanup. Security identity capture drains the browser event thread using
+an isolated-world console marker containing only a random nonce; it changes neither
+DOM nor main-world globals. General state/cache polling keeps the cheaper observer
+path. Observation and approval-state locks are acquired in that order, and all CDP
+calls and waits happen outside them.
+
 ### HITL approval identity regression (ISSUE-395)
 
 The gateway unit suite uses a test-only callback immediately after bridge-ID validation to
